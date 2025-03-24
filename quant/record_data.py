@@ -9,7 +9,8 @@ import torch
 
 type_dict = {
     "canny": ('SD3-Controlnet-Canny', 
-              "https://huggingface.co/InstantX/SD3-Controlnet-Canny/resolve/main/canny.jpg",
+              "2.png",
+              #"https://huggingface.co/InstantX/SD3-Controlnet-Canny/resolve/main/canny.jpg",
               'Anime style illustration of a girl wearing a suit. A moon in sky. In the background we see a big rain approaching. text "InstantX" on image',
               'NSFW, nude, naked, porn, ugly'
               ),
@@ -83,6 +84,6 @@ if __name__ == '__main__':
 
     #######################
     latents = torch.load('latents.pt')
-    for scale in [0.1, 0.3, 0.4, 0.6, 0.7, 0.9]:
+    for scale in [0.9]:
         # record_calibration('fp16', sd3, 'canny', i, scale)
-        record_latent_input('fp16', sd3, 'canny', 28, scale, latents)
+        record_latent_input('fp16-new', sd3, 'canny', 28, scale, latents)

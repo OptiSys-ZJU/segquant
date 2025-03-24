@@ -1,9 +1,13 @@
-import modelopt.torch.quantization as mtq
 import torch
 import os
 import glob
+import copy
+
+import modelopt.torch.quantization as mtq
+from modelopt.torch.quantization import QuantModuleRegistry
 
 from stable_diff.model.controlnet_sd3 import SD3ControlNetModel
+from stable_diff.model.embeddings import TimestepEmbedding
 
 def load_controlnet_inputs(folder_path):
     file_paths = sorted(glob.glob(os.path.join(folder_path, "controlnet_input*.pt")))
@@ -31,11 +35,16 @@ if __name__ == '__main__':
     control_net = SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', 'SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors').half().to(device)
 
     # config = mtq.INT8_DEFAULT_CFG
-    # config = mtq.INT8_SMOOTHQUANT_CFG
-    config = mtq.FP8_DEFAULT_CFG
-    model = mtq.quantize(control_net, config, forward_loop)
+    CUSTOM_INT8_SMOOTH_CFG = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)
+    
+    CUSTOM_INT8_SMOOTH_CFG["quant_cfg"]["*timestep_embedder*"] = {"enable": False}
+    CUSTOM_INT8_SMOOTH_CFG["quant_cfg"]["*controlnet_blocks*"] = {"enable": False}
+
+    
+    model = mtq.quantize(control_net, CUSTOM_INT8_SMOOTH_CFG, forward_loop)
 
     mtq.print_quant_summary(model)
+
     hidden_states, timestep, encoder_hidden_states, pooled_projections, controlnet_cond, conditioning_scale = data_loader[0]
     torch.onnx.export(model, (
         hidden_states,
@@ -45,4 +54,4 @@ if __name__ == '__main__':
         pooled_projections,
         timestep,
         None,
-    ), 'controlnet_fp8_default.onnx')
+    ), 'int8smooth-disable-timeemb-final-linear.onnx')

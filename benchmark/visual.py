@@ -42,6 +42,8 @@ def draw(tensor_list, type, scale, num_inference_step, step):
     print(f"Saved visualization to {save_path}")
     plt.close()
 
+def frobenius_norm(tensor):
+    return torch.norm(tensor, p='fro')
 
 def analyze_tensor_distribution(tensor):
     # 统计正数、负数和零的数量
@@ -75,11 +77,12 @@ def analyze_tensor_distribution(tensor):
 metadata = {}
 
 def fit(x):
-    return 0.2043 * (x ** 2) - 0.08019 * x + 0.6947
+    return 37.48 * (x ** 2) - 20.47 * x + 147.7
 
 def visual(folder_path, type, alpha):
     fp16_file_paths = sorted(glob.glob(os.path.join(folder_path, "controlnet_output_fp16_canny_*_28_0.pt")))
     for filepath in fp16_file_paths:
+        print(filepath)
         fp16_tensor_list = torch.load(filepath)[0]
         this_tensor_list = torch.load(filepath.replace('fp16', type))[0]
 
@@ -93,10 +96,12 @@ def visual(folder_path, type, alpha):
         this_norm_diff_list = []
         this_orig_max_list = []
         this_orig_norm_list = []
+        new_tensors = []
 
         scale_k = []
         for i in range(len(fp16_tensor_list)):
             scale_k.append(fit(i))
+            # scale_k.append(1)
 
         # print(scale_k)
         # exit(0)
@@ -107,6 +112,9 @@ def visual(folder_path, type, alpha):
             this_tensor = this_tensor_list[i]
             this_norm_tensor = this_tensor / scale / scale_k[i]
             norm_diff = fp16_norm_tensor - this_norm_tensor
+
+            # norm_diff = torch.load(f'perfect/{type}_0.9_{this_step}_{i}.pt')
+            # torch.save(norm_diff, f'{type}_{scale}_{this_step}_{i}.pt')
             this_norm_diff_list.append(norm_diff)
 
         for i in range(len(fp16_tensor_list)):
@@ -118,24 +126,17 @@ def visual(folder_path, type, alpha):
 
             #analyze_tensor_distribution(standard_diff_i - standard_diff_0)
 
-            new_tensor = (this_norm_tensor + this_norm_diff_list[2]) * scale * scale_k[i]
+            new_tensor = (this_norm_tensor + this_norm_diff_list[i]) * scale * scale_k[i]
+            new_tensors.append(new_tensor)
 
-            res = torch.abs(fp16_tensor - this_tensor)
-            sum_value = res.sum(dim=0)
-            max_value = torch.max(sum_value)
-            this_orig_max_list.append(max_value.item())
+            f_norm = frobenius_norm(fp16_tensor - this_tensor)
+            this_orig_max_list.append(f_norm.item())
 
-            res = torch.abs(fp16_norm_tensor - this_norm_tensor)
-            sum_value = res.sum(dim=0)
-            max_value = torch.max(sum_value)
-            this_orig_norm_list.append(max_value.item())
+            f_norm = frobenius_norm(fp16_norm_tensor - this_norm_tensor)
+            this_orig_norm_list.append(f_norm.item())
 
-            res = torch.abs(fp16_tensor - new_tensor)
-            sum_value = res.sum(dim=0)
-            max_value = torch.max(sum_value)
-            this_max_list.append(max_value.item())
-
-            this_res_list.append(sum_value)
+            f_norm = frobenius_norm(fp16_tensor - new_tensor)
+            this_max_list.append(f_norm.item())
 
         if scale not in metadata:
             metadata[scale] = {}
@@ -143,16 +144,6 @@ def visual(folder_path, type, alpha):
             metadata[scale][num_inference_step] = {}
         
         metadata[scale][num_inference_step][this_step] = this_max_list
-
-
-        # for i in range(len(this_norm_diff_list)-1):
-        #     for j in [0, 1]:
-        #         tensor1 = this_norm_diff_list[i][j]
-        #         tensor2 = this_norm_diff_list[i+1][j]
-
-        #         correlation = pearsonr(tensor1, tensor2)
-        #         print(i, j, torch.max(correlation).item())
-
         print(filepath, alpha, 'ok')
         print('orig  ', this_orig_max_list)
         print('orig-n', this_orig_norm_list)
@@ -168,6 +159,7 @@ def visual(folder_path, type, alpha):
 if __name__ == '__main__':
     # visual('latent_dump_output/controlnet', 'int8default', 0)
     # print('===============================')
+    # visual('latent_dump_output/controlnet', 'int8smooth', 0)
     visual('latent_dump_output/controlnet', 'int8smooth', 0)
     # for alpha in np.arange(0, 1, 0.01):
     #     visual('latent_dump_output/controlnet', 'int8default', alpha)

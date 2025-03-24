@@ -7,6 +7,7 @@ from pytorch_fid import fid_score
 from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import structural_similarity as ssim
 from pathlib import Path
+import argparse
 
 lpips_model = lpips.LPIPS(net='alex')
 
@@ -75,17 +76,22 @@ def calculate_all(real_path, this_path):
 
     return this_fid, sum(group_lpips) / len(group_lpips), sum(group_psnr) / len(group_psnr), sum(group_ssim) / len(group_ssim)
 
+
+def run_bench(type):
+    for scale in ['0.2', '0.5', '0.8']:
+        print(scale)
+        this_fid, group_lpips, group_psnr, group_ssim = calculate_all(f'pic/fp16/{scale}', f'pic/{type}/{scale}')
+        print(f'type: {type}')
+        print(f'fid: {this_fid:.4f}')
+        print(f'group_lpips: {group_lpips:.4f}')
+        print(f'group_psnr: {group_psnr:.4f}')
+        print(f'group_ssim: {group_ssim:.4f}')
+        print('============================================')
+
 if __name__ == '__main__':
-    this_fid, group_lpips, group_psnr, group_ssim = calculate_all('pic/fp16/0.8', 'pic/int8_default/0.8')
-    print('int8_default')
-    print('fid:', this_fid)
-    print('group_lpips:', group_lpips)
-    print('group_psnr:', group_psnr)
-    print('group_ssim:', group_ssim)
-    print("---------------------")
-    this_fid, group_lpips, group_psnr, group_ssim = calculate_all('pic/fp16/0.8', 'pic/int8_smoothquant/0.8')
-    print('int8_smoothquant')
-    print('fid:', this_fid)
-    print('group_lpips:', group_lpips)
-    print('group_psnr:', group_psnr)
-    print('group_ssim:', group_ssim)
+    parser = argparse.ArgumentParser(description="Example of multiple arguments as a list")
+    parser.add_argument('--types', nargs='+', help="List of Types", required=True)
+    args = parser.parse_args()
+    print("All types:", args.types)
+    for type in args.types:
+        run_bench(type)

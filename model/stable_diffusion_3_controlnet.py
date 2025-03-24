@@ -1126,7 +1126,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
                     }, f"controlnet_input_{dump_prefix}_{i}.pt")
 
                 if fake_controlnet:
-                    control_block_samples = torch.load(fake_controlnet_pt)
+                    control_block_samples = torch.load(f'{fake_controlnet_pt}_{i}.pt')
                 else:
                     control_block_samples = self.controlnet(
                         hidden_states=latent_model_input,
