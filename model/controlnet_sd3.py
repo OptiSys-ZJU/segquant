@@ -352,6 +352,7 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
         hidden_states: torch.Tensor,
         controlnet_cond: torch.Tensor,
         conditioning_scale: float = 1.0,
+        dump_prefix: str = None,
         encoder_hidden_states: torch.Tensor = None,
         pooled_projections: torch.Tensor = None,
         timestep: torch.LongTensor = None,
@@ -423,6 +424,7 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
 
         block_res_samples = ()
 
+        index = 0
         for block in self.transformer_blocks:
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 if self.context_embedder is not None:
@@ -439,13 +441,15 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
             else:
                 if self.context_embedder is not None:
                     encoder_hidden_states, hidden_states = block(
-                        hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb
+                        hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, dump_prefix=dump_prefix, index=index,
                     )
                 else:
                     # SD3.5 8b controlnet use single transformer block, which does not use `encoder_hidden_states`
                     hidden_states = block(hidden_states, temb)
 
             block_res_samples = block_res_samples + (hidden_states,)
+
+            index += 1
 
         controlnet_block_res_samples = ()
         for block_res_sample, controlnet_block in zip(block_res_samples, self.controlnet_blocks):

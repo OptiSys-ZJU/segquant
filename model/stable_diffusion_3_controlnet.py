@@ -1136,6 +1136,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
                         joint_attention_kwargs=self.joint_attention_kwargs,
                         controlnet_cond=control_image,
                         conditioning_scale=cond_scale,
+                        dump_prefix=f'{dump_prefix}_{i}.pt',
                     )[0]
 
                 if dump_tensor:

@@ -78,15 +78,41 @@ def calculate_all(real_path, this_path):
 
 
 def run_bench(type):
-    for scale in ['0.2', '0.5', '0.8']:
+    scales = ['0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9']
+    
+    total_fid = 0
+    total_lpips = 0
+    total_psnr = 0
+    total_ssim = 0
+    num_scales = len(scales)
+    
+    for scale in scales:
         print(scale)
         this_fid, group_lpips, group_psnr, group_ssim = calculate_all(f'pic/fp16/{scale}', f'pic/{type}/{scale}')
+        
+        total_fid += this_fid
+        total_lpips += group_lpips
+        total_psnr += group_psnr
+        total_ssim += group_ssim
+        
         print(f'type: {type}')
         print(f'fid: {this_fid:.4f}')
         print(f'group_lpips: {group_lpips:.4f}')
         print(f'group_psnr: {group_psnr:.4f}')
         print(f'group_ssim: {group_ssim:.4f}')
         print('============================================')
+    
+    avg_fid = total_fid / num_scales
+    avg_lpips = total_lpips / num_scales
+    avg_psnr = total_psnr / num_scales
+    avg_ssim = total_ssim / num_scales
+
+    print('Overall Results:')
+    print(f'Average FID: {avg_fid:.4f}')
+    print(f'Average LPIPS: {avg_lpips:.4f}')
+    print(f'Average PSNR: {avg_psnr:.4f}')
+    print(f'Average SSIM: {avg_ssim:.4f}')
+    print('============================================')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Example of multiple arguments as a list")

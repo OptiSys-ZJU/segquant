@@ -40,15 +40,15 @@ type_dict = {
 }
 
 
-def infer(prefix, model, type, num_inference_steps=1, scale=0.5, latents=None):
+def infer(prefix, model, type, num_inference_steps=1, scale=0.5, latents=None, enable_save=True):
     # load pipeline
     _, file, prompt, n_prompt = type_dict[type]
     control_image = load_image(file)
     image = model.forward(
         fake_controlnet = False,
         fake_controlnet_pt = f'new_output_int8smooth_{scale}_28',
-        dump_tensor = True,
-        dump_prefix = f'{prefix}_{type}_{num_inference_steps}_{scale}',
+        dump_tensor = False,
+        dump_prefix = f'{prefix}_{type}_{scale}',
         prompt = prompt, 
         negative_prompt=n_prompt, 
         control_image=control_image, 
@@ -56,10 +56,10 @@ def infer(prefix, model, type, num_inference_steps=1, scale=0.5, latents=None):
         num_inference_steps=num_inference_steps,
         latents=latents,
     )[0]
-
-    dir_path = Path(f"pic/{prefix}/{scale}")
-    dir_path.mkdir(parents=True, exist_ok=True)
-    image[0].save(f'pic/{prefix}/{scale}/{prefix}-{type}-{num_inference_steps}-{scale}.jpg')
+    if enable_save:
+        dir_path = Path(f"pic/{prefix}/{scale}")
+        dir_path.mkdir(parents=True, exist_ok=True)
+        image[0].save(f'pic/{prefix}/{scale}/{prefix}-{type}-{num_inference_steps}-{scale}.jpg')
     print("=============================")
     return image[0]
 
@@ -85,18 +85,53 @@ def forward_loop(model: SD3ControlNetModel):
               controlnet_cond=controlnet_cond, 
               conditioning_scale=conditioning_scale)
 
-def quant(model):
-    # config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)    
-    config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)  
-
-    # config["quant_cfg"]["*timestep_embedder*"] = {"enable": False}
-    # config["quant_cfg"]["*transformer_blocks.0.norm1.linear*"] = {"enable": False}
-    config["quant_cfg"]["*transformer_blocks.*.norm1.linear*"] = {"enable": False}
-    # config["quant_cfg"]["*controlnet_blocks*"] = {"enable": False}
-
-    model = mtq.quantize(control_net, config, forward_loop)
+def quant(model, config, fake_quant):
+    config["quant_cfg"]["*input_quantizer"]["fake_quant"] = fake_quant
+    config["quant_cfg"]["*weight_quantizer"]["fake_quant"] = fake_quant
+    print(config)
+    model = mtq.quantize(model, config, forward_loop)
     mtq.print_quant_summary(model)
+    # exit(0)
     return model
+
+def get_controlnet(type, fake_quant):
+    if type == 'fp16':
+        return SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', 'SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors').half().to(device)
+    elif type == 'fp8':
+        control_net = SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', 'SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors').half().to(device)
+        config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)  
+        return quant(control_net, config, fake_quant)
+    elif type == 'int8_default':
+        control_net = SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', 'SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors').half().to(device)
+        config = copy.deepcopy(mtq.INT8_DEFAULT_CFG)  
+        return quant(control_net, config, fake_quant)
+    elif type == 'int8_smooth':
+        control_net = SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', 'SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors').half().to(device)
+        config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)  
+        return quant(control_net, config, fake_quant)
+    elif type == 'int8_smooth_block':
+        control_net = SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', 'SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors').half().to(device)
+        config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)  
+        config["quant_cfg"]["*transformer_blocks.*.norm1.linear.weight_quantizer"] = {"num_bits": 8, "block_sizes": {0: 1536}, "enable": True, 'fake_quant': fake_quant}
+        return quant(control_net, config, fake_quant)
+    elif type == 'int8_smooth_disnorm1':
+        control_net = SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', 'SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors').half().to(device)
+        config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)  
+        config["quant_cfg"]["*transformer_blocks.0.norm1.linear*"] = {"enable": False}
+        return quant(control_net, config, fake_quant)
+    elif type == 'fp8_disnorm1':
+        control_net = SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', 'SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors').half().to(device)
+        config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)  
+        config["quant_cfg"]["*transformer_blocks.0.norm1.linear*"] = {"enable": False}
+        return quant(control_net, config, fake_quant)
+    elif type == 'fp8_block':
+        control_net = SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', 'SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors').half().to(device)
+        config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)  
+        config["quant_cfg"]["*transformer_blocks.*.norm1.linear.weight_quantizer"] = {"num_bits": (4, 3), "block_sizes": {0: 1536}, "enable": True, 'fake_quant': fake_quant}
+        return quant(control_net, config, fake_quant)
+    else:
+        raise ValueError(f'Unsupported Type {type}')
+
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -112,18 +147,33 @@ if __name__ == '__main__':
     # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant.onnx')
     # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant_new.onnx')
     # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant_ver3.onnx')
-    control_net = SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', 'SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors').half().to(device)
-    control_net = quant(control_net)
+    
+    # type = 'fp16'
+    # type = 'int8_smooth'
+    # type = 'int8_smooth_block'
+    # type = 'int8_default'
+    # type = 'int8_smooth_disnorm1'
+    type = 'fp8'
+    # type = 'fp8_disnorm1'
+    # type = 'fp8_block'
+    # enable_save = True
+    enable_save = False
+    fake_quant = False
+
+    print('Type', type, 'enable_save', enable_save, 'fake_quant', fake_quant)
+
+    control_net = get_controlnet(type, fake_quant)
 
     vae = AutoencoderKL.from_config('stable_diff/configs/vae.json', 'stable-diffusion-3-medium-diffusers/vae/diffusion_pytorch_model.safetensors').half().to(device)
     dit = SD3Transformer2DModel.from_config('stable_diff/configs/transformer.json', 'stable-diffusion-3-medium-diffusers/transformer/diffusion_pytorch_model.safetensors').half().to(device)
     sd3 = StableDiffusion3ControlNetModel(dit, scheduler, vae, text_encoder, tokenizer, text_encoder_2, tokenizer_2, text_encoder_3, tokenizer_3, control_net).half().to(device)
 
     #######################
-    type = 'int8smooth_ver3'
     latents = torch.load('latents.pt')
-    if os.path.exists(f"pic/{type}"):
+    if enable_save and os.path.exists(f"pic/{type}"):
         raise FileExistsError(f"Error: Directory 'pic/{type}' already exists!")
-    for scale in [0.2, 0.5, 0.8]:
-        for i in range(1, 29, 3):
-            infer(type, sd3, 'canny', i, scale, latents)
+    #for scale in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+    for scale in [0.8]:
+        for i in [28]:
+        # for i in range(1, 29, 1):
+            infer(type, sd3, 'canny', i, scale, latents, enable_save)

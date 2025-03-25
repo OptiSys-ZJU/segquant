@@ -5,7 +5,7 @@ import glob
 import os
 
 def load_controlnet_inputs(folder_path):
-    file_paths = sorted(glob.glob(os.path.join(folder_path, "controlnet_input_canny_1_0.8.pt")))
+    file_paths = sorted(glob.glob(os.path.join(folder_path, "controlnet_input_fp16_canny_0.9_28_0.pt")))
     tensors = [torch.load(path) for path in file_paths]
 
     res = []
