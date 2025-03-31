@@ -236,24 +236,28 @@ class AdaLayerNormZero(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        dump: bool = False,
-        dump_prefix: str = None,
         timestep: Optional[torch.Tensor] = None,
         class_labels: Optional[torch.LongTensor] = None,
         hidden_dtype: Optional[torch.dtype] = None,
         emb: Optional[torch.Tensor] = None,
+        dump: bool = False,
+        dump_prefix: str = None,
+        enable_res: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.emb is not None:
             emb = self.emb(timestep, class_labels, hidden_dtype=hidden_dtype)
         
 
         input = self.silu(emb)
-        if dump:
+        if dump and dump_prefix is not None:
             torch.save(input, f'norm1_input_{dump_prefix}')
         emb = self.linear(input)
-        if dump:
+        if enable_res:
+            ts = dump_prefix[:-3].split('_')[-1]
+            res = torch.load(f'perfect/int8_block_diff_{ts}.pt')
+            emb = emb + res
+        if dump and dump_prefix is not None:
             torch.save(emb, f'norm1_output_{dump_prefix}')
-
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = emb.chunk(6, dim=1)
         x = self.norm(x) * (1 + scale_msa[:, None]) + shift_msa[:, None]
         return x, gate_msa, shift_mlp, scale_mlp, gate_mlp

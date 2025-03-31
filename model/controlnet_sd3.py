@@ -8,6 +8,7 @@ from safetensors.torch import load_file
 from stable_diff.model.embeddings import PatchEmbed, CombinedTimestepTextProjEmbeddings
 from stable_diff.model.attention_processor import Attention, AttentionProcessor, FusedJointAttnProcessor2_0
 from stable_diff.model.attention import JointTransformerBlock
+import copy
 
 def zero_module(module):
     for p in module.parameters():
@@ -352,11 +353,12 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
         hidden_states: torch.Tensor,
         controlnet_cond: torch.Tensor,
         conditioning_scale: float = 1.0,
-        dump_prefix: str = None,
         encoder_hidden_states: torch.Tensor = None,
         pooled_projections: torch.Tensor = None,
         timestep: torch.LongTensor = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
+        dump_prefix: str = None,
+        enable_res: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor]]:
         """
         The [`SD3Transformer2DModel`] forward method.
@@ -441,7 +443,7 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
             else:
                 if self.context_embedder is not None:
                     encoder_hidden_states, hidden_states = block(
-                        hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, dump_prefix=dump_prefix, index=index,
+                        hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, enable_res=enable_res, dump_prefix=dump_prefix, index=index,
                     )
                 else:
                     # SD3.5 8b controlnet use single transformer block, which does not use `encoder_hidden_states`
@@ -451,6 +453,8 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
 
             index += 1
 
+        block_res_samples_copy = copy.deepcopy(block_res_samples)
+
         controlnet_block_res_samples = ()
         for block_res_sample, controlnet_block in zip(block_res_samples, self.controlnet_blocks):
             block_res_sample = controlnet_block(block_res_sample)
@@ -459,7 +463,7 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
         # 6. scaling
         controlnet_block_res_samples = [sample * conditioning_scale for sample in controlnet_block_res_samples]
 
-        return (controlnet_block_res_samples,)
+        return (controlnet_block_res_samples, block_res_samples_copy)
 
 
 class SD3MultiControlNetModel(nn.Module):
