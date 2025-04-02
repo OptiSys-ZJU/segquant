@@ -87,6 +87,7 @@ def plot(folder_path):
         diff_int8_list = []
         diff_int8disnorm1_list = []
         diff_int8block_list = []
+        diff_int8blockres_list = []
 
         diff_fp8_list = []
         diff_fp8disnorm1_list = []
@@ -96,26 +97,33 @@ def plot(folder_path):
             print(scale, i)
             fp16_input = torch.load(os.path.join(folder_path, f"norm1_input_fp16_canny_{scale}_{i}.pt"))
             fp16_output = torch.load(os.path.join(folder_path, f"norm1_output_fp16_canny_{scale}_{i}.pt"))
-            # plot_tensor_distributions(fp16_input, fp16_output, f'fp16_{i}.png')
 
             int8dis_input = torch.load(os.path.join(folder_path, f"norm1_input_int8_smooth_disnorm1_canny_{scale}_{i}.pt"))
             int8dis_output = torch.load(os.path.join(folder_path, f"norm1_output_int8_smooth_disnorm1_canny_{scale}_{i}.pt"))
-            # plot_tensor_distributions(int8dis_input, int8dis_output, f'int8_smooth_disnorm1_{i}.png')
 
             int8_input = torch.load(os.path.join(folder_path, f"norm1_input_int8_smooth_canny_{scale}_{i}.pt"))
             int8_output = torch.load(os.path.join(folder_path, f"norm1_output_int8_smooth_canny_{scale}_{i}.pt"))
-            # plot_tensor_distributions(int8_input, int8_output, f'int8_smooth_{i}.png')
 
             int8_block_input = torch.load(os.path.join(folder_path, f"norm1_input_int8_smooth_block_canny_{scale}_{i}.pt"))
             int8_block_output = torch.load(os.path.join(folder_path, f"norm1_output_int8_smooth_block_canny_{scale}_{i}.pt"))
+
+            int8_blockres_input = torch.load(os.path.join(folder_path, f"norm1_input_int8_smooth_blockres_canny_{scale}_{i}.pt"))
+            int8_blockres_output = torch.load(os.path.join(folder_path, f"norm1_output_int8_smooth_blockres_canny_{scale}_{i}.pt"))
+
+            # test_diff = torch.load(f"perfect/int8_block_diff_{i}.pt")
+            # int8_blockres_output = int8_block_output + test_diff
 
             fp8_output = torch.load(os.path.join(folder_path, f"norm1_output_fp8_canny_{scale}_{i}.pt"))
             fp8dis_output = torch.load(os.path.join(folder_path, f"norm1_output_fp8_disnorm1_canny_{scale}_{i}.pt"))
             fp8_block_output = torch.load(os.path.join(folder_path, f"norm1_output_fp8_block_canny_{scale}_{i}.pt"))
 
+            dump_diff = fp16_output-int8_block_output
+            torch.save(dump_diff, f'int8_block_diff_{i}.pt')
+
             diff_int8_list.append(fp16_output-int8_output)
             diff_int8disnorm1_list.append(fp16_output-int8dis_output)
             diff_int8block_list.append(fp16_output-int8_block_output)
+            diff_int8blockres_list.append(fp16_output-int8_blockres_output)
             diff_fp8_list.append(fp16_output-fp8_output)
             diff_fp8disnorm1_list.append(fp16_output-fp8dis_output)
             diff_fp8block_list.append(fp16_output-fp8_block_output)
@@ -129,17 +137,21 @@ def plot(folder_path):
             err3 = frobenius_norm(fp16_output-int8_block_output)
             print('int8block', err3.item())
 
-            err4 = frobenius_norm(fp16_output-fp8_output)
-            print('fp8', err4.item())
+            err4 = frobenius_norm(fp16_output-int8_blockres_output)
+            print('int8blockres', err4.item())
 
-            err5 = frobenius_norm(fp16_output-fp8dis_output)
-            print('fp8disnorm1', err5.item())
+            # err4 = frobenius_norm(fp16_output-fp8_output)
+            # print('fp8', err4.item())
 
-            err6 = frobenius_norm(fp16_output-fp8_block_output)
-            print('fp8block', err6.item())
+            # err5 = frobenius_norm(fp16_output-fp8dis_output)
+            # print('fp8disnorm1', err5.item())
+
+            # err6 = frobenius_norm(fp16_output-fp8_block_output)
+            # print('fp8block', err6.item())
+            # exit(0)
         
-        plot_diff(diff_int8_list, diff_int8disnorm1_list, diff_int8block_list, f'diff_int8_{i}.png')
-        plot_diff(diff_fp8_list, diff_fp8disnorm1_list, diff_fp8block_list, f'diff_fp8_{i}.png')
+        # plot_diff(diff_int8_list, diff_int8disnorm1_list, diff_int8block_list, f'diff_int8_{i}.png')
+        # plot_diff(diff_fp8_list, diff_fp8disnorm1_list, diff_fp8block_list, f'diff_fp8_{i}.png')
 
 def plot_diff(tensor1_list, tensor2_list, tensor3_list, save_path):
     plt.figure(figsize=(12, 6))  # 创建单个图

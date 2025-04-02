@@ -35,13 +35,9 @@ if __name__ == '__main__':
     control_net = SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', 'SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors').half().to(device)
 
     # config = mtq.INT8_DEFAULT_CFG
-    CUSTOM_INT8_SMOOTH_CFG = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)
-    
-    CUSTOM_INT8_SMOOTH_CFG["quant_cfg"]["*timestep_embedder*"] = {"enable": False}
-    CUSTOM_INT8_SMOOTH_CFG["quant_cfg"]["*controlnet_blocks*"] = {"enable": False}
-
-    
-    model = mtq.quantize(control_net, CUSTOM_INT8_SMOOTH_CFG, forward_loop)
+    config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)
+    config["quant_cfg"]["*transformer_blocks.*.norm1.linear.weight_quantizer"] = {"num_bits": 8, "block_sizes": {0: 1536}, "enable": True, 'fake_quant': True}
+    model = mtq.quantize(control_net, config, forward_loop)
 
     mtq.print_quant_summary(model)
 
@@ -54,4 +50,4 @@ if __name__ == '__main__':
         pooled_projections,
         timestep,
         None,
-    ), 'int8smooth-disable-timeemb-final-linear.onnx')
+    ), 'int8smooth-block.onnx')

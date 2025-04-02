@@ -760,10 +760,6 @@ class StableDiffusion3ControlNetModel(nn.Module):
     @torch.no_grad()
     def forward(
         self,
-        fake_controlnet: bool = False,
-        fake_controlnet_pt: str = '',
-        dump_tensor: bool = False,
-        dump_prefix: str = '',
         prompt: Union[str, List[str]] = None,
         prompt_2: Optional[Union[str, List[str]]] = None,
         prompt_3: Optional[Union[str, List[str]]] = None,
@@ -795,6 +791,10 @@ class StableDiffusion3ControlNetModel(nn.Module):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 256,
+        dump_input_tensor: bool = False,
+        dump_tensor: bool = False,
+        dump_prefix: str = '',
+        enable_res: bool = False,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -1115,7 +1115,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
                     cond_scale = controlnet_cond_scale * controlnet_keep[i]
 
                 # controlnet(s) inference
-                if dump_tensor:
+                if dump_input_tensor:
                     torch.save({
                         "hidden_states": latent_model_input, 
                         "timestep": timestep,
@@ -1125,28 +1125,35 @@ class StableDiffusion3ControlNetModel(nn.Module):
                         "conditioning_scale": cond_scale,
                     }, f"controlnet_input_{dump_prefix}_{i}.pt")
 
-                if fake_controlnet:
-                    control_block_samples = torch.load(f'{fake_controlnet_pt}_{i}.pt')
-                else:
-                    control_block_samples = self.controlnet(
-                        hidden_states=latent_model_input,
-                        timestep=timestep,
-                        encoder_hidden_states=controlnet_encoder_hidden_states,
-                        pooled_projections=controlnet_pooled_projections,
-                        joint_attention_kwargs=self.joint_attention_kwargs,
-                        controlnet_cond=control_image,
-                        conditioning_scale=cond_scale,
-                        dump_prefix=f'{dump_prefix}_{i}.pt',
-                    )[0]
+                print('conditioning_scale:', cond_scale, 'timestep:', timestep)
+                control_block_samples, block_res_samples = self.controlnet(
+                    hidden_states=latent_model_input,
+                    timestep=timestep,
+                    encoder_hidden_states=controlnet_encoder_hidden_states,
+                    pooled_projections=controlnet_pooled_projections,
+                    joint_attention_kwargs=self.joint_attention_kwargs,
+                    controlnet_cond=control_image,
+                    conditioning_scale=cond_scale,
+                    dump_prefix=f'{dump_prefix}_{i}.pt',
+                    enable_res=enable_res,
+                )
+                
+                # if dump_tensor:
+                #     torch.save({
+                #         "hidden_states": latent_model_input, 
+                #         "timestep": timestep,
+                #         "cond_scale": cond_scale,
+                #         "control_block_samples": control_block_samples
+                #     }, f"multistep/controlnet_output_{dump_prefix}_{i}.pt")
 
-                if dump_tensor:
-                    torch.save({
-                        "hidden_states": latent_model_input, 
-                        "timestep": timestep,
-                        "encoder_hidden_states": prompt_embeds,
-                        "pooled_projections": pooled_prompt_embeds,
-                        "block_controlnet_hidden_states": control_block_samples,
-                    }, f"transformer_input_{dump_prefix}_{i}.pt")
+                # if dump_tensor:
+                #     torch.save({
+                #         "hidden_states": latent_model_input, 
+                #         "timestep": timestep,
+                #         "encoder_hidden_states": prompt_embeds,
+                #         "pooled_projections": pooled_prompt_embeds,
+                #         "block_controlnet_hidden_states": control_block_samples,
+                #     }, f"transformer_input_{dump_prefix}_{i}.pt")
 
                 noise_pred = self.transformer(
                     hidden_states=latent_model_input,
@@ -1156,6 +1163,16 @@ class StableDiffusion3ControlNetModel(nn.Module):
                     block_controlnet_hidden_states=control_block_samples,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                 )[0]
+
+                if dump_tensor:
+                    torch.save(
+                        {
+                            "hidden_states": latent_model_input,
+                            "timestep": timestep,
+                            "block_res_samples": block_res_samples,
+                            "control_block_samples": control_block_samples,
+                            "noise_pred": noise_pred,
+                        }, f"multistep/dit_output_{dump_prefix}_{i}.pt")
 
                 # perform guidance
                 if self.do_classifier_free_guidance:

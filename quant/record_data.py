@@ -9,8 +9,7 @@ import torch
 
 type_dict = {
     "canny": ('SD3-Controlnet-Canny', 
-              "2.png",
-              #"https://huggingface.co/InstantX/SD3-Controlnet-Canny/resolve/main/canny.jpg",
+              "https://huggingface.co/InstantX/SD3-Controlnet-Canny/resolve/main/canny.jpg",
               'Anime style illustration of a girl wearing a suit. A moon in sky. In the background we see a big rain approaching. text "InstantX" on image',
               'NSFW, nude, naked, porn, ugly'
               ),
@@ -37,9 +36,7 @@ def record_calibration(prefix, model, type, num_inference_steps=1, scale=0.5):
     _, file, prompt, n_prompt = type_dict[type]
     control_image = load_image(file)
     model.forward(
-        fake_controlnet = False,
-        fake_controlnet_pt = f'controlnet_output_{type}_{num_inference_steps}_{scale}.pt',
-        dump_tensor = True,
+        dump_input_tensor = True,
         dump_prefix = f'{prefix}_{type}_{scale}_{num_inference_steps}',
         prompt = prompt, 
         negative_prompt=n_prompt, 
@@ -84,6 +81,7 @@ if __name__ == '__main__':
 
     #######################
     latents = torch.load('latents.pt')
-    for scale in [0.9]:
-        # record_calibration('fp16', sd3, 'canny', i, scale)
-        record_latent_input('fp16-new', sd3, 'canny', 28, scale, latents)
+    for scale in [0.2, 0.5, 0.8]:
+        for i in [28]:
+            record_calibration('fp16', sd3, 'tile', i, scale)
+        # record_latent_input('fp16-new', sd3, 'canny', 28, scale, latents)
