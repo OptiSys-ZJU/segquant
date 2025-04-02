@@ -149,15 +149,14 @@ if __name__ == '__main__':
     # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant_ver3.onnx')
     
     # type = 'fp16'
-    # type = 'int8_smooth'
+    type = 'int8_smooth'
     # type = 'int8_smooth_block'
     # type = 'int8_default'
     # type = 'int8_smooth_disnorm1'
-    type = 'fp8'
+    # type = 'fp8'
     # type = 'fp8_disnorm1'
     # type = 'fp8_block'
-    # enable_save = True
-    enable_save = False
+    enable_save = True
     fake_quant = False
 
     print('Type', type, 'enable_save', enable_save, 'fake_quant', fake_quant)
