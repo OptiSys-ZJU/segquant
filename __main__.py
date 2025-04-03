@@ -15,6 +15,8 @@ import copy
 
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
 
+from stable_diff.utils.hook_dump import DebugContext
+
 
 type_dict = {
     "canny": ('SD3-Controlnet-Canny', 
@@ -40,14 +42,16 @@ type_dict = {
 }
 
 
-def infer(prefix, model, type, num_inference_steps=1, scale=0.5, latents=None, enable_save=True, enable_res=False):
+def infer(prefix, model, type, num_inference_steps=1, scale=0.5, latents=None, enable_save=True, enable_res=False, single_step_sim=False):
     # load pipeline
+    DebugContext.set_prefix(prefix, type, str(scale))
+
     _, file, prompt, n_prompt = type_dict[type]
     control_image = load_image(file)
     image = model.forward(
         enable_res = enable_res,
-        dump_tensor = True,
-        dump_prefix = f'{prefix}_{type}_{scale}',
+        single_step_sim = single_step_sim,
+        dump_tensor = False,
         prompt = prompt, 
         negative_prompt=n_prompt, 
         control_image=control_image, 
@@ -73,9 +77,9 @@ def load_controlnet_inputs(folder_path, controlnet_type):
     return res
 
 # controlnet_type = 'depth'
-# controlnet_type = 'canny'
+controlnet_type = 'canny'
 # controlnet_type = 'tile'
-controlnet_type = 'pose'
+# controlnet_type = 'pose'
 
 data_loader = load_controlnet_inputs('calibration', controlnet_type)
 
@@ -112,8 +116,12 @@ def get_controlnet(type, fake_quant):
         return quant(control_net, config, fake_quant)
     elif type == 'int8_smooth':
         config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)  
+        config["quant_cfg"]["*pos_embed.proj*"] = {"enable": False}
+        config["quant_cfg"]["*pos_embed_input.proj*"] = {"enable": False}
+        config["quant_cfg"]["*context_embedder.proj*"] = {"enable": False}
+
         return quant(control_net, config, fake_quant)
-    elif type == 'int8_smooth_disabletime':
+    elif type == 'int8_smooth_enablelatent':
         config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)
         config["quant_cfg"]["*pos_embed.proj*"] = {"enable": False}
         config["quant_cfg"]["*pos_embed_input.proj*"] = {"enable": False}
@@ -123,7 +131,7 @@ def get_controlnet(type, fake_quant):
         config["quant_cfg"]["*transformer_blocks.*.norm1.linear*"] = {"enable": False}
         config["quant_cfg"]["*transformer_blocks.*.norm1_context.linear*"] = {"enable": False}
         return quant(control_net, config, fake_quant)
-    elif type == 'int8_smooth_disablelatent':
+    elif type == 'int8_smooth_enabletime':
         config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)
         config["quant_cfg"]["*pos_embed.proj*"] = {"enable": False}
         config["quant_cfg"]["*pos_embed_input.proj*"] = {"enable": False}
@@ -133,6 +141,20 @@ def get_controlnet(type, fake_quant):
         config["quant_cfg"]["*transformer_blocks.*.ff.net*"] = {"enable": False}
         config["quant_cfg"]["*transformer_blocks.*.ff_context.net*"] = {"enable": False}
         config["quant_cfg"]["*controlnet_blocks*"] = {"enable": False}
+        
+        return quant(control_net, config, fake_quant)
+    elif type == 'int8_smooth_enabletime_block':
+        config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)
+        config["quant_cfg"]["*pos_embed.proj*"] = {"enable": False}
+        config["quant_cfg"]["*pos_embed_input.proj*"] = {"enable": False}
+        config["quant_cfg"]["*context_embedder.proj*"] = {"enable": False}
+
+        config["quant_cfg"]["*transformer_blocks.*.attn*"] = {"enable": False}
+        config["quant_cfg"]["*transformer_blocks.*.ff.net*"] = {"enable": False}
+        config["quant_cfg"]["*transformer_blocks.*.ff_context.net*"] = {"enable": False}
+        config["quant_cfg"]["*controlnet_blocks*"] = {"enable": False}
+
+        config["quant_cfg"]["*transformer_blocks.*.norm1.linear.weight_quantizer"] = {"num_bits": 8, "block_sizes": {0: 1536}, "enable": True, 'fake_quant': fake_quant}
         
         return quant(control_net, config, fake_quant)
     elif type == 'int8_smooth_block' or type == 'int8_smooth_blockres':
@@ -171,10 +193,11 @@ if __name__ == '__main__':
     # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant_new.onnx')
     # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant_ver3.onnx')
     
-    # type = 'fp16'
+    type = 'fp16'
     # type = 'int8_smooth'
-    # type = 'int8_smooth_disabletime'
-    type = 'int8_smooth_disablelatent'
+    # type = 'int8_smooth_enablelatent'
+    # type = 'int8_smooth_enabletime'
+    # type = 'int8_smooth_enabletime_block'
     # type = 'int8_smooth_block'
     # type = 'int8_smooth_blockres'
     # type = 'int8_default'
@@ -183,7 +206,7 @@ if __name__ == '__main__':
     # type = 'fp8_disnorm1'
     # type = 'fp8_block'
     # enable_save = True
-    enable_save = False
+    enable_save = True
     # fake_quant = False
     fake_quant = True
 
@@ -204,6 +227,12 @@ if __name__ == '__main__':
         raise FileExistsError(f"Error: Directory 'pic/{type}' already exists!")
     # for scale in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
     for scale in [0.8]:
-        for i in [200]:
+        for i in [1]:
         # for i in range(1, 29, 1):
-            infer(type, sd3, controlnet_type, i, scale, latents, enable_save, enable_res)
+            infer(type, sd3, controlnet_type, i, scale, latents, enable_save, enable_res, single_step_sim=False)
+    
+    if type != 'fp16':
+        for scale in [0.8]:
+            for i in [200]:
+            # for i in range(1, 29, 1):
+                infer(type, sd3, controlnet_type, i, scale, latents, enable_save, enable_res, single_step_sim=True)

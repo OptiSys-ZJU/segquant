@@ -8,6 +8,8 @@ from stable_diff.model.embeddings import CombinedTimestepLabelEmbeddings
 from stable_diff.model.activations import get_activation
 from packaging import version
 
+from stable_diff.utils.hook_dump import DebugContext, debug_hook
+
 class RMSNorm(nn.Module):
     r"""
     RMS Norm as introduced in https://arxiv.org/abs/1910.07467 by Zhang et al.
@@ -240,25 +242,21 @@ class AdaLayerNormZero(nn.Module):
         class_labels: Optional[torch.LongTensor] = None,
         hidden_dtype: Optional[torch.dtype] = None,
         emb: Optional[torch.Tensor] = None,
-        dump: bool = False,
-        dump_prefix: str = None,
-        enable_res: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.emb is not None:
             emb = self.emb(timestep, class_labels, hidden_dtype=hidden_dtype)
         
+        linear_input = self.silu(emb)
+        linear_out = self.linear(linear_input)
 
-        input = self.silu(emb)
-        if dump and dump_prefix is not None:
-            torch.save(input, f'norm1_input_{dump_prefix}')
-        emb = self.linear(input)
-        if enable_res:
-            ts = dump_prefix[:-3].split('_')[-1]
-            res = torch.load(f'perfect/int8_block_diff_{ts}.pt')
-            emb = emb + res
-        if dump and dump_prefix is not None:
-            torch.save(emb, f'norm1_output_{dump_prefix}')
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = emb.chunk(6, dim=1)
+        if DebugContext._index == 0:
+            debug_hook(value={
+                "emb": emb,
+                "linear_input": linear_input,
+                "linear_out": linear_out,
+            }, dir='time_error', info='adanorm')
+
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = linear_out.chunk(6, dim=1)
         x = self.norm(x) * (1 + scale_msa[:, None]) + shift_msa[:, None]
         return x, gate_msa, shift_mlp, scale_mlp, gate_mlp
 

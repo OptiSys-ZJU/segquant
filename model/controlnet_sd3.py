@@ -10,6 +10,8 @@ from stable_diff.model.attention_processor import Attention, AttentionProcessor,
 from stable_diff.model.attention import JointTransformerBlock
 import copy
 
+from stable_diff.utils.hook_dump import DebugContext
+
 def zero_module(module):
     for p in module.parameters():
         nn.init.zeros_(p)
@@ -357,7 +359,6 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
         pooled_projections: torch.Tensor = None,
         timestep: torch.LongTensor = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
-        dump_prefix: str = None,
         enable_res: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor]]:
         """
@@ -428,6 +429,8 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
 
         index = 0
         for block in self.transformer_blocks:
+            DebugContext.set_attn_index(index)
+
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 if self.context_embedder is not None:
                     encoder_hidden_states, hidden_states = self._gradient_checkpointing_func(
@@ -443,7 +446,7 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
             else:
                 if self.context_embedder is not None:
                     encoder_hidden_states, hidden_states = block(
-                        hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, enable_res=enable_res, dump_prefix=dump_prefix, index=index,
+                        hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, enable_res=enable_res,
                     )
                 else:
                     # SD3.5 8b controlnet use single transformer block, which does not use `encoder_hidden_states`

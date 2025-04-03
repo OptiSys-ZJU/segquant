@@ -8,6 +8,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from stable_diff.utils.hook_dump import debug_hook
+
 def get_timestep_embedding(
     timesteps: torch.Tensor,
     embedding_dim: int,
@@ -661,16 +663,26 @@ class TimestepEmbedding(nn.Module):
     def forward(self, sample, condition=None):
         if condition is not None:
             sample = sample + self.cond_proj(condition)
-        sample = self.linear_1(sample)
+        l1_output = self.linear_1(sample)
 
         if self.act is not None:
-            sample = self.act(sample)
+            act_output = self.act(l1_output)
 
-        sample = self.linear_2(sample)
+        l2_output = self.linear_2(act_output)
 
         if self.post_act is not None:
-            sample = self.post_act(sample)
-        return sample
+            post_act_output = self.post_act(l2_output)
+        else:
+            post_act_output = l2_output
+        
+        debug_hook(value={
+            "timesteps_proj": sample,
+            "l1_output": l1_output,
+            "act_output": act_output,
+            "l2_output": l2_output,
+        }, dir='time_error', info='tsemb')
+
+        return post_act_output
 
 class PixArtAlphaTextProjection(nn.Module):
     """
