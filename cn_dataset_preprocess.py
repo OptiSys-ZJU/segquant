@@ -13,7 +13,7 @@ class ControlNetPreprocessor:
     """
     A class to preprocess images for ControlNet input (Canny edges, Depth maps).
     """
-    def __init__(self, enable_blur, device=None):
+    def __init__(self, enable_blur, blur_kernel_size, device=None):
         """
         Initializes the preprocessor, loading necessary models.
         Args:
@@ -31,7 +31,7 @@ class ControlNetPreprocessor:
         # --- Canny Edge Setup ---
         self.canny_low_threshold = 100
         self.canny_high_threshold = 200
-        self.canny_blur_kernel_size = 3 # Must be odd
+        self.canny_blur_kernel_size = blur_kernel_size # Must be odd
         self.enable_blur = enable_blur
 
         assert self.canny_blur_kernel_size % 2 != 0, "Warning: Blur kernel size must be odd."
@@ -256,6 +256,8 @@ if __name__ == "__main__":
                         help="Dataset to use (default: COCO-Caption2017)")
     parser.add_argument("--split", type=str, default="val",
                         help="Dataset split to use (default: val)")
+    parser.add_argument("--blur_kernel_size", type=int, default=3,
+                        help="Kernel size used to blur the image before Canny edge detection (must be odd)")
     args = parser.parse_args()
     
     print("Loading dataset...")
@@ -273,7 +275,7 @@ if __name__ == "__main__":
         exit()
 
     # Initialize preprocessor
-    preprocessor = ControlNetPreprocessor(enable_blur=args.enable_blur)
+    preprocessor = ControlNetPreprocessor(enable_blur=args.enable_blur, blur_kernel_size=args.blur_kernel_size)
     
     # Create ControlNet dataset
     dataset_dir = create_controlnet_dataset(

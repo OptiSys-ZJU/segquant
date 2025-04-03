@@ -1,6 +1,7 @@
 import os
 import json
 from PIL import Image
+import argparse
 
 def load_controlnet_dataset(dataset_dir):
     metadata_path = os.path.join(dataset_dir, "metadata.json")
@@ -22,8 +23,12 @@ def display_sample_info(dataset_dir, sample):
     return image, control
 
 if __name__ == "__main__":
-    # Change this path if needed: it should match the output_dir used in your preprocess script.
-    dataset_dir = "./controlnet_datasets/controlnet_canny_dataset"  
+    parser = argparse.ArgumentParser(description="Create ControlNet dataset from COCO")
+    parser.add_argument("--cn_type", type=str, default="canny", choices=["canny", "depth"],
+                        help="Type of control map to generate")
+    args = parser.parse_args()
+
+    dataset_dir = f"./controlnet_datasets/controlnet_{args.cn_type}_dataset"  
     metadata = load_controlnet_dataset(dataset_dir)
     print(f"Loaded {len(metadata)} samples from dataset.\n")
     
