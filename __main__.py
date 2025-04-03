@@ -176,7 +176,6 @@ def get_controlnet(type, fake_quant):
     else:
         raise ValueError(f'Unsupported Type {type}')
 
-
 if __name__ == '__main__':
     enable_res = False
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
