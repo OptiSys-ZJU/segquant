@@ -249,12 +249,12 @@ class AdaLayerNormZero(nn.Module):
         linear_input = self.silu(emb)
         linear_out = self.linear(linear_input)
 
-        if DebugContext._index == 0:
-            debug_hook(value={
-                "emb": emb,
-                "linear_input": linear_input,
-                "linear_out": linear_out,
-            }, dir='time_error', info='adanorm')
+        # if DebugContext._index == 0:
+        #     debug_hook(value={
+        #         "emb": emb,
+        #         "linear_input": linear_input,
+        #         "linear_out": linear_out,
+        #     }, dir='time_error', info='adanorm')
 
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = linear_out.chunk(6, dim=1)
         x = self.norm(x) * (1 + scale_msa[:, None]) + shift_msa[:, None]

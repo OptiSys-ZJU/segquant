@@ -24,11 +24,13 @@ def display_sample_info(dataset_dir, sample):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create ControlNet dataset from COCO")
+    parser.add_argument("--root_dir", type=str, default=".", 
+                        help="Directory to save the processed dataset")
     parser.add_argument("--cn_type", type=str, default="canny", choices=["canny", "depth"],
                         help="Type of control map to generate")
     args = parser.parse_args()
 
-    dataset_dir = f"./controlnet_datasets/controlnet_{args.cn_type}_dataset"  
+    dataset_dir = f"{args.root_dir}/controlnet_datasets/controlnet_{args.cn_type}_dataset"  
     metadata = load_controlnet_dataset(dataset_dir)
     print(f"Loaded {len(metadata)} samples from dataset.\n")
     

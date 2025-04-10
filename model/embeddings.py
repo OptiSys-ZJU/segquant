@@ -675,12 +675,12 @@ class TimestepEmbedding(nn.Module):
         else:
             post_act_output = l2_output
         
-        debug_hook(value={
-            "timesteps_proj": sample,
-            "l1_output": l1_output,
-            "act_output": act_output,
-            "l2_output": l2_output,
-        }, dir='time_error', info='tsemb')
+        # debug_hook(value={
+        #     "timesteps_proj": sample,
+        #     "l1_output": l1_output,
+        #     "act_output": act_output,
+        #     "l2_output": l2_output,
+        # }, dir='time_error', info='tsemb')
 
         return post_act_output
 

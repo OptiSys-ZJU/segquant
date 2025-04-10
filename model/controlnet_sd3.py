@@ -10,7 +10,7 @@ from stable_diff.model.attention_processor import Attention, AttentionProcessor,
 from stable_diff.model.attention import JointTransformerBlock
 import copy
 
-from stable_diff.utils.hook_dump import DebugContext
+from stable_diff.utils.hook_dump import DebugContext, debug_hook
 
 def zero_module(module):
     for p in module.parameters():
@@ -415,6 +415,7 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
             raise ValueError("encoder_hidden_states should not be provided when context_embedder is not used")
 
         if self.pos_embed is not None:
+            init_hiddens = copy.deepcopy(hidden_states)
             hidden_states = self.pos_embed(hidden_states)  # takes care of adding positional embeddings too.
 
         temb = self.time_text_embed(timestep, pooled_projections)
@@ -423,7 +424,16 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
             encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
         # add
-        hidden_states = hidden_states + self.pos_embed_input(controlnet_cond)
+        hidden_before = copy.deepcopy(hidden_states)
+        cond_output = self.pos_embed_input(controlnet_cond)
+        hidden_states = hidden_states + cond_output
+        debug_hook(value={
+            "init_hiddens": init_hiddens,
+            "hidden_before": hidden_before,
+            "controlnet_cond": controlnet_cond,
+            "cond_output": cond_output,
+            "hidden_states": hidden_states,
+        }, dir='ctrl_hidden')
 
         block_res_samples = ()
 

@@ -1103,7 +1103,6 @@ class StableDiffusion3ControlNetModel(nn.Module):
 
                 if self.interrupt:
                     continue
-
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
@@ -1164,24 +1163,6 @@ class StableDiffusion3ControlNetModel(nn.Module):
                     joint_attention_kwargs=self.joint_attention_kwargs,
                 )[0]
 
-                if dump_tensor:
-                    DebugContext.enable()
-                    if single_step_sim:
-                        debug_hook(value={
-                            "hidden_states": latent_model_input,
-                            "timestep": timestep,
-                            "control_block_samples": control_block_samples,
-                            "noise_pred": noise_pred,
-                        }, dir='singlestep')
-                    else:
-                        debug_hook(value={
-                            "hidden_states": latent_model_input,
-                            "timestep": timestep,
-                            "control_block_samples": control_block_samples,
-                            "noise_pred": noise_pred,
-                        }, dir='multistep')
-                    DebugContext.disable()
-
                 # perform guidance
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
@@ -1190,6 +1171,33 @@ class StableDiffusion3ControlNetModel(nn.Module):
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
                 latents = self.scheduler.step(noise_pred, t, latents)[0]
+
+
+                if dump_tensor:
+                    DebugContext.enable()
+                    if single_step_sim:
+                        debug_hook(value={
+                            "hidden_states": latent_model_input,
+                            "timestep": timestep,
+                            "control_block_samples": control_block_samples,
+                            "noise_pred": noise_pred,
+                        }, dir='singlestep', info=f'{num_inference_steps}')
+                    else:
+                        debug_hook(value={
+                            "hidden_states": latent_model_input,
+                            "timestep": timestep,
+                            "prompt_embeds": prompt_embeds,
+                            "pooled_prompt_embeds": pooled_prompt_embeds,
+
+                            "cond_scale": cond_scale,
+
+                            "guidance_scale": guidance_scale,
+                            "noise_pred_uncond": noise_pred_uncond,
+                            "noise_pred_text": noise_pred_text,
+
+                            "noise_pred": noise_pred,
+                        }, dir='train_lstm', info=f'{num_inference_steps}')
+                    DebugContext.disable()
 
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
