@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import math
 import json
-from stable_diff.utils import is_scipy_available
+from backend.torch.utils import is_scipy_available
 from types import SimpleNamespace
 import inspect
 

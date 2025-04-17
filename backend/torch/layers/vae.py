@@ -17,10 +17,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from stable_diff.utils import randn_tensor
-from stable_diff.model.activations import get_activation
-from stable_diff.model.attention_processor import SpatialNorm
-from stable_diff.model.unet import get_down_block, get_up_block, UNetMidBlock2D, AutoencoderTinyBlock
+from backend.torch.utils import randn_tensor
+from backend.torch.layers.activations import get_activation
+from backend.torch.layers.attention_processor import SpatialNorm
+from backend.torch.layers.unet import get_down_block, get_up_block, UNetMidBlock2D, AutoencoderTinyBlock
 
 class Encoder(nn.Module):
     r"""

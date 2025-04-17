@@ -19,8 +19,8 @@ import json
 import torch
 import torch.nn as nn
 
-from stable_diff.utils.deprecation_utils import deprecate
-from stable_diff.model.attention_processor import (
+from backend.torch.utils.deprecation_utils import deprecate
+from backend.torch.layers.attention_processor import (
     ADDED_KV_ATTENTION_PROCESSORS,
     CROSS_ATTENTION_PROCESSORS,
     Attention,
@@ -29,7 +29,7 @@ from stable_diff.model.attention_processor import (
     AttnProcessor,
     FusedAttnProcessor2_0,
 )
-from stable_diff.model.vae import Encoder, Decoder, DiagonalGaussianDistribution
+from backend.torch.layers.vae import Encoder, Decoder, DiagonalGaussianDistribution
 
 class AutoencoderKL(nn.Module):
     r"""

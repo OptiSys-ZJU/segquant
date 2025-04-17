@@ -9,8 +9,8 @@ import PIL.Image
 import torch
 import torch.nn.functional as F
 from PIL import Image, ImageFilter, ImageOps
-from stable_diff.utils.deprecation_utils import deprecate
-from stable_diff.utils import PipelineImageInput, PIL_INTERPOLATION
+from backend.torch.utils.deprecation_utils import deprecate
+from backend.torch.utils import PipelineImageInput, PIL_INTERPOLATION
 
 def is_valid_image(image) -> bool:
     r"""

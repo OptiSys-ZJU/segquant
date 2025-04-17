@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
-from stable_diff.utils.deprecation_utils import deprecate
+from backend.torch.utils.deprecation_utils import deprecate
 
 ACT2CLS = {
     "swish": nn.SiLU,

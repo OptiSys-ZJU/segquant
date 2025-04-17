@@ -3,11 +3,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from packaging import version
-from stable_diff.model.activations import get_activation
+from backend.torch.layers.activations import get_activation
 from functools import partial
-from stable_diff.utils.deprecation_utils import deprecate
-from stable_diff.model.normalization import RMSNorm, AdaGroupNorm
-from stable_diff.model.attention_processor import SpatialNorm
+from backend.torch.utils.deprecation_utils import deprecate
+from backend.torch.layers.normalization import RMSNorm, AdaGroupNorm
+from backend.torch.layers.attention_processor import SpatialNorm
 
 def upfirdn2d_native(
     tensor: torch.Tensor,
