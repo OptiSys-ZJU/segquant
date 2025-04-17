@@ -98,7 +98,7 @@ class SmoothQuantCalibrator(BaseCalibrator):
     def _trace_max_x(self, input: List[torch.Tensor]):
         for i, input_chunk in enumerate(input):
             input_chunk_max = input_chunk.abs().max(dim=0).values.unsqueeze(0)
-            if len(self.max_x) == 0:
+            if len(self.max_x) < self.chunks:
                 self.max_x.append(input_chunk_max)
             else:
                 self.max_x[i] = torch.maximum(self.max_x[i], input_chunk_max)

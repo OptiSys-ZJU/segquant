@@ -135,9 +135,16 @@ class DefaultSegmentLinear(BaseSegmentLinear):
                 quantized_output_chunk = layer(quantized_input_chunk)
                 quantized_output_chunks.append(quantized_output_chunk)
             
-            res = bias
+            if bias is None:
+                res = torch.zeros_like(quantized_output_chunks[0])
+            else:
+                res = bias
+
             for input_q, quantized_output_chunk in zip(self.input_quantizers, quantized_output_chunks):
-                res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, self.weight_quantizers[0], None, None)
+                if False:
+                    res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, self.weight_quantizers[0], None, None)
+                else:
+                    res += quantized_output_chunk
             return res
 
 
@@ -214,30 +221,51 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
                 quantized_output_chunk = layer(quantized_input_chunk)
                 quantized_output_chunks.append(quantized_output_chunk)
             
-            res = bias
+            if bias is None:
+                res = torch.zeros_like(quantized_output_chunks[0])
+            else:
+                res = bias
+
             for input_q, weight_q, quantized_output_chunk in zip(self.input_quantizers, self.weight_quantizers, quantized_output_chunks):
-                res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, weight_q, self.weight_quantizers[0], None, None)
+                if False:
+                    res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, weight_q, None, None)
+                else:
+                    res += quantized_output_chunk
             return res
 
 
 if __name__ == '__main__':
-    weight = torch.randn(6, 4)
+    weight = torch.randn(4, 6)
     print(weight)
-    linear = nn.Linear(in_features=4, out_features=6, bias=False)
+    linear = nn.Linear(in_features=6, out_features=4, bias=False)
     linear.weight = nn.Parameter(weight)
-
-    model1 = DefaultSegmentLinear(in_features=4, out_features=6, bias=False, seg_mode='weight', chunks=3, chunksizes=[3,2,1], quant_type="int8", custom_weight_tensor=copy.deepcopy(weight))
-    model2 = SmoothQuantSegmentLinear(in_features=4, out_features=6, bias=False, seg_mode='weight', chunks=3, chunksizes=[3,2,1], quant_type="int8", custom_weight_tensor=copy.deepcopy(weight))
-    x = torch.randn(2, 4)
+    model1 = DefaultSegmentLinear(in_features=6, out_features=4, bias=False, seg_mode='input', chunks=3, chunksizes=[3,2,1], quant_type="int8", custom_weight_tensor=copy.deepcopy(weight))
+    model2 = SmoothQuantSegmentLinear(in_features=6, out_features=4, bias=False, seg_mode='input', chunks=3, chunksizes=[3,2,1], quant_type="int8", custom_weight_tensor=copy.deepcopy(weight))
+    x = torch.randn(2, 6)
     print("Input:\n", x)
-
     y = linear(x)
     print("Real:\n", y)
-
-    model1.calibrate([x])
+    model1.calibrate([x, torch.randn(2, 6)])
     z = model1(x)
     print("Quant:\n", z)
-
-    model2.calibrate([x])
+    model2.calibrate([x, torch.randn(2, 6)])
     s = model2(x)
     print("Smooth:\n", s)
+
+
+    # weight = torch.randn(6, 4)
+    # print(weight)
+    # linear = nn.Linear(in_features=4, out_features=6, bias=False)
+    # linear.weight = nn.Parameter(weight)
+    # model1 = DefaultSegmentLinear(in_features=4, out_features=6, bias=False, seg_mode='weight', chunks=3, chunksizes=[3,2,1], quant_type="int8", custom_weight_tensor=copy.deepcopy(weight))
+    # model2 = SmoothQuantSegmentLinear(in_features=4, out_features=6, bias=False, seg_mode='weight', chunks=3, chunksizes=[3,2,1], quant_type="int8", custom_weight_tensor=copy.deepcopy(weight))
+    # x = torch.randn(2, 4)
+    # print("Input:\n", x)
+    # y = linear(x)
+    # print("Real:\n", y)
+    # model1.calibrate([x])
+    # z = model1(x)
+    # print("Quant:\n", z)
+    # model2.calibrate([x])
+    # s = model2(x)
+    # print("Smooth:\n", s)
