@@ -192,7 +192,7 @@ if __name__ == '__main__':
     # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant_new.onnx')
     # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant_ver3.onnx')
     
-    type = 'fp16'
+    type = 'fp16'   
     # type = 'int8_smooth'
     # type = 'int8_smooth_enablelatent'
     # type = 'int8_smooth_enabletime'
@@ -235,3 +235,4 @@ if __name__ == '__main__':
             for i in [200]:
             # for i in range(1, 29, 1):
                 infer(type, sd3, controlnet_type, i, scale, latents, enable_save, enable_res, single_step_sim=True)
+    
