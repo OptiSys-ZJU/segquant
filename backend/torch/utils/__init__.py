@@ -6,7 +6,6 @@ import os
 import requests
 import PIL.Image
 from packaging import version
-from PIL import Image, ImageFilter, ImageOps
 
 PipelineImageInput = Union[
     PIL.Image.Image,

@@ -78,7 +78,8 @@ def calculate_all(real_path, this_path):
 
 
 def run_bench(type):
-    scales = ['0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9']
+    # scales = ['0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9']
+    scales = ['0.2', '0.5', '0.8']
     
     total_fid = 0
     total_lpips = 0

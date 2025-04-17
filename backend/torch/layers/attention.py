@@ -2,10 +2,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 from torch import nn
-from stable_diff.utils.deprecation_utils import deprecate
-from stable_diff.model.normalization import AdaLayerNormZero, AdaLayerNormContinuous, SD35AdaLayerNormZeroX
-from stable_diff.model.attention_processor import Attention, JointAttnProcessor2_0
-from stable_diff.model.activations import GEGLU, GELU, ApproximateGELU, LinearActivation, SwiGLU
+from backend.torch.utils.deprecation_utils import deprecate
+from backend.torch.layers.normalization import AdaLayerNormZero, AdaLayerNormContinuous, SD35AdaLayerNormZeroX
+from backend.torch.layers.attention_processor import Attention, JointAttnProcessor2_0
+from backend.torch.layers.activations import GEGLU, GELU, ApproximateGELU, LinearActivation, SwiGLU
 
 def _chunked_feed_forward(ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int):
     # "feed_forward_chunk_size" can be used to save memory

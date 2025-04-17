@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 from packaging import version
 
-from stable_diff.utils.deprecation_utils import deprecate
+from backend.torch.utils.deprecation_utils import deprecate
 
 def is_torch_npu_available(): 
     return False
@@ -112,7 +112,7 @@ class Attention(nn.Module):
         super().__init__()
 
         # To prevent circular import.
-        from stable_diff.model.normalization import FP32LayerNorm, LpNorm, RMSNorm
+        from backend.torch.layers.normalization import FP32LayerNorm, LpNorm, RMSNorm
 
         self.inner_dim = out_dim if out_dim is not None else dim_head * heads
         self.inner_kv_dim = self.inner_dim if kv_heads is None else dim_head * kv_heads

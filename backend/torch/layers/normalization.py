@@ -4,11 +4,9 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from stable_diff.model.embeddings import CombinedTimestepLabelEmbeddings
-from stable_diff.model.activations import get_activation
+from backend.torch.layers.embeddings import CombinedTimestepLabelEmbeddings
+from backend.torch.layers.activations import get_activation
 from packaging import version
-
-from stable_diff.utils.hook_dump import DebugContext, debug_hook
 
 class RMSNorm(nn.Module):
     r"""
@@ -248,13 +246,6 @@ class AdaLayerNormZero(nn.Module):
         
         linear_input = self.silu(emb)
         linear_out = self.linear(linear_input)
-
-        if DebugContext._index == 0:
-            debug_hook(value={
-                "emb": emb,
-                "linear_input": linear_input,
-                "linear_out": linear_out,
-            }, dir='time_error', info='adanorm')
 
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = linear_out.chunk(6, dim=1)
         x = self.norm(x) * (1 + scale_msa[:, None]) + shift_msa[:, None]

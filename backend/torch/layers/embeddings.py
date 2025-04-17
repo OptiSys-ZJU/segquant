@@ -1,14 +1,12 @@
 import math
 from typing import Optional, Tuple, Union
-from stable_diff.utils.deprecation_utils import deprecate
-from stable_diff.model.activations import FP32SiLU, get_activation
+from backend.torch.utils.deprecation_utils import deprecate
+from backend.torch.layers.activations import FP32SiLU, get_activation
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-
-from stable_diff.utils.hook_dump import debug_hook
 
 def get_timestep_embedding(
     timesteps: torch.Tensor,
@@ -674,13 +672,6 @@ class TimestepEmbedding(nn.Module):
             post_act_output = self.post_act(l2_output)
         else:
             post_act_output = l2_output
-        
-        debug_hook(value={
-            "timesteps_proj": sample,
-            "l1_output": l1_output,
-            "act_output": act_output,
-            "l2_output": l2_output,
-        }, dir='time_error', info='tsemb')
 
         return post_act_output
 

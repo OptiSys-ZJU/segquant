@@ -51,7 +51,7 @@ def infer(prefix, model, type, num_inference_steps=1, scale=0.5, latents=None, e
     image = model.forward(
         enable_res = enable_res,
         single_step_sim = single_step_sim,
-        dump_tensor = False,
+        dump_tensor = True,
         prompt = prompt, 
         negative_prompt=n_prompt, 
         control_image=control_image, 
@@ -116,16 +116,12 @@ def get_controlnet(type, fake_quant):
         return quant(control_net, config, fake_quant)
     elif type == 'int8_smooth':
         config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)  
-        config["quant_cfg"]["*pos_embed.proj*"] = {"enable": False}
-        config["quant_cfg"]["*pos_embed_input.proj*"] = {"enable": False}
-        config["quant_cfg"]["*context_embedder.proj*"] = {"enable": False}
+        # config["quant_cfg"]["*context_embedder.proj*"] = {"enable": False}
 
         return quant(control_net, config, fake_quant)
     elif type == 'int8_smooth_enablelatent':
         config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)
-        config["quant_cfg"]["*pos_embed.proj*"] = {"enable": False}
-        config["quant_cfg"]["*pos_embed_input.proj*"] = {"enable": False}
-        config["quant_cfg"]["*context_embedder.proj*"] = {"enable": False}
+        # config["quant_cfg"]["*context_embedder.proj*"] = {"enable": False}
 
         config["quant_cfg"]["*time_text_embed*"] = {"enable": False}
         config["quant_cfg"]["*transformer_blocks.*.norm1.linear*"] = {"enable": False}
@@ -192,9 +188,13 @@ if __name__ == '__main__':
     # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant_new.onnx')
     # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant_ver3.onnx')
     
+<<<<<<< HEAD
     type = 'fp16'   
+=======
+    # type = 'fp16'
+>>>>>>> 47e67ae9d2df07894999b0af89ecf048ba89d179
     # type = 'int8_smooth'
-    # type = 'int8_smooth_enablelatent'
+    type = 'int8_smooth_enablelatent'
     # type = 'int8_smooth_enabletime'
     # type = 'int8_smooth_enabletime_block'
     # type = 'int8_smooth_block'
@@ -204,8 +204,8 @@ if __name__ == '__main__':
     # type = 'fp8'
     # type = 'fp8_disnorm1'
     # type = 'fp8_block'
+    enable_save = False
     # enable_save = True
-    enable_save = True
     # fake_quant = False
     fake_quant = True
 
@@ -225,14 +225,28 @@ if __name__ == '__main__':
     if enable_save and os.path.exists(f"pic/{type}"):
         raise FileExistsError(f"Error: Directory 'pic/{type}' already exists!")
     # for scale in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
-    for scale in [0.8]:
-        for i in [1]:
+
+    # for scale in [0.2, 0.5, 0.8]:
+    #     for i in range(1, 29, 3):
+    #         infer(type, sd3, controlnet_type, i, scale, latents, enable_save, enable_res, single_step_sim=False)
+
+    for scale in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+    # for scale in [0.8]:
+        for i in [200]:
         # for i in range(1, 29, 1):
             infer(type, sd3, controlnet_type, i, scale, latents, enable_save, enable_res, single_step_sim=False)
     
+<<<<<<< HEAD
     if type != 'fp16':
         for scale in [0.8]:
             for i in [200]:
             # for i in range(1, 29, 1):
                 infer(type, sd3, controlnet_type, i, scale, latents, enable_save, enable_res, single_step_sim=True)
     
+=======
+    # if type != 'fp16':
+    #     for scale in [0.8]:
+    #         for i in [200]:
+    #         # for i in range(1, 29, 1):
+    #             infer(type, sd3, controlnet_type, i, scale, latents, enable_save, enable_res, single_step_sim=True)
+>>>>>>> 47e67ae9d2df07894999b0af89ecf048ba89d179

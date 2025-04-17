@@ -6,10 +6,10 @@ import json
 from types import SimpleNamespace
 import inspect
 from safetensors.torch import load_file
-from stable_diff.model.embeddings import PatchEmbed, CombinedTimestepTextProjEmbeddings
-from stable_diff.model.attention_processor import Attention, AttentionProcessor, FusedJointAttnProcessor2_0
-from stable_diff.model.attention import JointTransformerBlock
-from stable_diff.model.normalization import AdaLayerNormContinuous
+from backend.torch.layers.embeddings import PatchEmbed, CombinedTimestepTextProjEmbeddings
+from backend.torch.layers.attention_processor import Attention, AttentionProcessor, FusedJointAttnProcessor2_0
+from backend.torch.layers.attention import JointTransformerBlock
+from backend.torch.layers.normalization import AdaLayerNormContinuous
 
 class SD3Transformer2DModel(nn.Module):
     """
@@ -359,7 +359,7 @@ class SD3Transformer2DModel(nn.Module):
             # controlnet residual
             if block_controlnet_hidden_states is not None and block.context_pre_only is False:
                 interval_control = len(self.transformer_blocks) / len(block_controlnet_hidden_states)
-                # hidden_states = hidden_states + block_controlnet_hidden_states[int(index_block / interval_control)]
+                hidden_states = hidden_states + block_controlnet_hidden_states[int(index_block / interval_control)]
 
         hidden_states = self.norm_out(hidden_states, temb)
         hidden_states = self.proj_out(hidden_states)

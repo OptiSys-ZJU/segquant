@@ -1,10 +1,10 @@
 from typing import Optional, Any
 import torch
 import torch.nn as nn
-from stable_diff.model.attention_processor import Attention
-from stable_diff.model.activations import get_activation
-from stable_diff.model.resnet import ResnetBlock2D, Upsample2D, Downsample2D, ResnetBlockCondNorm2D
-from stable_diff.utils.deprecation_utils import deprecate
+from backend.torch.layers.attention_processor import Attention
+from backend.torch.layers.activations import get_activation
+from backend.torch.layers.resnet import ResnetBlock2D, Upsample2D, Downsample2D, ResnetBlockCondNorm2D
+from backend.torch.utils.deprecation_utils import deprecate
 
 class AutoencoderTinyBlock(nn.Module):
     """
