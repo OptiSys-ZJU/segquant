@@ -77,8 +77,6 @@ class DefaultCalibrator(BaseCalibrator):
         
         return quantized_input
 
-
-
 class SmoothQuantCalibrator(BaseCalibrator):
     def __init__(self, input_quantizers, weight_quantizers, alpha=0.5):
         super().__init__(input_quantizers, weight_quantizers)

@@ -124,10 +124,7 @@ class DefaultSegmentLinear(BaseSegmentLinear):
             else:
                 output_chunks = quantized_output_chunks
 
-            if bias is not None:
-                return self.splitter.concat_output(output_chunks) + bias
-            else:
-                return self.splitter.concat_output(output_chunks)
+            return self.splitter.concat_output(output_chunks) + bias if bias is not None else self.splitter.concat_output(output_chunks)
         
         elif self.seg_mode == 'input':
             quantized_output_chunks = []
@@ -135,17 +132,13 @@ class DefaultSegmentLinear(BaseSegmentLinear):
                 quantized_output_chunk = layer(quantized_input_chunk)
                 quantized_output_chunks.append(quantized_output_chunk)
             
-            if bias is None:
-                res = torch.zeros_like(quantized_output_chunks[0])
-            else:
-                res = bias
-
+            res = torch.zeros_like(quantized_output_chunks[0])
             for input_q, quantized_output_chunk in zip(self.input_quantizers, quantized_output_chunks):
                 if False:
                     res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, self.weight_quantizers[0], None, None)
                 else:
                     res += quantized_output_chunk
-            return res
+            return res + bias if bias is not None else res
 
 
 class SmoothQuantSegmentLinear(BaseSegmentLinear):
@@ -210,10 +203,7 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
             else:
                 output_chunks = quantized_output_chunks
 
-            if bias is not None:
-                return torch.concat(output_chunks, dim=1) + bias
-            else:
-                return torch.concat(output_chunks, dim=1)
+            return torch.concat(output_chunks, dim=1) + bias if bias is not None else torch.concat(output_chunks, dim=1)
         
         elif self.seg_mode == 'input':
             quantized_output_chunks = []
@@ -221,17 +211,13 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
                 quantized_output_chunk = layer(quantized_input_chunk)
                 quantized_output_chunks.append(quantized_output_chunk)
             
-            if bias is None:
-                res = torch.zeros_like(quantized_output_chunks[0])
-            else:
-                res = bias
-
+            res = torch.zeros_like(quantized_output_chunks[0])
             for input_q, weight_q, quantized_output_chunk in zip(self.input_quantizers, self.weight_quantizers, quantized_output_chunks):
                 if False:
                     res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, weight_q, None, None)
                 else:
                     res += quantized_output_chunk
-            return res
+            return res + bias if bias is not None else res
 
 
 if __name__ == '__main__':
