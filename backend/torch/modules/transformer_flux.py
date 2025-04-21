@@ -13,7 +13,9 @@
 # limitations under the License.
 
 
+import glob
 import json
+import os
 from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
@@ -200,7 +202,7 @@ class FluxTransformer2DModel(nn.Module):
     _skip_layerwise_casting_patterns = ["pos_embed", "norm"]
 
     @classmethod
-    def from_config(cls, config_path, weight_path):
+    def from_config(cls, config_path, weight_path, weight_index_path):
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
             model = cls(patch_size=config['patch_size'],
@@ -214,7 +216,18 @@ class FluxTransformer2DModel(nn.Module):
                         guidance_embeds=config['guidance_embeds'])
 
             model_state_dict = model.state_dict()
-            weights = load_file(weight_path)
+            
+            weights = {}
+            matching_files = glob.glob(weight_path)
+            for matching_file in matching_files:
+                weights[os.path.basename(matching_file)] = load_file(matching_file)
+
+            with open(weight_index_path, "r", encoding="utf-8") as wf:
+                weight_config = json.load(wf)
+
+            for name in model_state_dict:
+                model_state_dict[name].copy_(weights[weight_config['weight_map'][name]][name])
+
             for name, param in weights.items():
                 if name in model_state_dict:
                     model_state_dict[name].copy_(param)

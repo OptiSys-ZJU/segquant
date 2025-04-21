@@ -154,6 +154,32 @@ class FluxControlNetPipeline(nn.Module):
     _optional_components = ["image_encoder", "feature_extractor"]
     _callback_tensor_inputs = ["latents", "prompt_embeds", "control_image"]
 
+    @classmethod
+    def from_repo(cls, repo: Tuple[str, str]=('FLUX.1-dev', 'FLUX.1-dev-Controlnet-Canny'), device='cuda:0'):
+        main_repo, control_net_repo = repo
+
+        scheduler = FlowMatchEulerDiscreteScheduler.from_config(f'{main_repo}/scheduler/scheduler_config.json')
+        vae = AutoencoderKL.from_config(f'{main_repo}/vae/config.json', f'{main_repo}/vae/diffusion_pytorch_model.safetensors').half().to(device)
+
+        text_encoder = CLIPTextModel.from_pretrained(f'{main_repo}/text_encoder')
+        tokenizer = CLIPTokenizer.from_pretrained(f'{main_repo}/tokenizer')
+        text_encoder_2 = T5EncoderModel.from_pretrained(f'{main_repo}/text_encoder_2')
+        tokenizer_2 = T5TokenizerFast.from_pretrained(f'{main_repo}/tokenizer_2')
+
+        transformer = FluxTransformer2DModel.from_config(f'{main_repo}/transformer/config.json', f'{main_repo}/transformer/diffusion_pytorch_model*.safetensors', f'{main_repo}/transformer/diffusion_pytorch_model.safetensors.index.json').half().to(device)
+        controlnet = FluxControlNetModel.from_config(f'{control_net_repo}/config.json', f'{control_net_repo}/diffusion_pytorch_model.safetensors').half().to(device)
+
+        return cls(
+            scheduler=scheduler,
+            vae=vae,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+            text_encoder_2=text_encoder_2,
+            tokenizer_2=tokenizer_2,
+            transformer=transformer,
+            controlnet=controlnet,
+        ).half().to(device)
+
     def __init__(
         self,
         scheduler: FlowMatchEulerDiscreteScheduler,

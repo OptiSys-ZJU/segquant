@@ -354,7 +354,6 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
         pooled_projections: torch.Tensor = None,
         timestep: torch.LongTensor = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
-        enable_res: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor]]:
         """
         The [`SD3Transformer2DModel`] forward method.
@@ -451,7 +450,7 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
             else:
                 if self.context_embedder is not None:
                     encoder_hidden_states, hidden_states = block(
-                        hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb, enable_res=enable_res,
+                        hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb,
                     )
                 else:
                     # SD3.5 8b controlnet use single transformer block, which does not use `encoder_hidden_states`
