@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
 import json
+from types import SimpleNamespace
+import inspect
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -26,6 +27,7 @@ from backend.torch.modules.transformer_flux import FluxSingleTransformerBlock, F
 from backend.torch.utils import zero_module
 
 class FluxControlNetModel(nn.Module):
+
     @classmethod
     def from_config(cls, config_path, weight_path):
         with open(config_path, "r", encoding="utf-8") as f:
@@ -67,6 +69,13 @@ class FluxControlNetModel(nn.Module):
         conditioning_embedding_channels: int = None,
     ):
         super().__init__()
+
+        self.config = SimpleNamespace()
+        init_params = inspect.signature(self.__init__).parameters.keys()
+        for key, value in locals().items():
+            if key in init_params:
+                setattr(self.config, key, value)
+
         self.out_channels = in_channels
         self.inner_dim = num_attention_heads * attention_head_dim
 

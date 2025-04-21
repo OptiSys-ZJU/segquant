@@ -16,6 +16,8 @@
 import glob
 import json
 import os
+import inspect
+from types import SimpleNamespace
 from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
@@ -208,7 +210,7 @@ class FluxTransformer2DModel(nn.Module):
             model = cls(patch_size=config['patch_size'],
                         in_channels=config['in_channels'],
                         num_layers=config['num_layers'],
-                        num_single_layers=config['num_single_layers']
+                        num_single_layers=config['num_single_layers'],
                         attention_head_dim=config['attention_head_dim'],
                         num_attention_heads=config['num_attention_heads'],
                         joint_attention_dim=config['joint_attention_dim'],
@@ -249,6 +251,16 @@ class FluxTransformer2DModel(nn.Module):
         axes_dims_rope: Tuple[int] = (16, 56, 56),
     ):
         super().__init__()
+
+        # todo
+        self.dtype = torch.float16
+
+        self.config = SimpleNamespace()
+        init_params = inspect.signature(self.__init__).parameters.keys()
+        for key, value in locals().items():
+            if key in init_params:
+                setattr(self.config, key, value)
+
         self.out_channels = out_channels or in_channels
         self.inner_dim = num_attention_heads * attention_head_dim
 
