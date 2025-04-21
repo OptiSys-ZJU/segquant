@@ -17,12 +17,12 @@ import torch.nn as nn
 import torch
 from tqdm import tqdm
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-from backend.torch.layers.autoencoder_kl import AutoencoderKL
 from backend.torch.scheduler import FlowMatchEulerDiscreteScheduler
 from backend.torch.utils.image_processor import VaeImageProcessor
 from backend.torch.utils import is_torch_xla_available, randn_tensor, PipelineImageInput
-from backend.torch.layers.controlnet_sd3 import SD3ControlNetModel, SD3MultiControlNetModel, AbstractSD3ControlNetModel
-from backend.torch.layers.transformer_sd3 import SD3Transformer2DModel
+from backend.torch.modules.autoencoder_kl import AutoencoderKL
+from backend.torch.modules.controlnet_sd3 import SD3ControlNetModel, SD3MultiControlNetModel, AbstractSD3ControlNetModel
+from backend.torch.modules.transformer_sd3 import SD3Transformer2DModel
 
 from transformers import (
     CLIPTextModelWithProjection,

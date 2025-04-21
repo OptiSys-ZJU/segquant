@@ -10,10 +10,7 @@ from backend.torch.layers.attention_processor import Attention, AttentionProcess
 from backend.torch.layers.attention import JointTransformerBlock
 import copy
 
-def zero_module(module):
-    for p in module.parameters():
-        nn.init.zeros_(p)
-    return module
+from backend.torch.utils import zero_module
 
 class AbstractSD3ControlNetModel:
     pass
