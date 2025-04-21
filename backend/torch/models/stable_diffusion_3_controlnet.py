@@ -154,12 +154,12 @@ class StableDiffusion3ControlNetModel(nn.Module):
 
         text_encoder = CLIPTextModelWithProjection.from_pretrained(f'{main_repo}/text_encoder')
         tokenizer = CLIPTokenizer.from_pretrained(f'{main_repo}/tokenizer')
-        text_encoder_2 = CLIPTextModelWithProjection.from_pretrained('{main_repo}/text_encoder_2')
+        text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(f'{main_repo}/text_encoder_2')
         tokenizer_2 = CLIPTokenizer.from_pretrained(f'{main_repo}/tokenizer_2')
         text_encoder_3 = T5EncoderModel.from_pretrained(f'{main_repo}/text_encoder_3')
         tokenizer_3 = T5TokenizerFast.from_pretrained(f'{main_repo}/tokenizer_3')
 
-        control_net = SD3ControlNetModel.from_config(f'{control_net_repo}/config.json', f'{control_net_repo}/diffusion_pytorch_model.safetensors').half().to(device)
+        controlnet = SD3ControlNetModel.from_config(f'{control_net_repo}/config.json', f'{control_net_repo}/diffusion_pytorch_model.safetensors').half().to(device)
 
         return cls(transformer=transformer, 
             scheduler=scheduler, 
@@ -170,7 +170,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
             tokenizer_2=tokenizer_2, 
             text_encoder_3=text_encoder_3, 
             tokenizer_3=tokenizer_3,
-            control_net=control_net).half().to(device)
+            controlnet=controlnet).half().to(device)
 
     def __init__(
         self,
@@ -1264,7 +1264,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = StableDiffusion3ControlNetModel.from_repo(('stable-diffusion-3-medium-diffusers', 'SD3-Controlnet-Canny'), device)
+    model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), device)
 
     file = 'https://huggingface.co/InstantX/SD3-Controlnet-Canny/resolve/main/canny.jpg'
     prompt = 'Anime style illustration of a girl wearing a suit. A moon in sky. In the background we see a big rain approaching. text "InstantX" on image'
