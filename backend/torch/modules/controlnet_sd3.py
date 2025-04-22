@@ -418,23 +418,13 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
             encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
         # add
-        hidden_before = copy.deepcopy(hidden_states)
         cond_output = self.pos_embed_input(controlnet_cond)
         hidden_states = hidden_states + cond_output
-        # debug_hook(value={
-        #     "init_hiddens": init_hiddens,
-        #     "hidden_before": hidden_before,
-        #     "controlnet_cond": controlnet_cond,
-        #     "cond_output": cond_output,
-        #     "hidden_states": hidden_states,
-        # }, dir='ctrl_hidden')
 
         block_res_samples = ()
 
         index = 0
         for block in self.transformer_blocks:
-            # DebugContext.set_attn_index(index)
-
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 if self.context_embedder is not None:
                     encoder_hidden_states, hidden_states = self._gradient_checkpointing_func(
@@ -460,8 +450,6 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
 
             index += 1
 
-        block_res_samples_copy = copy.deepcopy(block_res_samples)
-
         controlnet_block_res_samples = ()
         for block_res_sample, controlnet_block in zip(block_res_samples, self.controlnet_blocks):
             block_res_sample = controlnet_block(block_res_sample)
@@ -470,7 +458,7 @@ class SD3ControlNetModel(nn.Module, AbstractSD3ControlNetModel):
         # 6. scaling
         controlnet_block_res_samples = [sample * conditioning_scale for sample in controlnet_block_res_samples]
 
-        return (controlnet_block_res_samples, block_res_samples_copy)
+        return (controlnet_block_res_samples,)
 
 
 class SD3MultiControlNetModel(nn.Module):

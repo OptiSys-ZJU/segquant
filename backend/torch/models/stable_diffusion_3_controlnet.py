@@ -817,12 +817,6 @@ class StableDiffusion3ControlNetModel(nn.Module):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 256,
-
-
-        dump_input_tensor: bool = False,
-        dump_tensor: bool = False,
-        enable_res: bool = False,
-        single_step_sim: bool = False,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -1143,33 +1137,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
                         controlnet_cond_scale = controlnet_cond_scale[0]
                     cond_scale = controlnet_cond_scale * controlnet_keep[i]
 
-                # controlnet(s) inference
-                # if dump_input_tensor:
-                #     DebugContext.enable()
-                #     debug_hook(value={
-                #         "hidden_states": latent_model_input, 
-                #         "timestep": timestep,
-                #         "encoder_hidden_states": controlnet_encoder_hidden_states,
-                #         "pooled_projections": controlnet_pooled_projections,
-                #         "controlnet_cond": control_image,
-                #         "conditioning_scale": cond_scale,
-                #     }, info='ctrl_in', dir='calibration')
-                #     DebugContext.disable()
-
-                # if single_step_sim:
-                #     ctrl_type = DebugContext._ctrl_type
-                #     this_scale_str = DebugContext._scale
-                #     real_path = f'multistep/fp16_{ctrl_type}_{this_scale_str}_{i}.pt'
-                #     print('sim single path:', real_path)
-                #     real_input = torch.load(real_path)
-                #     latent_model_input = real_input['hidden_states']
-                #     timestep = real_input['timestep']
-
-                print('conditioning_scale:', cond_scale, 'timestep:', timestep)
-
-                # DebugContext.enable()
-                # DebugContext.disable()
-                control_block_samples, block_res_samples = self.controlnet(
+                control_block_samples = self.controlnet(
                     hidden_states=latent_model_input,
                     timestep=timestep,
                     encoder_hidden_states=controlnet_encoder_hidden_states,
@@ -1177,8 +1145,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     controlnet_cond=control_image,
                     conditioning_scale=cond_scale,
-                )
-                # DebugContext.disable()
+                )[0]
 
                 noise_pred = self.transformer(
                     hidden_states=latent_model_input,
@@ -1197,33 +1164,6 @@ class StableDiffusion3ControlNetModel(nn.Module):
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
                 latents = self.scheduler.step(noise_pred, t, latents)[0]
-
-
-                # if dump_tensor:
-                #     DebugContext.enable()
-                #     if single_step_sim:
-                #         debug_hook(value={
-                #             "hidden_states": latent_model_input,
-                #             "timestep": timestep,
-                #             "control_block_samples": control_block_samples,
-                #             "noise_pred": noise_pred,
-                #         }, dir='singlestep', info=f'{num_inference_steps}')
-                #     else:
-                #         debug_hook(value={
-                #             "hidden_states": latent_model_input,
-                #             "timestep": timestep,
-                #             "prompt_embeds": prompt_embeds,
-                #             "pooled_prompt_embeds": pooled_prompt_embeds,
-
-                #             "cond_scale": cond_scale,
-
-                #             "guidance_scale": guidance_scale,
-                #             "noise_pred_uncond": noise_pred_uncond,
-                #             "noise_pred_text": noise_pred_text,
-
-                #             "noise_pred": noise_pred,
-                #         }, dir='train_lstm', info=f'{num_inference_steps}')
-                #     DebugContext.disable()
 
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
