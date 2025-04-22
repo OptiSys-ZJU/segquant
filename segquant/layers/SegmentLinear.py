@@ -4,6 +4,7 @@ from typing import Literal
 import torch
 import torch.nn as nn
 from segquant.calibrator.calibrator import DefaultCalibrator, SmoothQuantCalibrator
+from segquant.config import DType
 from segquant.layers.splitter import BaseSplitter
 from segquant.quantizers.quantizer import FakeQuantizer, QuantizerRegistry
 
@@ -12,6 +13,10 @@ class BaseSegmentLinear(nn.Module):
                  seg_mode: Literal['input', 'weight'] = 'weight', chunks=1, chunksizes=None, 
                  custom_weight_tensor=None):
         super().__init__()
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.has_calibrated = False
 
         self.linear = nn.Linear(in_features, out_features, bias=bias)
         if custom_weight_tensor is not None:
@@ -35,12 +40,17 @@ class BaseSegmentLinear(nn.Module):
 
         self.splitter = BaseSplitter(self.chunksizes, seg_mode)
     
+    def __repr__(self):
+        return f"BaseSegmentLinear(in={self.in_features}, out={self.out_features}, seg_mode={self.seg_mode}, chunks={self.chunks}, chunksize={self.chunksizes})"
+
     @staticmethod
     def split_linear(linear, chunksizes, dim=1):
         weight = linear.weight
         bias = linear.bias
         in_features = linear.in_features
         out_features = linear.out_features
+        device = weight.device
+        dtype = weight.dtype
 
         layers = []
         start = 0
@@ -55,10 +65,11 @@ class BaseSegmentLinear(nn.Module):
                 new_linear = nn.Linear(in_features, size, bias=False)
                 new_linear.weight.data.copy_(sub_weight)
 
+            new_linear = new_linear.to(device).to(dtype)
             layers.append(new_linear)
             start = end
 
-        return layers, bias
+        return nn.ModuleList(layers), bias
 
     
 class DefaultSegmentLinear(BaseSegmentLinear):
@@ -82,6 +93,39 @@ class DefaultSegmentLinear(BaseSegmentLinear):
 
         self.calibrator = DefaultCalibrator(self.input_quantizers, self.weight_quantizers)
 
+    def __repr__(self):
+        base = (
+            f"DefaultSegmentLinear(\n"
+            f"  in_features={self.in_features},\n"
+            f"  out_features={self.out_features},\n"
+            f"  seg_mode={self.seg_mode},\n"
+            f"  chunks={self.chunks},\n"
+            f"  chunksize={self.chunksizes},\n"
+        )
+        if self.has_calibrated:
+            input_q = ",\n    ".join(repr(i) for i in self.input_quantizers)
+            weight_q = ",\n    ".join(repr(w) for w in self.weight_quantizers)
+
+            if self.chunks == 1:
+                base = (
+                    f"DefaultSegmentLinear(in_features={self.in_features}, out_features={self.out_features},\n"
+                )
+                return (
+                    base +
+                    f"  input_quantizer=({input_q}),\n"
+                    f"  weight_quantizer=({weight_q})\n"
+                    f")"
+                )
+            else:
+                return (
+                    base +
+                    f"  input_quantizers=[\n    {input_q}\n  ],\n"
+                    f"  weight_quantizers=[\n    {weight_q}\n  ]\n"
+                    f")"
+                )
+        else:
+            return base + f"  calib=False\n)"
+
     def calibrate(self, input_datas):
         if self.seg_mode == 'input':
             inputs = [self.splitter.split_input(input_data) for input_data in input_datas]
@@ -103,6 +147,8 @@ class DefaultSegmentLinear(BaseSegmentLinear):
             layers, bias = BaseSegmentLinear.split_linear(self.linear, self.chunksizes)
             del self.linear
             self.linear = (layers, bias)
+        
+        self.has_calibrated = True
 
     def forward(self, x):
         if self.seg_mode == 'input':
@@ -160,6 +206,40 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
 
         self.calibrator = SmoothQuantCalibrator(self.input_quantizers, self.weight_quantizers, alpha=alpha)
 
+    def __repr__(self):
+        base = (
+            f"SmoothQuantSegmentLinear(\n"
+            f"  in_features={self.in_features},\n"
+            f"  out_features={self.out_features},\n"
+            f"  seg_mode={self.seg_mode},\n"
+            f"  chunks={self.chunks},\n"
+            f"  chunksize={self.chunksizes},\n"
+            f"  alpha={self.calibrator.alpha},\n"
+        )
+        if self.has_calibrated:
+            input_q = ",\n    ".join(repr(i) for i in self.input_quantizers)
+            weight_q = ",\n    ".join(repr(w) for w in self.weight_quantizers)
+
+            if self.chunks == 1:
+                base = (
+                    f"SmoothQuantSegmentLinear(in_features={self.in_features}, out_features={self.out_features}, alpha={self.calibrator.alpha},\n"
+                )
+                return (
+                    base +
+                    f"  input_quantizer=({input_q}),\n"
+                    f"  weight_quantizer=({weight_q})\n"
+                    f")"
+                )
+            else:
+                return (
+                    base +
+                    f"  input_quantizers=[\n    {input_q}\n  ],\n"
+                    f"  weight_quantizers=[\n    {weight_q}\n  ]\n"
+                    f")"
+                )
+        else:
+            return base + f"  calib=False\n)"
+
     def calibrate(self, input_datas):
         if self.seg_mode == 'input':
             inputs = [self.splitter.split_input(input_data) for input_data in input_datas]
@@ -181,6 +261,8 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
             layers, bias = BaseSegmentLinear.split_linear(self.linear, self.chunksizes, dim=1)
             del self.linear
             self.linear = (layers, bias)
+        
+        self.has_calibrated = True
 
     def forward(self, x):
         if self.seg_mode == 'input':
@@ -203,7 +285,7 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
             else:
                 output_chunks = quantized_output_chunks
 
-            return torch.concat(output_chunks, dim=1) + bias if bias is not None else torch.concat(output_chunks, dim=1)
+            return torch.concat(output_chunks, dim=-1) + bias if bias is not None else torch.concat(output_chunks, dim=-1)
         
         elif self.seg_mode == 'input':
             quantized_output_chunks = []
@@ -211,13 +293,22 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
                 quantized_output_chunk = layer(quantized_input_chunk)
                 quantized_output_chunks.append(quantized_output_chunk)
             
-            res = torch.zeros_like(quantized_output_chunks[0])
+            res = torch.zeros_like(quantized_output_chunks[0], dtype=x.dtype, device=x.device)
             for input_q, weight_q, quantized_output_chunk in zip(self.input_quantizers, self.weight_quantizers, quantized_output_chunks):
                 if False:
                     res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, weight_q, None, None)
                 else:
                     res += quantized_output_chunk
             return res + bias if bias is not None else res
+
+
+def create_segment_linear(dtype: DType, in_features, out_features, **kwargs):
+    if dtype == DType.INT8:
+        return DefaultSegmentLinear(in_features, out_features, quant_type='int8', **kwargs)
+    elif dtype == DType.INT8SMOOTH:
+        return SmoothQuantSegmentLinear(in_features, out_features, quant_type='int8', **kwargs)
+    else:
+        raise ValueError('Dtype not supported')
 
 
 if __name__ == '__main__':

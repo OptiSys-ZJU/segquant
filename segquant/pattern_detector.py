@@ -1,19 +1,41 @@
 import torch
 import torch.nn as nn
 import torch.fx as fx
+import inspect
 from collections import namedtuple
 from torch.fx.passes.shape_prop import ShapeProp
 
-LinearInfo = namedtuple("LinearInfo", ["found", "module", "in_features", "out_features"])
+LinearInfo = namedtuple("LinearInfo", ["found", "name", "in_features", "out_features"])
 ChunkInfo = namedtuple("ChunkInfo", ["found", "chunks"])
 SplitInfo = namedtuple("SplitInfo", ["found", "split_size_or_sections"])
 ConcatInfo = namedtuple("ConcatInfo", ["found", "chunksizes"])
 StackInfo = namedtuple("StackInfo", ["found", "chunksizes"])
 
 class SegQuantPatternDetector:
-    def __init__(self, model: nn.Module, example_inputs, search_patterns=None):
+    def __init__(self, model: nn.Module, example_inputs: tuple, search_patterns=None):
         self.model = model
-        self.traced = fx.symbolic_trace(model)
+
+        sig = inspect.signature(self.model.forward)
+        param_names = list(sig.parameters.keys())
+        concrete = {
+            name: val for name, val in zip(param_names, example_inputs)
+        }
+        expand_keys = [
+            'block_controlnet_hidden_states',
+            'controlnet_block_samples',
+            'controlnet_single_block_samples',
+        ]
+
+        for key in expand_keys:
+            value = concrete.get(key, None)
+            if isinstance(value, (list, tuple)):
+                concrete.update({
+                    f'{key}_{i+1}': tensor
+                    for i, tensor in enumerate(value)
+                })
+                del concrete[key]
+
+        self.traced = fx.symbolic_trace(model, concrete_args=concrete)
         self.module_map = dict(self.traced.named_modules())
         
         if search_patterns is None:
@@ -29,7 +51,7 @@ class SegQuantPatternDetector:
         if node.op == 'call_module':
             linear_mod = self.module_map.get(node.target, None)
             if isinstance(linear_mod, nn.Linear):
-                return LinearInfo(True, linear_mod, linear_mod.in_features, linear_mod.out_features)
+                return LinearInfo(True, node.target, linear_mod.in_features, linear_mod.out_features)
         return LinearInfo(False, None, None, None)
 
     def _is_chunk(self, node):
@@ -95,6 +117,7 @@ class SegQuantPatternDetector:
 
                     return {
                         "seg_mode": "weight",
+                        "linear_name": linear_info.name,
                         "linear_in": linear_info.in_features,
                         "linear_out": linear_info.out_features,
                         "chunksizes": chunksizes,
@@ -117,6 +140,7 @@ class SegQuantPatternDetector:
 
                     return {
                         "seg_mode": "weight",
+                        "linear_name": linear_info.name,
                         "linear_in": linear_info.in_features,
                         "linear_out": linear_info.out_features,
                         "chunksizes": chunksizes,
@@ -131,6 +155,7 @@ class SegQuantPatternDetector:
                     if concat_info.found:
                         return {
                             "seg_mode": "input",
+                            "linear_name": linear_info.name,
                             "linear_in": linear_info.in_features,
                             "linear_out": linear_info.out_features,
                             "chunksizes": concat_info.chunksizes,
@@ -145,6 +170,7 @@ class SegQuantPatternDetector:
                     if stack_info.found:
                         return {
                             "seg_mode": "input",
+                            "linear_name": linear_info.name,
                             "linear_in": linear_info.in_features,
                             "linear_out": linear_info.out_features,
                             "stack_size": stack_info.chunksizes,

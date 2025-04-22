@@ -60,8 +60,6 @@ class COCODataset(Dataset):
         )
 
 
-
-
 if __name__ == '__main__':
     dataset = COCODataset(path='../dataset/controlnet_datasets/controlnet_canny_dataset', cache_size=16)
     data_loader = dataset.get_dataloader(batch_size=2)

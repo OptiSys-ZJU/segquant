@@ -1139,21 +1139,22 @@ class StableDiffusion3ControlNetModel(nn.Module):
 
                 control_block_samples = self.controlnet(
                     hidden_states=latent_model_input,
-                    timestep=timestep,
-                    encoder_hidden_states=controlnet_encoder_hidden_states,
-                    pooled_projections=controlnet_pooled_projections,
-                    joint_attention_kwargs=self.joint_attention_kwargs,
                     controlnet_cond=control_image,
                     conditioning_scale=cond_scale,
+                    encoder_hidden_states=controlnet_encoder_hidden_states,
+                    pooled_projections=controlnet_pooled_projections,
+                    timestep=timestep,
+                    joint_attention_kwargs=self.joint_attention_kwargs,
                 )[0]
 
                 noise_pred = self.transformer(
                     hidden_states=latent_model_input,
-                    timestep=timestep,
                     encoder_hidden_states=prompt_embeds,
                     pooled_projections=pooled_prompt_embeds,
+                    timestep=timestep,
                     block_controlnet_hidden_states=control_block_samples,
                     joint_attention_kwargs=self.joint_attention_kwargs,
+                    skip_layers=None,
                 )[0]
 
                 # perform guidance

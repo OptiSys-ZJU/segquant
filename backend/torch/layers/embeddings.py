@@ -6,8 +6,12 @@ from backend.torch.layers.activations import FP32SiLU, get_activation
 
 import numpy as np
 import torch
+import torch.fx
 import torch.nn.functional as F
 from torch import nn
+
+torch.fx.wrap('get_timestep_embedding')
+torch.fx.wrap('apply_rotary_emb')
 
 def get_timestep_embedding(
     timesteps: torch.Tensor,

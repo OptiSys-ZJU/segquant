@@ -57,8 +57,8 @@ class IntQuantizer(FakeQuantizer):
     def __init__(self, num_bits=8, symmetric=True):
         self.num_bits = num_bits
         self.symmetric = symmetric
-        self.qmin = -2 ** num_bits
-        self.qmax = 2 ** num_bits - 1
+        self.qmin = -2 ** (num_bits - 1)
+        self.qmax = 2 ** (num_bits - 1) - 1
 
         self.amax = None
         self.amin = None
@@ -70,7 +70,11 @@ class IntQuantizer(FakeQuantizer):
             if self.amax is None or self.amax < max_val:
                 self.amax = max_val
 
-            self.scale = self.amax / self.qmax
+            epsilon = 1.0 / (1 << 24)
+            if self.amax <= epsilon:
+                self.scale = 1.0
+            else:
+                self.scale = self.qmax / self.amax 
             self.zero_point = 0
         else:
             min_val = x.min().item()
@@ -83,10 +87,17 @@ class IntQuantizer(FakeQuantizer):
             self.scale = (self.amax - self.amin) / (self.qmax - self.qmin)
             self.zero_point = int(round(self.qmin - self.amin / self.scale))
 
-    def fake_quantize(self, x: torch.Tensor):
-        x_int = torch.clamp(torch.round(x / self.scale) + self.zero_point, self.qmin, self.qmax)
-        x_dequant = (x_int - self.zero_point) * self.scale
-        return x_dequant
+    # def fake_quantize(self, x: torch.Tensor):
+    #     x_int = torch.clamp(torch.round(x / self.scale) + self.zero_point, self.qmin, self.qmax)
+    #     x_dequant = (x_int - self.zero_point) * self.scale
+    #     return x_dequant
+    
+    def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
+        scale = self.scale
+        x_int = torch.round(x * scale) + self.zero_point
+        x_int = torch.clamp(x_int, self.qmin, self.qmax)
+        x_dequant = (x_int - self.zero_point) / scale
+        return x_dequant.to(x.dtype)
 
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
         return self.fake_quantize(x)
@@ -96,10 +107,9 @@ class IntQuantizer(FakeQuantizer):
 
     def __repr__(self):
         if self.symmetric:
-            return f"IntQuantizer(num_bits={self.num_bits}, symmetric={self.symmetric}, amax={self.amax}, amin={self.amin}, scale={self.scale}, zero_point={self.zero_point})"
+            return f"IntQuantizer(num_bits={self.num_bits}, amax={self.amax:.4f}, scale={self.scale:.4f})"
         else:
-            return f"IntQuantizer(num_bits={self.num_bits}, symmetric={self.symmetric}, amax={self.amax}, scale={self.scale})"
-
+            return f"IntQuantizer(num_bits={self.num_bits}, amax={self.amax:.4f}, amin={self.amin:.4f}, zero_point={self.zero_point:.4f}), scale={self.scale:.4f})"
 
 @QuantizerRegistry.register("fpe4m3")
 class FloatQuantizer(FakeQuantizer):

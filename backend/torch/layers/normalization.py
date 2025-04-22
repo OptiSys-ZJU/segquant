@@ -2,6 +2,7 @@ import numbers
 from typing import Optional, Tuple
 
 import torch
+import torch.fx
 import torch.nn as nn
 import torch.nn.functional as F
 from backend.torch.layers.embeddings import CombinedTimestepLabelEmbeddings
@@ -41,10 +42,15 @@ class RMSNorm(nn.Module):
 
     def forward(self, hidden_states):
         if version.parse(torch.__version__) >= version.parse("2.4.0"):
-            if self.weight is not None:
-                # convert into half-precision if necessary
-                if self.weight.dtype in [torch.float16, torch.bfloat16]:
-                    hidden_states = hidden_states.to(self.weight.dtype)
+            convert_dtype = None
+            if isinstance(self.weight, torch.Tensor) and self.weight.dtype in [torch.float16, torch.bfloat16]:
+                convert_dtype = self.weight.dtype
+            if self.weight is not None and convert_dtype is not None:
+                hidden_states = hidden_states.to(convert_dtype)
+            # if self.weight is not None:
+            #     # convert into half-precision if necessary
+            #     if self.weight.dtype in [torch.float16, torch.bfloat16]:
+            #         hidden_states = hidden_states.to(self.weight.dtype)
             hidden_states = nn.functional.rms_norm(
                 hidden_states, normalized_shape=(hidden_states.shape[-1],), weight=self.weight, eps=self.eps
             )

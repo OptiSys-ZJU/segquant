@@ -8,13 +8,13 @@ class BaseSplitter:
 
     def split_output(self, output: torch.Tensor):
         if not self.seg_input:
-            return output.split(self.split_sizes, dim=int(not self.seg_input))
+            return output.split(self.split_sizes, dim=-int(not self.seg_input))
         else:
             raise ValueError('Spliter: split_output not work')
     
     def concat_output(self, output_chunks: List[torch.Tensor]):
         if not self.seg_input:
-            return torch.cat(output_chunks, dim=int(not self.seg_input))
+            return torch.cat(output_chunks, dim=-int(not self.seg_input))
         else:
             raise ValueError('Spliter: concat_output not work')
     
@@ -32,12 +32,12 @@ class BaseSplitter:
     
     def split_input(self, input: torch.Tensor):
         if self.seg_input:
-            return input.split(self.split_sizes, dim=1)
+            return input.split(self.split_sizes, dim=-1)
         else:
             raise ValueError('Spliter: split_input not work')
 
     def concat_input(self, input_chunks: List[torch.Tensor]):
         if self.seg_input:
-            return torch.split(input_chunks, dim=1)
+            return torch.split(input_chunks, dim=-1)
         else:
             raise ValueError('Spliter: concat_input not work')
