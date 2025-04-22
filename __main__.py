@@ -1,21 +1,13 @@
-from stable_diff.model.controlnet_sd3 import SD3ControlNetModel
-from stable_diff.model.transformer_sd3 import SD3Transformer2DModel
-from stable_diff.model.scheduler import FlowMatchEulerDiscreteScheduler
-from stable_diff.model.autoencoder_kl import AutoencoderKL
-from stable_diff.model.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
-from stable_diff.utils import load_image
+from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
+from backend.torch.modules.controlnet_sd3 import SD3ControlNetModel
+from backend.torch.utils import load_image
 
-from stable_diff.model.onnx.controlnet_sd3 import SD3ControlNetONNXModel
 import torch
 import modelopt.torch.quantization as mtq
 from pathlib import Path
 import os
 import glob
 import copy
-
-from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
-
-from stable_diff.utils.hook_dump import DebugContext
 
 
 type_dict = {
@@ -101,24 +93,21 @@ def quant(model, config, fake_quant):
     # exit(0)
     return model
 
-def get_controlnet(type, fake_quant):
+def get_model(type, fake_quant):
     repo = type_dict[controlnet_type][0]
     
-    control_net = SD3ControlNetModel.from_config('stable_diff/configs/controlnet.json', f'{repo}/diffusion_pytorch_model.safetensors').half().to(device)
-
+    model = StableDiffusion3ControlNetModel.from_repo(('stable-diffusion-3-medium-diffusers', repo), 'cuda:0')
+    control_net = model.controlnet
     if type == 'fp16':
-        return control_net
+        pass
     elif type == 'fp8':
         config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)  
-        return quant(control_net, config, fake_quant)
     elif type == 'int8_default':
         config = copy.deepcopy(mtq.INT8_DEFAULT_CFG)  
-        return quant(control_net, config, fake_quant)
     elif type == 'int8_smooth':
         config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)  
         # config["quant_cfg"]["*context_embedder.proj*"] = {"enable": False}
 
-        return quant(control_net, config, fake_quant)
     elif type == 'int8_smooth_enablelatent':
         config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)
         # config["quant_cfg"]["*context_embedder.proj*"] = {"enable": False}
@@ -126,7 +115,6 @@ def get_controlnet(type, fake_quant):
         config["quant_cfg"]["*time_text_embed*"] = {"enable": False}
         config["quant_cfg"]["*transformer_blocks.*.norm1.linear*"] = {"enable": False}
         config["quant_cfg"]["*transformer_blocks.*.norm1_context.linear*"] = {"enable": False}
-        return quant(control_net, config, fake_quant)
     elif type == 'int8_smooth_enabletime':
         config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)
         config["quant_cfg"]["*pos_embed.proj*"] = {"enable": False}
@@ -137,8 +125,6 @@ def get_controlnet(type, fake_quant):
         config["quant_cfg"]["*transformer_blocks.*.ff.net*"] = {"enable": False}
         config["quant_cfg"]["*transformer_blocks.*.ff_context.net*"] = {"enable": False}
         config["quant_cfg"]["*controlnet_blocks*"] = {"enable": False}
-        
-        return quant(control_net, config, fake_quant)
     elif type == 'int8_smooth_enabletime_block':
         config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)
         config["quant_cfg"]["*pos_embed.proj*"] = {"enable": False}
@@ -151,42 +137,28 @@ def get_controlnet(type, fake_quant):
         config["quant_cfg"]["*controlnet_blocks*"] = {"enable": False}
 
         config["quant_cfg"]["*transformer_blocks.*.norm1.linear.weight_quantizer"] = {"num_bits": 8, "block_sizes": {0: 1536}, "enable": True, 'fake_quant': fake_quant}
-        
-        return quant(control_net, config, fake_quant)
     elif type == 'int8_smooth_block' or type == 'int8_smooth_blockres':
         config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)  
         config["quant_cfg"]["*transformer_blocks.*.norm1.linear.weight_quantizer"] = {"num_bits": 8, "block_sizes": {0: 1536}, "enable": True, 'fake_quant': fake_quant}
-        return quant(control_net, config, fake_quant)
     elif type == 'int8_smooth_disnorm1':
         config = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)  
         config["quant_cfg"]["*transformer_blocks.0.norm1.linear*"] = {"enable": False}
-        return quant(control_net, config, fake_quant)
     elif type == 'fp8_disnorm1':
         config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)  
         config["quant_cfg"]["*transformer_blocks.0.norm1.linear*"] = {"enable": False}
-        return quant(control_net, config, fake_quant)
     elif type == 'fp8_block':
         config = copy.deepcopy(mtq.FP8_DEFAULT_CFG)  
         config["quant_cfg"]["*transformer_blocks.*.norm1.linear.weight_quantizer"] = {"num_bits": (4, 3), "block_sizes": {0: 1536}, "enable": True, 'fake_quant': fake_quant}
-        return quant(control_net, config, fake_quant)
     else:
         raise ValueError(f'Unsupported Type {type}')
+    
+    model.controlnet = quant(control_net, config, fake_quant)
+    
+    return model
 
 if __name__ == '__main__':
     enable_res = False
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    text_encoder = CLIPTextModelWithProjection.from_pretrained('stable-diffusion-3-medium-diffusers/text_encoder')
-    tokenizer = CLIPTokenizer.from_pretrained('stable-diffusion-3-medium-diffusers/tokenizer')
-    text_encoder_2 = CLIPTextModelWithProjection.from_pretrained('stable-diffusion-3-medium-diffusers/text_encoder_2')
-    tokenizer_2 = CLIPTokenizer.from_pretrained('stable-diffusion-3-medium-diffusers/tokenizer_2')
-    text_encoder_3 = T5EncoderModel.from_pretrained('stable-diffusion-3-medium-diffusers/text_encoder_3')
-    tokenizer_3 = T5TokenizerFast.from_pretrained('stable-diffusion-3-medium-diffusers/tokenizer_3')
-    scheduler = FlowMatchEulerDiscreteScheduler.from_config('stable_diff/configs/scheduler.json')
-
-    # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_default.onnx')
-    # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant.onnx')
-    # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant_new.onnx')
-    # control_net = SD3ControlNetONNXModel.from_config('stable_diff/configs/controlnet.json', 'controlnet_int8_smoothquant_ver3.onnx')
     
 <<<<<<< HEAD
     type = 'fp16'   
@@ -214,11 +186,7 @@ if __name__ == '__main__':
 
     print('controlnet_type', controlnet_type, 'Type', type, 'enable_save', enable_save, 'fake_quant', fake_quant, 'enable_res', enable_res)
 
-    control_net = get_controlnet(type, fake_quant)
-
-    vae = AutoencoderKL.from_config('stable_diff/configs/vae.json', 'stable-diffusion-3-medium-diffusers/vae/diffusion_pytorch_model.safetensors').half().to(device)
-    dit = SD3Transformer2DModel.from_config('stable_diff/configs/transformer.json', 'stable-diffusion-3-medium-diffusers/transformer/diffusion_pytorch_model.safetensors').half().to(device)
-    sd3 = StableDiffusion3ControlNetModel(dit, scheduler, vae, text_encoder, tokenizer, text_encoder_2, tokenizer_2, text_encoder_3, tokenizer_3, control_net).half().to(device)
+    sd3 = get_model(type, fake_quant)
 
     #######################
     latents = torch.load('latents.pt')

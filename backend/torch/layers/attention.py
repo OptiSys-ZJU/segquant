@@ -191,7 +191,6 @@ class JointTransformerBlock(nn.Module):
         encoder_hidden_states: torch.FloatTensor,
         temb: torch.FloatTensor,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
-        enable_res: bool = False,
     ):
         joint_attention_kwargs = joint_attention_kwargs or {}
         if self.use_dual_attention:

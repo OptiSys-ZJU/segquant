@@ -17,12 +17,12 @@ import torch.nn as nn
 import torch
 from tqdm import tqdm
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-from backend.torch.layers.autoencoder_kl import AutoencoderKL
 from backend.torch.scheduler import FlowMatchEulerDiscreteScheduler
 from backend.torch.utils.image_processor import VaeImageProcessor
-from backend.torch.utils import is_torch_xla_available, randn_tensor, PipelineImageInput
-from backend.torch.layers.controlnet_sd3 import SD3ControlNetModel, SD3MultiControlNetModel, AbstractSD3ControlNetModel
-from backend.torch.layers.transformer_sd3 import SD3Transformer2DModel
+from backend.torch.utils import is_torch_xla_available, load_image, randn_tensor, PipelineImageInput
+from backend.torch.modules.autoencoder_kl import AutoencoderKL
+from backend.torch.modules.controlnet_sd3 import SD3ControlNetModel, SD3MultiControlNetModel, AbstractSD3ControlNetModel
+from backend.torch.modules.transformer_sd3 import SD3Transformer2DModel
 
 from transformers import (
     CLIPTextModelWithProjection,
@@ -143,6 +143,34 @@ class StableDiffusion3ControlNetModel(nn.Module):
     model_cpu_offload_seq = "text_encoder->text_encoder_2->text_encoder_3->image_encoder->transformer->vae"
     _optional_components = ["image_encoder", "feature_extractor"]
     _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds", "negative_pooled_prompt_embeds"]
+
+    @classmethod
+    def from_repo(cls, repo: Tuple[str, str]=('stable-diffusion-3-medium-diffusers', 'SD3-Controlnet-Canny'), device='cuda:0'):
+        main_repo, control_net_repo = repo
+        
+        transformer = SD3Transformer2DModel.from_config(f'{main_repo}/transformer/config.json', f'{main_repo}/transformer/diffusion_pytorch_model.safetensors').half().to(device)
+        scheduler = FlowMatchEulerDiscreteScheduler.from_config(f'{main_repo}/scheduler/scheduler_config.json')
+        vae = AutoencoderKL.from_config(f'{main_repo}/vae/config.json', f'{main_repo}/vae/diffusion_pytorch_model.safetensors').half().to(device)
+
+        text_encoder = CLIPTextModelWithProjection.from_pretrained(f'{main_repo}/text_encoder')
+        tokenizer = CLIPTokenizer.from_pretrained(f'{main_repo}/tokenizer')
+        text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(f'{main_repo}/text_encoder_2')
+        tokenizer_2 = CLIPTokenizer.from_pretrained(f'{main_repo}/tokenizer_2')
+        text_encoder_3 = T5EncoderModel.from_pretrained(f'{main_repo}/text_encoder_3')
+        tokenizer_3 = T5TokenizerFast.from_pretrained(f'{main_repo}/tokenizer_3')
+
+        controlnet = SD3ControlNetModel.from_config(f'{control_net_repo}/config.json', f'{control_net_repo}/diffusion_pytorch_model.safetensors').half().to(device)
+
+        return cls(transformer=transformer, 
+            scheduler=scheduler, 
+            vae=vae, 
+            text_encoder=text_encoder, 
+            tokenizer=tokenizer, 
+            text_encoder_2=text_encoder_2, 
+            tokenizer_2=tokenizer_2, 
+            text_encoder_3=text_encoder_3, 
+            tokenizer_3=tokenizer_3,
+            controlnet=controlnet).half().to(device)
 
     def __init__(
         self,
@@ -789,10 +817,6 @@ class StableDiffusion3ControlNetModel(nn.Module):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 256,
-        dump_input_tensor: bool = False,
-        dump_tensor: bool = False,
-        enable_res: bool = False,
-        single_step_sim: bool = False,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -1113,33 +1137,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
                         controlnet_cond_scale = controlnet_cond_scale[0]
                     cond_scale = controlnet_cond_scale * controlnet_keep[i]
 
-                # controlnet(s) inference
-                # if dump_input_tensor:
-                #     DebugContext.enable()
-                #     debug_hook(value={
-                #         "hidden_states": latent_model_input, 
-                #         "timestep": timestep,
-                #         "encoder_hidden_states": controlnet_encoder_hidden_states,
-                #         "pooled_projections": controlnet_pooled_projections,
-                #         "controlnet_cond": control_image,
-                #         "conditioning_scale": cond_scale,
-                #     }, info='ctrl_in', dir='calibration')
-                #     DebugContext.disable()
-
-                # if single_step_sim:
-                #     ctrl_type = DebugContext._ctrl_type
-                #     this_scale_str = DebugContext._scale
-                #     real_path = f'multistep/fp16_{ctrl_type}_{this_scale_str}_{i}.pt'
-                #     print('sim single path:', real_path)
-                #     real_input = torch.load(real_path)
-                #     latent_model_input = real_input['hidden_states']
-                #     timestep = real_input['timestep']
-
-                print('conditioning_scale:', cond_scale, 'timestep:', timestep)
-
-                # DebugContext.enable()
-                # DebugContext.disable()
-                control_block_samples, block_res_samples = self.controlnet(
+                control_block_samples = self.controlnet(
                     hidden_states=latent_model_input,
                     timestep=timestep,
                     encoder_hidden_states=controlnet_encoder_hidden_states,
@@ -1147,9 +1145,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     controlnet_cond=control_image,
                     conditioning_scale=cond_scale,
-                    enable_res=enable_res,
-                )
-                # DebugContext.disable()
+                )[0]
 
                 noise_pred = self.transformer(
                     hidden_states=latent_model_input,
@@ -1168,33 +1164,6 @@ class StableDiffusion3ControlNetModel(nn.Module):
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
                 latents = self.scheduler.step(noise_pred, t, latents)[0]
-
-
-                # if dump_tensor:
-                #     DebugContext.enable()
-                #     if single_step_sim:
-                #         debug_hook(value={
-                #             "hidden_states": latent_model_input,
-                #             "timestep": timestep,
-                #             "control_block_samples": control_block_samples,
-                #             "noise_pred": noise_pred,
-                #         }, dir='singlestep', info=f'{num_inference_steps}')
-                #     else:
-                #         debug_hook(value={
-                #             "hidden_states": latent_model_input,
-                #             "timestep": timestep,
-                #             "prompt_embeds": prompt_embeds,
-                #             "pooled_prompt_embeds": pooled_prompt_embeds,
-
-                #             "cond_scale": cond_scale,
-
-                #             "guidance_scale": guidance_scale,
-                #             "noise_pred_uncond": noise_pred_uncond,
-                #             "noise_pred_text": noise_pred_text,
-
-                #             "noise_pred": noise_pred,
-                #         }, dir='train_lstm', info=f'{num_inference_steps}')
-                #     DebugContext.disable()
 
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
@@ -1231,3 +1200,23 @@ class StableDiffusion3ControlNetModel(nn.Module):
         # self.maybe_free_model_hooks()
 
         return (image,)
+
+
+if __name__ == '__main__':
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), device)
+
+    file = 'https://huggingface.co/InstantX/SD3-Controlnet-Canny/resolve/main/canny.jpg'
+    prompt = 'Anime style illustration of a girl wearing a suit. A moon in sky. In the background we see a big rain approaching. text "InstantX" on image'
+    n_prompt = 'NSFW, nude, naked, porn, ugly'
+    control_image = load_image(file)
+
+    image = model.forward(
+        prompt = prompt, 
+        negative_prompt=n_prompt, 
+        control_image=control_image, 
+        controlnet_conditioning_scale=0.8,
+        num_inference_steps=28,
+    )[0]
+
+    image[0].save(f'pic.jpg')

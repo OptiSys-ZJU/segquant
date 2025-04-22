@@ -1,4 +1,5 @@
 import torch
+from torch import nn
 from typing import Any, Callable, List, Optional, Tuple, Union
 import numpy as np
 import PIL
@@ -38,6 +39,11 @@ def is_torch_xla_available():
 
 def is_scipy_available():
     return False
+
+def zero_module(module):
+    for p in module.parameters():
+        nn.init.zeros_(p)
+    return module
 
 def randn_tensor(
     shape: Union[Tuple, List],
