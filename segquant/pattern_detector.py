@@ -22,8 +22,8 @@ class SegQuantPatternDetector:
             ]
         else:
             self.search_patterns = search_patterns
-        
-        ShapeProp(self.traced).propagate(*example_inputs)
+        cpu_inputs = [x.cpu() if isinstance(x,torch.Tensor) else x for x in example_inputs]
+        ShapeProp(self.traced).propagate(*cpu_inputs)
 
     def _is_linear(self, node):
         if node.op == 'call_module':

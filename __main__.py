@@ -236,17 +236,8 @@ if __name__ == '__main__':
         # for i in range(1, 29, 1):
             infer(type, sd3, controlnet_type, i, scale, latents, enable_save, enable_res, single_step_sim=False)
     
-<<<<<<< HEAD
-    if type != 'fp16':
-        for scale in [0.8]:
-            for i in [200]:
-            # for i in range(1, 29, 1):
-                infer(type, sd3, controlnet_type, i, scale, latents, enable_save, enable_res, single_step_sim=True)
-    
-=======
     # if type != 'fp16':
     #     for scale in [0.8]:
     #         for i in [200]:
     #         # for i in range(1, 29, 1):
     #             infer(type, sd3, controlnet_type, i, scale, latents, enable_save, enable_res, single_step_sim=True)
->>>>>>> 47e67ae9d2df07894999b0af89ecf048ba89d179
