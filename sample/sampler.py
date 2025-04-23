@@ -89,10 +89,11 @@ class BaseSampler:
         yield self.sample_line
         self.sample_line = []
 
-    def sample(self, model: nn.Module, data_loader: torch.utils.data.DataLoader, sample_layer: Literal['dit', 'controlnet'] = 'dit', max_timestep=30, sample_size=1, timestep_per_sample=5, sample_mode: Literal['input', 'output', 'inoutput'] = 'input', device='cpu', **kwargs):
+    def sample(self, model: nn.Module, data_loader: torch.utils.data.DataLoader, sample_layer: Literal['dit', 'controlnet'] = 'dit', max_timestep=30, sample_size=1, timestep_per_sample=5, sample_mode: Literal['input', 'output', 'inoutput'] = 'input', device='cpu', target_layer=None, **kwargs):
         self.device = device
         
-        target_layer = model_map[sample_layer](model)
+        if target_layer is None:
+            target_layer = model_map[sample_layer](model)
         sample_count = 0
         for batch in data_loader:
             batch_size = len(batch)
@@ -131,6 +132,8 @@ if __name__ == '__main__':
     from dataset.coco.coco_dataset import COCODataset
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
     from backend.torch.models.flux_controlnet import FluxControlNetModel
+    from scipy.stats import skew
+    import matplotlib.pyplot as plt
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # model = FluxControlNetModel.from_repo(('../FLUX.1-dev', '../FLUX.1-dev-Controlnet-Canny'), device)
@@ -138,14 +141,62 @@ if __name__ == '__main__':
 
     dataset = COCODataset(path='../dataset/controlnet_datasets/controlnet_canny_dataset', cache_size=16)
 
+    shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = model.controlnet.transformer_blocks[0].norm1.linear.weight.chunk(6, dim=0)
+
+    data = scale_msa.cpu().detach().flatten().numpy()
+    mean = np.mean(data)
+    std = np.std(data)
+    min_val = np.min(data)
+    max_val = np.max(data)
+    plt.figure(figsize=(6, 4))
+    plt.hist(data, bins=50, color='skyblue', edgecolor='black')
+    plt.title("Tensor Value Distribution")
+    plt.xlabel("Value")
+    plt.ylabel("Frequency")
+    plt.grid(True)
+    textstr = f'Mean: {mean:.4f}\nStd: {std:.4f}\nMin: {min_val:.4f}\nMax: {max_val:.4f}'
+    plt.gca().text(0.95, 0.95, textstr, transform=plt.gca().transAxes,
+                fontsize=10, verticalalignment='top', horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+    plt.tight_layout()
+    plt.savefig(f'scale_msa_weight.png')
+
     sampler = Q_DiffusionSampler()
     for sample_data in sampler.sample(model, 
                                       dataset.get_dataloader(), 
                                       sample_layer='dit', 
                                       max_timestep=30, 
                                       sample_size=1, 
-                                      timestep_per_sample=5, 
-                                      sample_mode='input',
+                                      timestep_per_sample=10, 
+                                      sample_mode='inoutput',
+                                      target_layer=model.controlnet.transformer_blocks[0].norm1.linear,
                                       controlnet_conditioning_scale=0.7,
                                       guidance_scale=3.5):
-        print(sample_data)
+        
+        for d in sample_data:
+            t = d['timestep']
+
+            input = d['input']['args'][0][0]
+            
+            values = input.numpy()
+            channels = np.arange(len(values))
+            plt.figure(figsize=(8, 4))
+            plt.bar(channels, values, color='skyblue', edgecolor='black')
+            plt.xlabel('Channel')
+            plt.ylabel('Value')
+            plt.title('Channel Value Distribution')
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(f'input_channel_values_{t}.png')
+
+            # shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = d['output'].chunk(6, dim=1)
+            
+            # plt.figure(figsize=(6, 4))
+            # plt.hist(scale_msa.flatten().numpy(), bins=50, color='skyblue', edgecolor='black')
+            # plt.title("Tensor Value Distribution")
+            # plt.xlabel("Value")
+            # plt.ylabel("Frequency")
+            # plt.grid(True)
+            # plt.tight_layout()
+            # plt.savefig(f'scale_msa_{t}_output.png')
