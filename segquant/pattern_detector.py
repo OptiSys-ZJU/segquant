@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.fx as fx
 from collections import namedtuple
 from torch.fx.passes.shape_prop import ShapeProp
+from torch._subclasses.fake_tensor import FakeTensorMode
+from torch.fx.passes.fake_tensor_prop import FakeTensorProp 
 
 LinearInfo = namedtuple("LinearInfo", ["found", "module", "in_features", "out_features"])
 ChunkInfo = namedtuple("ChunkInfo", ["found", "chunks"])
@@ -22,8 +24,11 @@ class SegQuantPatternDetector:
             ]
         else:
             self.search_patterns = search_patterns
-        cpu_inputs = [x.cpu() if isinstance(x,torch.Tensor) else x for x in example_inputs]
-        ShapeProp(self.traced).propagate(*cpu_inputs)
+        
+        # Propagate using fake tensor mode
+        fake_mode = FakeTensorMode(allow_non_fake_inputs=True)
+        FakeTensorProp(self.traced, fake_mode).propagate(*example_inputs)
+
 
     def _is_linear(self, node):
         if node.op == 'call_module':
@@ -58,8 +63,11 @@ class SegQuantPatternDetector:
                 if isinstance(tensor_list, (list, tuple)):
                     chunksizes = []
                     for tensor in tensor_list:
-                        shape = tensor.meta['tensor_meta'].shape
-                        chunksizes.append(shape[1])
+                        if hasattr(tensor, 'meta'):
+                            # Handle meta as dictionary (common in FakeTensorProp)
+                            if isinstance(tensor.meta, dict) and 'val' in tensor.meta:
+                                shape = tensor.meta['val'].shape
+                                chunksizes.append(shape[1])
                     return ConcatInfo(True, chunksizes)
         return ConcatInfo(False, None)
 
