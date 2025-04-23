@@ -1,7 +1,7 @@
 from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
 from backend.torch.modules.controlnet_sd3 import SD3ControlNetModel
 from backend.torch.utils import load_image
-
+from utils.hook_dump import DebugContext
 import torch
 import modelopt.torch.quantization as mtq
 from pathlib import Path
@@ -160,11 +160,7 @@ if __name__ == '__main__':
     enable_res = False
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-<<<<<<< HEAD
-    type = 'fp16'   
-=======
     # type = 'fp16'
->>>>>>> 47e67ae9d2df07894999b0af89ecf048ba89d179
     # type = 'int8_smooth'
     type = 'int8_smooth_enablelatent'
     # type = 'int8_smooth_enabletime'

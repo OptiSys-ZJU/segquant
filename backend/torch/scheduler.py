@@ -6,6 +6,7 @@ import json
 from backend.torch.utils import is_scipy_available
 from types import SimpleNamespace
 import inspect
+import scipy
 
 class FlowMatchEulerDiscreteScheduler:
     """
