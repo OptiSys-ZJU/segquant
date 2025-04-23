@@ -4,6 +4,7 @@ import torch.fx as fx
 import inspect
 from collections import namedtuple
 from torch.fx.passes.shape_prop import ShapeProp
+from torch._subclasses.fake_tensor import FakeTensorMode
 
 LinearInfo = namedtuple("LinearInfo", ["found", "name", "in_features", "out_features"])
 ChunkInfo = namedtuple("ChunkInfo", ["found", "chunks"])
@@ -45,7 +46,8 @@ class SegQuantPatternDetector:
         else:
             self.search_patterns = search_patterns
         
-        ShapeProp(self.traced).propagate(*example_inputs)
+        fake_mode = FakeTensorMode(allow_non_fake_inputs=True)
+        ShapeProp(self.traced, fake_mode).propagate(*example_inputs)
 
     def _is_linear(self, node):
         if node.op == 'call_module':

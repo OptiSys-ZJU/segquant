@@ -91,11 +91,12 @@ class SmoothQuantCalibrator(BaseCalibrator):
 
     def _trace_max_w(self, weight: List[torch.Tensor]):
         for i, weight_chunk in enumerate(weight):
-            self.max_w.append(weight_chunk.abs().max(dim=0).values.unsqueeze(0))
+            weight_chunk_max = weight_chunk.abs().amax(dim=tuple(range(weight_chunk.ndim - 1)), keepdim=True).squeeze()
+            self.max_w.append(weight_chunk_max)
     
     def _trace_max_x(self, input: List[torch.Tensor]):
         for i, input_chunk in enumerate(input):
-            input_chunk_max = input_chunk.abs().max(dim=0).values.unsqueeze(0)
+            input_chunk_max = input_chunk.abs().amax(dim=tuple(range(input_chunk.ndim - 1)), keepdim=True).squeeze()
             if len(self.max_x) < self.chunks:
                 self.max_x.append(input_chunk_max)
             else:
@@ -121,7 +122,7 @@ class SmoothQuantCalibrator(BaseCalibrator):
         quantized_weights = []
         weight_broadcast = self._broadcast_list(weight)
         for q, weight_chunk, s in zip(self.weight_quantizers, weight_broadcast, self.s):
-            weight_smooth = weight_chunk * s
+            weight_smooth = (weight_chunk * s).to(dtype=weight_chunk.dtype, device=weight_chunk.device)
             q.calibrate(weight_smooth)
             quantized_weights.append(q.quantize(weight_smooth))
         
@@ -150,7 +151,11 @@ class SmoothQuantCalibrator(BaseCalibrator):
 
         max_x, max_w = self._broadcast_lists(self.max_x, self.max_w)
         for i in range(self.chunks):
-            self.s[i] = (max_x[i] ** self.alpha) / (max_w[i] ** (1 - self.alpha))
+            epsilon = 1.0 / (1 << 31)
+            s = (max_x[i] ** self.alpha) / (max_w[i] ** (1 - self.alpha))            
+            s = torch.where(s <= epsilon, torch.ones_like(s), s)
+            s = torch.clamp(torch.tensor(s, dtype=torch.float32), min=1e-4, max=1e4)
+            self.s[i] = s
 
         for input in inputs:
             self._calibrate_input(input)
@@ -184,7 +189,7 @@ class SmoothQuantCalibrator(BaseCalibrator):
         quantized_input = []
         input_broadcast = self._broadcast_list(input)
         for q, input_chunk, s in zip(self.input_quantizers, input_broadcast, self.s):
-            input_smooth = input_chunk / s
+            input_smooth = (input_chunk / s).to(dtype=input_chunk.dtype, device=input_chunk.device)
             quantized_input.append(q.quantize(input_smooth))
         
         return quantized_input

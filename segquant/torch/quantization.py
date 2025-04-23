@@ -129,7 +129,7 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
         if isinstance(module, BaseSegmentLinear):
             if verbose:
                 print(f"Calibrating {name} with {len(seg_linear_inputs[name])} samples")
-            module.calibrate(seg_linear_inputs[name])
+            module.calibrate(move_to_device(seg_linear_inputs[name], device))
     
     if verbose:
         print(model)
@@ -152,12 +152,13 @@ if __name__ == '__main__':
     from segquant.torch.calibrate_set import generate_calibrate_set
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
     from backend.torch.models.flux_controlnet import FluxControlNetModel
+    from backend.torch.modules.controlnet_flux import FluxControlNetModel as FluxControlNet, FluxMultiControlNetModel as FluxMultiControlNet
     from segquant.torch.calibrate_set import BaseCalibSet
     from sample.sampler import model_map
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), device)
-    #model = FluxControlNetModel.from_repo(('../FLUX.1-dev', '../FLUX.1-dev-Controlnet-Canny'), device)
+    # model = FluxControlNetModel.from_repo(('../FLUX.1-dev', '../FLUX.1-dev-Controlnet-Canny'), device)
     
     quant_layer = 'controlnet'
     
@@ -171,8 +172,8 @@ if __name__ == '__main__':
                                         controlnet_conditioning_scale=0.7,
                                         guidance_scale=3.5)
     
-    # calibset.dump('flux-dit.pt')
-    # calibset = BaseCalibSet.from_file('flux-dit.pt')
+    # calibset.dump('flux-controlnet.pt')
+    # calibset = BaseCalibSet.from_file('flux-controlnet.pt')
 
     calib_loader = calibset.get_dataloader(batch_size=1)
 
@@ -180,7 +181,7 @@ if __name__ == '__main__':
 
     
     ## test
-    from backend.torch.utils import load_image
+    latents = torch.load('../latents.pt')
     for batch in dataset.get_dataloader(batch_size=1):
         prompt, image, control = batch[0]
         image = model.forward(
@@ -188,7 +189,8 @@ if __name__ == '__main__':
             control_image=control, 
             controlnet_conditioning_scale=0.7,
             num_inference_steps=28,
-            guidance_scale=3.5
+            guidance_scale=3.5,
+            latents=latents,
         )[0]
         image[0].save(f'pic.jpg')
         break

@@ -285,7 +285,9 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
             else:
                 output_chunks = quantized_output_chunks
 
-            return torch.concat(output_chunks, dim=-1) + bias if bias is not None else torch.concat(output_chunks, dim=-1)
+            c = torch.concat(output_chunks, dim=-1)
+
+            return c + bias if bias is not None else c
         
         elif self.seg_mode == 'input':
             quantized_output_chunks = []
