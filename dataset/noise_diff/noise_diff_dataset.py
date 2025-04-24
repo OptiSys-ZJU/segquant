@@ -13,6 +13,12 @@ class NoiseDiffDataset(Dataset):
         first_elem = samples[0]["history_noise_pred"][0]
         is_tuple = isinstance(first_elem, tuple)
 
+        def stack_history_field(key: str):
+            return torch.stack([
+                torch.stack(sample[key], dim=0)  # shape: [seq_len, ...]
+                for sample in samples
+            ], dim=0)  # shape: [batch_size, seq_len, ...]
+
         if is_tuple:
             a_stack = torch.stack([
                 torch.stack([item[0] for item in sample["history_noise_pred"]], dim=0)
@@ -22,18 +28,20 @@ class NoiseDiffDataset(Dataset):
                 torch.stack([item[1] for item in sample["history_noise_pred"]], dim=0)
                 for sample in samples
             ], dim=0)
-            history_noise_pred = (a_stack, b_stack)
+            history_noise_pred = (a_stack.to(torch.float32), b_stack.to(torch.float32))
+
+            last_a = a_stack[:, -1] 
+            last_b = b_stack[:, -1]
+
+            history_guidance_scale = stack_history_field("history_guidance_scale")
+            quant_noise_pred = last_a + history_guidance_scale[:, -1].view(-1, 1, 1, 1) * (last_b - last_a)
         else:
             history_noise_pred = torch.stack([
                 torch.stack(sample["history_noise_pred"], dim=0)
                 for sample in samples
-            ], dim=0)
+            ], dim=0).to(torch.float32)
 
-        def stack_history_field(key: str):
-            return torch.stack([
-                torch.stack(sample[key], dim=0)  # shape: [seq_len, ...]
-                for sample in samples
-            ], dim=0)  # shape: [batch_size, seq_len, ...]
+            quant_noise_pred = history_noise_pred[:, -1]
 
         history_timestep = stack_history_field("history_timestep")
         if history_timestep.shape[-1] != 1:
@@ -41,10 +49,11 @@ class NoiseDiffDataset(Dataset):
 
         batched = {
             "history_noise_pred": history_noise_pred,
-            "history_timestep": history_timestep,
-            "history_controlnet_scale": stack_history_field("history_controlnet_scale").unsqueeze(-1),
-            "history_guidance_scale": stack_history_field("history_guidance_scale").unsqueeze(-1),
-            "real_noise_pred": torch.stack([sample["real_noise_pred"] for sample in samples], dim=0)
+            "history_timestep": history_timestep.to(torch.float32),
+            "history_controlnet_scale": stack_history_field("history_controlnet_scale").unsqueeze(-1).to(torch.float32),
+            "history_guidance_scale": stack_history_field("history_guidance_scale").unsqueeze(-1).to(torch.float32),
+            "real_noise_pred": torch.stack([sample["real_noise_pred"] for sample in samples], dim=0).to(torch.float32),
+            "quant_noise_pred": quant_noise_pred.to(torch.float32),
         }
 
         return batched
@@ -87,7 +96,7 @@ class NoiseDiffDataset(Dataset):
         )
 
 
-def generate_noise(model_real: nn.Module, model_quant: nn.Module, dataset:Dataset, target_device='cuda:0', max_timestep=100, sample_size=64, timestep_per_sample=100, window_size=3, controlnet_scale=0.7, guidance_scale=7, **dataloader_kwargs):
+def generate_noise(model_real: nn.Module, model_quant: nn.Module, dataset:Dataset, target_device='cuda:0', max_timestep=100, sample_size=64, timestep_per_sample=100, window_size=3, controlnet_scale=0.7, guidance_scale=7, shuffle=True):
     '''
         all model must be load to cpu first
     '''
@@ -98,13 +107,14 @@ def generate_noise(model_real: nn.Module, model_quant: nn.Module, dataset:Datase
     noise_sampler = NoiseSampler(controlnet_scale=controlnet_scale, guidance_scale=guidance_scale)
 
     indices = np.arange(len(dataset))
-    np.random.seed(42)
-    np.random.shuffle(indices)
+    if shuffle:
+        np.random.seed(42)
+        np.random.shuffle(indices)
 
     def sample_noise(model: nn.Module):
         outputs = []
         model.to(torch.device(target_device))
-        data_loader = dataset.get_dataloader(sampler=SubsetRandomSampler(indices.copy()), **dataloader_kwargs)
+        data_loader = dataset.get_dataloader(sampler=SubsetRandomSampler(indices.copy()))
         for sample_data in noise_sampler.sample(model, 
                                           data_loader, 
                                           max_timestep=max_timestep, 
@@ -149,7 +159,7 @@ def generate_noise(model_real: nn.Module, model_quant: nn.Module, dataset:Datase
 
             yield this_data
 
-def generate_n_dump_noise(dump_dir: str, model_real: nn.Module, model_quant: nn.Module, dataset:Dataset, target_device='cuda:0', max_timestep=100, sample_size=64, timestep_per_sample=100, window_size=3, controlnet_scales=[0.7], guidance_scales=[7], **dataloader_kwargs):
+def generate_n_dump_noise(dump_dir: str, model_real: nn.Module, model_quant: nn.Module, dataset:Dataset, target_device='cuda:0', max_timestep=100, sample_size=64, timestep_per_sample=100, window_size=3, controlnet_scales=[0.7], guidance_scales=[7], shuffle=True):
     os.makedirs(dump_dir, exist_ok=True)
 
     buffer = []
@@ -163,7 +173,7 @@ def generate_n_dump_noise(dump_dir: str, model_real: nn.Module, model_quant: nn.
 
     for c in controlnet_scales:
         for g in guidance_scales:
-            for this_data in generate_noise(model_real, model_quant, dataset, target_device, max_timestep, sample_size, timestep_per_sample, window_size, c, g, **dataloader_kwargs):
+            for this_data in generate_noise(model_real, model_quant, dataset, target_device, max_timestep, sample_size, timestep_per_sample, window_size, c, g, shuffle):
                 buffer.append(this_data)
 
                 if len(buffer) >= buffer_size:
@@ -217,5 +227,6 @@ if __name__ == '__main__':
     model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
 
     ##### dump data
-    generate_n_dump_noise('../noise_dataset', model_real, model_quant, dataset, 'cuda:0', max_timestep=30, sample_size=64, timestep_per_sample=30, window_size=3, controlnet_scales=[0.7], guidance_scales=[7], shuffle=True)
+    #generate_n_dump_noise('../noise_dataset/train', model_real, model_quant, dataset, 'cuda:0', max_timestep=30, sample_size=64, timestep_per_sample=30, window_size=3, controlnet_scales=[0.7], guidance_scales=[7], shuffle=True)
+    generate_n_dump_noise('../noise_dataset/val', model_real, model_quant, dataset, 'cuda:0', max_timestep=30, sample_size=8, timestep_per_sample=30, window_size=3, controlnet_scales=[0.7], guidance_scales=[7], shuffle=True)
 
