@@ -50,7 +50,7 @@ def replace_named_linear(model, layer_name, seg_linear_config, dtype: DType):
     new_linear = new_linear.to(device).to(old_dtype)
     setattr(module, parts[-1], new_linear)
 
-def trace_all_linears(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader):
+def trace_all_linears(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, device):
     seg_linear_inputs = {}
     hooks = []
     for name, module in model.named_modules():
@@ -87,7 +87,7 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
             final_config['default'] = default_quantize_config['default']
 
     ## trace 
-    seg_linear_inputs = trace_all_linears(model, calib_data_loader)
+    seg_linear_inputs = trace_all_linears(model, calib_data_loader, device)
 
     seg_names = set()
 
