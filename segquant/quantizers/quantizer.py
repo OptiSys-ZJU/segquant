@@ -54,9 +54,10 @@ class QuantizerRegistry:
 
 @QuantizerRegistry.register("int8")
 class IntQuantizer(FakeQuantizer):
-    def __init__(self, num_bits=8, symmetric=True):
+    def __init__(self, num_bits=8, symmetric=True, dual_scale=False):
         self.num_bits = num_bits
         self.symmetric = symmetric
+        self.dual_scale = dual_scale
         self.qmin = -2 ** (num_bits - 1)
         self.qmax = 2 ** (num_bits - 1) - 1
 
@@ -64,18 +65,35 @@ class IntQuantizer(FakeQuantizer):
         self.amin = None
         self.zero_point = None
 
+        # For dual scale
+        self.neg_amax = None
+        self.pos_amax = None
+        self.neg_scale = None
+        self.pos_scale = None
+
     def calibrate(self, x):
         if self.symmetric:
-            max_val = x.abs().max().item()
-            if self.amax is None or self.amax < max_val:
-                self.amax = max_val
+            if self.dual_scale:
+                neg_max = x[x < 0].abs().max().item() if (x < 0).any() else 0.0
+                pos_max = x[x > 0].abs().max().item() if (x > 0).any() else 0.0
 
-            epsilon = 1.0 / (1 << 24)
-            if self.amax <= epsilon:
-                self.scale = 1.0
+                if self.neg_amax is None or self.neg_amax < neg_max:
+                    self.neg_amax = neg_max
+                if self.pos_amax is None or self.pos_amax < pos_max:
+                    self.pos_amax = pos_max
+
+                epsilon = 1.0 / (1 << 24)
+                self.neg_scale = self.qmin / (-self.neg_amax) if self.neg_amax > epsilon else 1.0
+                self.pos_scale = self.qmax / self.pos_amax if self.pos_amax > epsilon else 1.0
+                self.zero_point = 0
             else:
-                self.scale = self.qmax / self.amax 
-            self.zero_point = 0
+                max_val = x.abs().max().item()
+                if self.amax is None or self.amax < max_val:
+                    self.amax = max_val
+
+                epsilon = 1.0 / (1 << 24)
+                self.scale = self.qmax / self.amax if self.amax > epsilon else 1.0
+                self.zero_point = 0
         else:
             min_val = x.min().item()
             if self.amin is None or self.amin > min_val:
@@ -86,30 +104,42 @@ class IntQuantizer(FakeQuantizer):
 
             self.scale = (self.amax - self.amin) / (self.qmax - self.qmin)
             self.zero_point = int(round(self.qmin - self.amin / self.scale))
-
-    # def fake_quantize(self, x: torch.Tensor):
-    #     x_int = torch.clamp(torch.round(x / self.scale) + self.zero_point, self.qmin, self.qmax)
-    #     x_dequant = (x_int - self.zero_point) * self.scale
-    #     return x_dequant
     
     def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
-        scale = self.scale
-        x_int = torch.round(x * scale) + self.zero_point
-        x_int = torch.clamp(x_int, self.qmin, self.qmax)
-        x_dequant = (x_int - self.zero_point) / scale
-        return x_dequant.to(x.dtype)
+        if self.symmetric and self.dual_scale:
+            # Apply separate quantization for positive and negative
+            x_quant = torch.where(
+                x >= 0,
+                torch.clamp(torch.round(x * self.pos_scale), 0, self.qmax),
+                torch.clamp(torch.round(x * self.neg_scale), self.qmin, 0)
+            )
+            x_dequant = torch.where(
+                x >= 0,
+                x_quant / self.pos_scale,
+                x_quant / self.neg_scale
+            )
+            return x_dequant.to(x.dtype)
+        else:
+            scale = self.scale
+            x_int = torch.round(x * scale) + self.zero_point
+            x_int = torch.clamp(x_int, self.qmin, self.qmax)
+            x_dequant = (x_int - self.zero_point) / scale
+            return x_dequant.to(x.dtype)
 
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
         return self.fake_quantize(x)
 
-        x_int = torch.clamp(torch.round(x / self.scale) + self.zero_point, self.qmin, self.qmax)
-        return x_int
-
     def __repr__(self):
         if self.symmetric:
-            return f"IntQuantizer(num_bits={self.num_bits}, amax={self.amax:.4f}, scale={self.scale:.4f})"
+            if self.dual_scale:
+                return (f"IntQuantizer(num_bits={self.num_bits}, dual_scale=True, "
+                        f"neg_amax={self.neg_amax:.4f}, neg_scale={self.neg_scale:.4f}, "
+                        f"pos_amax={self.pos_amax:.4f}, pos_scale={self.pos_scale:.4f})")
+            else:
+                return f"IntQuantizer(num_bits={self.num_bits}, amax={self.amax:.4f}, scale={self.scale:.4f})"
         else:
-            return f"IntQuantizer(num_bits={self.num_bits}, amax={self.amax:.4f}, amin={self.amin:.4f}, zero_point={self.zero_point:.4f}), scale={self.scale:.4f})"
+            return (f"IntQuantizer(num_bits={self.num_bits}, amax={self.amax:.4f}, "
+                    f"amin={self.amin:.4f}, zero_point={self.zero_point:.4f}, scale={self.scale:.4f})")
 
 @QuantizerRegistry.register("fpe4m3")
 class FloatQuantizer(FakeQuantizer):

@@ -84,7 +84,7 @@ def evaluate(model, batch_size, device='cuda'):
 
     model.eval()
     total_loss = 0.0
-    loss_fn = F.mse_loss
+    loss_fn = frobenius_loss
 
     with torch.no_grad():
         for batch in data_loader:
@@ -123,9 +123,12 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
     model = NoiseCorrModel().to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-2)
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5,
+        cooldown=3, min_lr=1e-6
+    )
 
-    loss_fn = F.mse_loss
+    loss_fn = frobenius_loss
 
     loss_history = []
     best_loss = None
@@ -153,7 +156,7 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
             optimizer.step()
 
             total_loss += loss.item()
-            pbar.set_postfix(loss=loss.item())
+            pbar.set_postfix(loss=loss.item(), lr=scheduler.get_last_lr()[0])
         
         avg_loss = total_loss / len(data_loader)
         loss_history.append(avg_loss)
@@ -181,4 +184,4 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
 
 
 if __name__ == '__main__':
-    train(epochs=1000, lr=1e-3, batch_size=32, device='cuda', eval_every=1)
+    train(epochs=1000, lr=5e-4, batch_size=32, device='cuda', eval_every=1)

@@ -14,9 +14,10 @@ class SegPattern(Enum):
     Linear2Split = 'linear_to_split'
     Concat2Linear = 'concat_to_linear'
     Stack2Linear = 'stack_to_linear'
+    Activation2Linear = 'activation_to_linear'
 
     def all():
-        return [SegPattern.Linear2Chunk, SegPattern.Linear2Split, SegPattern.Concat2Linear, SegPattern.Stack2Linear]
+        return [SegPattern.Linear2Chunk, SegPattern.Linear2Split, SegPattern.Concat2Linear, SegPattern.Stack2Linear, SegPattern.Activation2Linear]
 
 default_quantize_config = {
     "default": {

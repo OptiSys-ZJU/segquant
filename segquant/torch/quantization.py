@@ -14,7 +14,7 @@ def move_to_device(batch, device):
         return {k: move_to_device(v, device) for k, v in batch.items()}
     return batch
 
-def replace_named_linear(model, layer_name, seg_linear_config, dtype: DType):
+def replace_named_linear(model, layer_name, seg_linear_config, dtype: DType, dual_scale=False):
     parts = layer_name.split(".")
     module = model
     for part in parts[:-1]:
@@ -34,13 +34,19 @@ def replace_named_linear(model, layer_name, seg_linear_config, dtype: DType):
                                         seg_mode=seg_linear_config['seg_mode'],
                                         chunks=len(seg_linear_config['chunksizes']),
                                         chunksizes=seg_linear_config['chunksizes'],
-                                        custom_weight_tensor=old_linear.weight)
+                                        custom_weight_tensor=old_linear.weight,
+                                        quant_args= {
+                                            'dual_scale':dual_scale,
+                                        })
     elif 'chunks' in seg_linear_config:
         new_linear = create_segment_linear(dtype, old_linear.in_features, old_linear.out_features,
                                         bias=has_bias,
                                         seg_mode=seg_linear_config['seg_mode'],
                                         chunks=seg_linear_config['chunks'],
-                                        custom_weight_tensor=old_linear.weight)
+                                        custom_weight_tensor=old_linear.weight,
+                                        quant_args= {
+                                            'dual_scale':dual_scale,
+                                        })
     else:
         raise ValueError('replace_named_linear: chunk keyword not found')
 
@@ -91,6 +97,8 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
 
     seg_names = set()
 
+    dual_scale_linears = set()
+
     enable_seg = any(cfg.get("seglinear") is True for cfg in final_config.values())
     if enable_seg:
         example = calib_data_loader.dataset[0]
@@ -100,6 +108,10 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
                                                search_patterns=[p.value for p in final_config['default']['search_patterns']])
         seg_result = seg_detector.find_all_patterns()
 
+        if 'activation_to_linear' in seg_result:
+            dual_scale_linears = set(seg_result['activation_to_linear'])
+            del seg_result['activation_to_linear']
+
         for l in seg_result.values():
             for seg_linear_config in l:
                 name = seg_linear_config['linear_name']
@@ -107,7 +119,7 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
                 if name in final_config:
                     if 'dtype' in final_config[name]:
                         dtype = final_config[name]['dtype']
-                replace_named_linear(model, name, seg_linear_config, dtype)
+                replace_named_linear(model, name, seg_linear_config, dtype, dual_scale=(name in dual_scale_linears))
                 seg_names.add(name)
 
     ## replace single linears
@@ -122,7 +134,7 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
                 'chunks': 1,
                 'seg_mode': 'weight',
             }
-            replace_named_linear(model, name, single_config, dtype)
+            replace_named_linear(model, name, single_config, dtype, dual_scale=(name in dual_scale_linears))
 
     ## calibration
     for name, module in model.named_modules():

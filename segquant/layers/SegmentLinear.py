@@ -81,15 +81,16 @@ class DefaultSegmentLinear(BaseSegmentLinear):
 
         if quant_type is not None:
             gen = lambda: QuantizerRegistry.create(quant_type, **(quant_args or {}))
+            default_gen = lambda: QuantizerRegistry.create(quant_type)
         else:
             gen = lambda: None
         
         if seg_mode == 'input':
             self.input_quantizers = [gen() for _ in range(chunks)]
-            self.weight_quantizers = [gen()]
+            self.weight_quantizers = [default_gen()]
         elif seg_mode == 'weight':
             self.input_quantizers = [gen()]
-            self.weight_quantizers = [gen() for _ in range(chunks)]
+            self.weight_quantizers = [default_gen() for _ in range(chunks)]
 
         self.calibrator = DefaultCalibrator(self.input_quantizers, self.weight_quantizers)
 
@@ -192,19 +193,23 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
                  seg_mode: Literal['input', 'weight'] = 'weight', chunks=1, chunksizes=None,
                  custom_weight_tensor=None,
                  quant_type=None, quant_args=None,
-                 alpha=0.5):
+                 alpha=0.5, dual_s=False):
         
         super().__init__(in_features, out_features, bias, seg_mode, chunks, chunksizes, custom_weight_tensor)
 
         if quant_type is not None:
             gen = lambda: QuantizerRegistry.create(quant_type, **(quant_args or {}))
+            default_gen = lambda: QuantizerRegistry.create(quant_type)
         else:
             gen = lambda: None
         
         self.input_quantizers = [gen() for _ in range(chunks)]
-        self.weight_quantizers = [gen() for _ in range(chunks)]
-
-        self.calibrator = SmoothQuantCalibrator(self.input_quantizers, self.weight_quantizers, alpha=alpha)
+        self.weight_quantizers = [default_gen() for _ in range(chunks)]
+        
+        # dual_s not work now
+        assert not dual_s
+        self.dual_s = dual_s
+        self.calibrator = SmoothQuantCalibrator(self.input_quantizers, self.weight_quantizers, alpha=alpha, dual_s=dual_s)
 
     def __repr__(self):
         base = (
