@@ -24,6 +24,8 @@ default_quantize_config = {
         "enable": True,
         "dtype": DType.INT8,
         "seglinear": True,
+        "input_axis": None,
+        "weight_axis": None,
         'search_patterns': SegPattern.all(),
     },
 }

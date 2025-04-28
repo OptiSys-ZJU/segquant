@@ -14,42 +14,42 @@ def move_to_device(batch, device):
         return {k: move_to_device(v, device) for k, v in batch.items()}
     return batch
 
-def replace_named_linear(model, layer_name, seg_linear_config, dtype: DType, dual_scale=False):
+def get_quantization_config(final_config, name, dtype=None, input_axis=None, weight_axis=None, alpha=None):
+    dtype = dtype or final_config['default'].get('dtype')
+    input_axis = input_axis or final_config['default'].get('input_axis')
+    weight_axis = weight_axis or final_config['default'].get('weight_axis')
+    alpha = alpha or final_config['default'].get('alpha')
+    
+    if name in final_config:
+        dtype = final_config[name].get('dtype', dtype)
+        input_axis = final_config[name].get('input_axis', input_axis)
+        weight_axis = final_config[name].get('weight_axis', weight_axis)
+        alpha = final_config[name].get('alpha', alpha)
+    
+    return dtype, input_axis, weight_axis, alpha
+
+def replace_named_linear(model, layer_name, seg_linear_config, final_config, dtype=None, dual_scale=False, input_axis=None, weight_axis=None, alpha=None):
     parts = layer_name.split(".")
     module = model
     for part in parts[:-1]:
-        if part.isdigit():
-            module = module[int(part)]
-        else:
-            module = getattr(module, part)
+        module = module[int(part)] if part.isdigit() else getattr(module, part)
     
     old_linear = getattr(module, parts[-1])
     device = old_linear.weight.device
     old_dtype = old_linear.weight.dtype
     has_bias = hasattr(old_linear, "bias") and old_linear.bias is not None
-
-    if 'chunksizes' in seg_linear_config:
-        new_linear = create_segment_linear(dtype, old_linear.in_features, old_linear.out_features,
-                                        bias=has_bias,
-                                        seg_mode=seg_linear_config['seg_mode'],
-                                        chunks=len(seg_linear_config['chunksizes']),
-                                        chunksizes=seg_linear_config['chunksizes'],
-                                        custom_weight_tensor=old_linear.weight,
-                                        quant_args= {
-                                            'dual_scale':dual_scale,
-                                        })
-    elif 'chunks' in seg_linear_config:
-        new_linear = create_segment_linear(dtype, old_linear.in_features, old_linear.out_features,
-                                        bias=has_bias,
-                                        seg_mode=seg_linear_config['seg_mode'],
-                                        chunks=seg_linear_config['chunks'],
-                                        custom_weight_tensor=old_linear.weight,
-                                        quant_args= {
-                                            'dual_scale':dual_scale,
-                                        })
-    else:
-        raise ValueError('replace_named_linear: chunk keyword not found')
-
+    
+    dtype, input_axis, weight_axis, alpha = get_quantization_config(final_config, layer_name, dtype, input_axis, weight_axis, alpha)
+    
+    new_linear = create_segment_linear(dtype, old_linear.in_features, old_linear.out_features,
+                                       bias=has_bias,
+                                       seg_mode=seg_linear_config['seg_mode'],
+                                       chunks=seg_linear_config.get('chunks', len(seg_linear_config.get('chunksizes', []))),
+                                       chunksizes=seg_linear_config.get('chunksizes'),
+                                       custom_weight_tensor=old_linear.weight,
+                                       input_quant_args={'dual_scale': dual_scale, 'axis': input_axis},
+                                       weight_quant_args={'axis': weight_axis},
+                                       alpha=alpha)
     if has_bias:
         new_linear.linear.bias.data.copy_(old_linear.bias.data)
     
@@ -68,43 +68,33 @@ def trace_all_linears(model: nn.Module, calib_data_loader: torch.utils.data.Data
                 return hook_fn
 
             hooks.append(module.register_forward_hook(get_hook(name)))
+    
     model.eval()
     with torch.no_grad():
         for batch in calib_data_loader:
             this_input_tuple = move_to_device(batch[0], device)
-            if isinstance(this_input_tuple, dict):
-                model(**this_input_tuple)
-            else:
-                model(*this_input_tuple)
+            model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(**this_input_tuple)    
     for h in hooks:
         h.remove()
     
     return seg_linear_inputs
 
-def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, config=None, verbose=False):
+def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, config=None, verbose=False, example=None,):
     device = next(model.parameters()).device
+    final_config = config or default_quantize_config
+    final_config['default'] = final_config.get('default', default_quantize_config['default'])
 
-    final_config = None
-    if config is None:
-        final_config = default_quantize_config
-    else:
-        final_config = config
-        if 'default' not in config:
-            final_config['default'] = default_quantize_config['default']
-
-    ## trace 
     seg_linear_inputs = trace_all_linears(model, calib_data_loader, device)
 
     seg_names = set()
-
     dual_scale_linears = set()
 
-    enable_seg = any(cfg.get("seglinear") is True for cfg in final_config.values())
+    enable_seg = any(cfg.get("seglinear") for cfg in final_config.values())
     if enable_seg:
-        example = calib_data_loader.dataset[0]
+        example = example if example is not None else calib_data_loader.dataset[0]
         example = move_to_device(example, device)
-        seg_detector = SegQuantPatternDetector(model, 
-                                               example_inputs=example, 
+        
+        seg_detector = SegQuantPatternDetector(model, example_inputs=example,
                                                search_patterns=[p.value for p in final_config['default']['search_patterns']])
         seg_result = seg_detector.find_all_patterns()
 
@@ -115,28 +105,13 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
         for l in seg_result.values():
             for seg_linear_config in l:
                 name = seg_linear_config['linear_name']
-                dtype = final_config['default']['dtype']
-                if name in final_config:
-                    if 'dtype' in final_config[name]:
-                        dtype = final_config[name]['dtype']
-                replace_named_linear(model, name, seg_linear_config, dtype, dual_scale=(name in dual_scale_linears))
+                replace_named_linear(model, name, seg_linear_config, final_config, dual_scale=(name in dual_scale_linears))
                 seg_names.add(name)
 
-    ## replace single linears
     for name in seg_linear_inputs.keys():
         if name not in seg_names:
-            dtype = final_config['default']['dtype']
-            if name in final_config:
-                if 'dtype' in final_config[name]:
-                    dtype = final_config[name]['dtype']
-            
-            single_config = {
-                'chunks': 1,
-                'seg_mode': 'weight',
-            }
-            replace_named_linear(model, name, single_config, dtype, dual_scale=(name in dual_scale_linears))
+            replace_named_linear(model, name, {'chunks': 1, 'seg_mode': 'weight'}, final_config)
 
-    ## calibration
     for name, module in model.named_modules():
         if isinstance(module, BaseSegmentLinear):
             if verbose:
@@ -148,7 +123,6 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
     
     return model
 
-
 if __name__ == '__main__':
     config = {
         "default": {
@@ -156,6 +130,9 @@ if __name__ == '__main__':
             "dtype": DType.INT8SMOOTH,
             "seglinear": True,
             'search_patterns': SegPattern.all(),
+            "input_axis": None,
+            "weight_axis": None,
+            "alpha": 1.0,
         },
     }
 
@@ -164,8 +141,6 @@ if __name__ == '__main__':
     from segquant.torch.calibrate_set import generate_calibrate_set
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
     from backend.torch.models.flux_controlnet import FluxControlNetModel
-    from backend.torch.modules.controlnet_flux import FluxControlNetModel as FluxControlNet, FluxMultiControlNetModel as FluxMultiControlNet
-    from segquant.torch.calibrate_set import BaseCalibSet
     from sample.sampler import model_map
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -183,26 +158,23 @@ if __name__ == '__main__':
                                         timestep_per_sample=30, 
                                         controlnet_conditioning_scale=0.7,
                                         guidance_scale=3.5)
-    
-    # calibset.dump('flux-controlnet.pt')
-    # calibset = BaseCalibSet.from_file('flux-controlnet.pt')
 
     calib_loader = calibset.get_dataloader(batch_size=1)
 
-    model.controlnet = quantize(model_map[quant_layer](model), calib_loader, config, True)
+    model.controlnet = quantize(model_map[quant_layer](model), calib_loader, config, verbose=True)
 
-    
     ## test
-    latents = torch.load('../latents.pt')
-    for batch in dataset.get_dataloader(batch_size=1):
+    # latents = torch.load('../latents.pt')
+    for batch in dataset.get_dataloader(batch_size=1, shuffle=True):
         prompt, image, control = batch[0]
+        print(prompt)
         image = model.forward(
             prompt = prompt, 
             control_image=control, 
             controlnet_conditioning_scale=0.7,
             num_inference_steps=28,
             guidance_scale=3.5,
-            latents=latents,
+            # latents=latents,
         )[0]
         image[0].save(f'pic.jpg')
         break

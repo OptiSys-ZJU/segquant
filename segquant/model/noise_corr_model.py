@@ -13,8 +13,30 @@ def frobenius_loss(pred, target):
     loss = torch.norm(diff.view(diff.size(0), -1), dim=1)
     return loss.mean()
 
+class MSE_QNSR_Loss(nn.Module):
+    def __init__(self, lambda_mse=0.5, lambda_qnsr=0.5, epsilon=1e-8):
+        super(MSE_QNSR_Loss, self).__init__()
+        self.lambda_mse = lambda_mse
+        self.lambda_qnsr = lambda_qnsr
+        self.epsilon = epsilon
+        self.mse_loss = nn.MSELoss()
+
+    def forward(self, pred, target):
+        """
+        pred: (batch, channel, h, w)
+        target: (batch, channel, h, w)
+        """
+        mse = self.mse_loss(pred, target)
+
+        numerator = ((pred - target) ** 2).sum()
+        denominator = (target ** 2).sum() + self.epsilon
+        qnsr = numerator / denominator
+
+        loss = self.lambda_mse * mse + self.lambda_qnsr * qnsr
+        return loss
+
 class NoiseCorrModel(nn.Module):
-    def __init__(self, hidden_dim=256):
+    def __init__(self, hidden_dim=256, dropout_rate=0.3):
         super().__init__()
 
         self.encoder = nn.Sequential(
@@ -22,6 +44,7 @@ class NoiseCorrModel(nn.Module):
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # (64, 32, 32)
             nn.ReLU(),
+            # nn.Dropout(dropout_rate)
         )
         self.flatten_dim = 64 * 32 * 32
 
@@ -34,6 +57,7 @@ class NoiseCorrModel(nn.Module):
             nn.ReLU(),
             nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2, padding=1),  # (16, 128, 128)
             nn.Tanh(),
+            # nn.Dropout(dropout_rate)
         )
     
     def __encode__(self, noise):
@@ -63,12 +87,16 @@ class NoiseCorrModel(nn.Module):
             uncond_pred = self.__lstm__(uncond_feats, history_timestep, history_controlnet_scale, zero_guidance_scale)
             text_pred = self.__lstm__(text_feats, history_timestep, history_controlnet_scale, zero_guidance_scale)
 
-            final_error = uncond_pred + history_guidance_scale[:, 0].view(-1, 1, 1, 1) * (text_pred - uncond_pred)
+            uncond_noise = uncond_pred * history_uncond[:, -1, :, :, :]
+            text_noise = text_pred * history_text[:, -1, :, :, :]
+
+            final_noise = uncond_noise + history_guidance_scale[:, 0].view(-1, 1, 1, 1) * (uncond_noise - text_noise)
         else:
             feats = self.__encode__(history_noise_pred)
             final_error = self.__lstm__(feats, history_timestep, history_controlnet_scale, history_guidance_scale)
+            final_noise = final_error * history_noise_pred[:, -1, :, :, :]
 
-        return final_error
+        return final_noise
 
 def to_device(obj, device):
     if isinstance(obj, tuple):
@@ -78,19 +106,19 @@ def to_device(obj, device):
     else:
         raise TypeError(f"Unsupported type: {type(obj)}")
 
-def evaluate(model, batch_size, device='cuda'):
-    dataset = NoiseDiffDataset(data_dir='../noise_dataset/val')
+def evaluate(model, batch_size, path, device='cuda'):
+    dataset = NoiseDiffDataset(data_dir=f'../noise_dataset/{path}')
     data_loader = dataset.get_dataloader(batch_size=batch_size, shuffle=True)
 
     model.eval()
     total_loss = 0.0
-    loss_fn = frobenius_loss
+    loss_fn = MSE_QNSR_Loss(lambda_mse=0.5, lambda_qnsr=0.5)
 
     with torch.no_grad():
         for batch in data_loader:
             real = to_device(batch['real_noise_pred'].squeeze(), device)
             quant = to_device(batch['quant_noise_pred'].squeeze(), device)
-            target = real - quant
+            target = real
 
             history_noise_pred = to_device(batch['history_noise_pred'], device)
             history_timestep = to_device(batch['history_timestep'], device)
@@ -104,7 +132,7 @@ def evaluate(model, batch_size, device='cuda'):
             total_loss += loss.item()
 
     avg_loss = total_loss / len(data_loader)
-    print(f"Evaluation Loss: {avg_loss:.6f}")
+    print(f"Evaluation {path} Loss: {avg_loss:.6f}")
     model.train()
     return avg_loss
 
@@ -120,7 +148,7 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
     dataset = NoiseDiffDataset(data_dir='../noise_dataset/train')
     data_loader = dataset.get_dataloader(batch_size=batch_size, shuffle=True)
 
-    model = NoiseCorrModel().to(device)
+    model = NoiseCorrModel(hidden_dim=256, dropout_rate=0.1).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-2)
     scheduler = ReduceLROnPlateau(
@@ -128,7 +156,7 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
         cooldown=3, min_lr=1e-6
     )
 
-    loss_fn = frobenius_loss
+    loss_fn = MSE_QNSR_Loss(lambda_mse=0.5, lambda_qnsr=0.5)
 
     loss_history = []
     best_loss = None
@@ -140,7 +168,7 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
         for batch in pbar:
             real = to_device(batch['real_noise_pred'].squeeze(), device)
             quant = to_device(batch['quant_noise_pred'].squeeze(), device)
-            target = real - quant
+            target = real
 
             history_noise_pred = to_device(batch['history_noise_pred'], device)
             history_timestep = to_device(batch['history_timestep'], device)
@@ -163,7 +191,8 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
         print(f"[Epoch {epoch+1}] Avg Loss: {avg_loss:.6f}")
         if (epoch + 1) % eval_every == 0:
             print(f"Evaluating model at epoch {epoch+1}")
-            eval_loss = evaluate(model, batch_size, device)
+            eval_loss = evaluate(model, batch_size, 'val', device)
+            eval_loss = evaluate(model, batch_size, 'train', device)
 
             scheduler.step(eval_loss)
 
@@ -184,4 +213,4 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
 
 
 if __name__ == '__main__':
-    train(epochs=1000, lr=5e-4, batch_size=32, device='cuda', eval_every=1)
+    train(epochs=1000, lr=1e-2, batch_size=32, device='cuda', eval_every=1)
