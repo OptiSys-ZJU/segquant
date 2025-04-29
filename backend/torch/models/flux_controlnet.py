@@ -142,7 +142,7 @@ class FluxControlNetModel(nn.Module):
     _callback_tensor_inputs = ["latents", "prompt_embeds", "control_image"]
 
     @classmethod
-    def from_repo(cls, repo: Tuple[str, str]=('FLUX.1-dev', 'FLUX.1-dev-Controlnet-Canny'), device='cuda:0'):
+    def from_repo(cls, repo: Tuple[str, str]=('FLUX.1-dev', 'FLUX.1-dev-Controlnet-Canny'), device='cuda:0', controlnet=None, transformer=None):
         main_repo, control_net_repo = repo
 
         scheduler = FlowMatchEulerDiscreteScheduler.from_config(f'{main_repo}/scheduler/scheduler_config.json')
@@ -153,8 +153,11 @@ class FluxControlNetModel(nn.Module):
         text_encoder_2 = T5EncoderModel.from_pretrained(f'{main_repo}/text_encoder_2')
         tokenizer_2 = T5TokenizerFast.from_pretrained(f'{main_repo}/tokenizer_2')
 
-        transformer = FluxTransformer2DModel.from_config(f'{main_repo}/transformer/config.json', f'{main_repo}/transformer/diffusion_pytorch_model*.safetensors', f'{main_repo}/transformer/diffusion_pytorch_model.safetensors.index.json').half().to(device)
-        controlnet = ControlNet.from_config(f'{control_net_repo}/config.json', f'{control_net_repo}/diffusion_pytorch_model.safetensors').half().to(device)
+        if transformer is None:
+            transformer = FluxTransformer2DModel.from_config(f'{main_repo}/transformer/config.json', f'{main_repo}/transformer/diffusion_pytorch_model*.safetensors', f'{main_repo}/transformer/diffusion_pytorch_model.safetensors.index.json').half().to(device)
+        
+        if controlnet is None:  
+            controlnet = ControlNet.from_config(f'{control_net_repo}/config.json', f'{control_net_repo}/diffusion_pytorch_model.safetensors').half().to(device)
 
         return cls(
             scheduler=scheduler,
@@ -974,9 +977,6 @@ class FluxControlNetModel(nn.Module):
         ):
             ip_adapter_image = np.zeros((width, height, 3), dtype=np.uint8)
 
-        if self.joint_attention_kwargs is None:
-            self._joint_attention_kwargs = {}
-
         image_embeds = None
         negative_image_embeds = None
         if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
@@ -1001,7 +1001,10 @@ class FluxControlNetModel(nn.Module):
                     continue
 
                 if image_embeds is not None:
-                    self._joint_attention_kwargs["ip_adapter_image_embeds"] = image_embeds
+                    if self.joint_attention_kwargs is None:
+                        self._joint_attention_kwargs = {"ip_adapter_image_embeds": ip_adapter_image_embeds}
+                    else:
+                        self._joint_attention_kwargs.update(ip_adapter_image_embeds=ip_adapter_image_embeds)
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
 
@@ -1027,12 +1030,12 @@ class FluxControlNetModel(nn.Module):
                     controlnet_cond=control_image,
                     controlnet_mode=control_mode,
                     conditioning_scale=cond_scale,
-                    timestep=timestep / 1000,
-                    guidance=guidance,
-                    pooled_projections=pooled_prompt_embeds,
                     encoder_hidden_states=prompt_embeds,
-                    txt_ids=text_ids,
+                    pooled_projections=pooled_prompt_embeds,
+                    timestep=timestep / 1000,
                     img_ids=latent_image_ids,
+                    txt_ids=text_ids,
+                    guidance=guidance,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                 )
 
@@ -1043,15 +1046,15 @@ class FluxControlNetModel(nn.Module):
 
                 noise_pred = self.transformer(
                     hidden_states=latents,
-                    timestep=timestep / 1000,
-                    guidance=guidance,
-                    pooled_projections=pooled_prompt_embeds,
                     encoder_hidden_states=prompt_embeds,
+                    pooled_projections=pooled_prompt_embeds,
+                    timestep=timestep / 1000,
+                    img_ids=latent_image_ids,
+                    txt_ids=text_ids,
+                    guidance=guidance,
+                    joint_attention_kwargs=self.joint_attention_kwargs,
                     controlnet_block_samples=controlnet_block_samples,
                     controlnet_single_block_samples=controlnet_single_block_samples,
-                    txt_ids=text_ids,
-                    img_ids=latent_image_ids,
-                    joint_attention_kwargs=self.joint_attention_kwargs,
                     controlnet_blocks_repeat=controlnet_blocks_repeat,
                 )[0]
 
@@ -1060,15 +1063,15 @@ class FluxControlNetModel(nn.Module):
                         self._joint_attention_kwargs["ip_adapter_image_embeds"] = negative_image_embeds
                     neg_noise_pred = self.transformer(
                         hidden_states=latents,
-                        timestep=timestep / 1000,
-                        guidance=guidance,
-                        pooled_projections=negative_pooled_prompt_embeds,
                         encoder_hidden_states=negative_prompt_embeds,
+                        pooled_projections=negative_pooled_prompt_embeds,
+                        timestep=timestep / 1000,
+                        img_ids=latent_image_ids,
+                        txt_ids=text_ids,
+                        guidance=guidance,
+                        joint_attention_kwargs=self.joint_attention_kwargs,
                         controlnet_block_samples=controlnet_block_samples,
                         controlnet_single_block_samples=controlnet_single_block_samples,
-                        txt_ids=text_ids,
-                        img_ids=latent_image_ids,
-                        joint_attention_kwargs=self.joint_attention_kwargs,
                         controlnet_blocks_repeat=controlnet_blocks_repeat,
                     )[0]
                     noise_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)

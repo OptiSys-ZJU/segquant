@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.fx
 import torch.nn as nn
 import json
 from types import SimpleNamespace
@@ -10,6 +11,9 @@ from backend.torch.layers.embeddings import PatchEmbed, CombinedTimestepTextProj
 from backend.torch.layers.attention_processor import Attention, AttentionProcessor, FusedJointAttnProcessor2_0
 from backend.torch.layers.attention import JointTransformerBlock
 from backend.torch.layers.normalization import AdaLayerNormContinuous
+
+torch.fx.wrap('len')
+torch.fx.wrap('int')
 
 class SD3Transformer2DModel(nn.Module):
     """

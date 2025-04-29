@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.fx
 import torch.nn as nn
 
 from safetensors.torch import load_file
@@ -29,6 +30,9 @@ from backend.torch.layers.attention import FeedForward
 from backend.torch.layers.attention_processor import Attention, AttentionProcessor, FluxAttnProcessor2_0, FusedFluxAttnProcessor2_0
 from backend.torch.layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings, CombinedTimestepTextProjEmbeddings, FluxPosEmbed
 from backend.torch.layers.normalization import AdaLayerNormContinuous, AdaLayerNormZero, AdaLayerNormZeroSingle
+
+torch.fx.wrap('len')
+torch.fx.wrap('int')
 
 class FluxSingleTransformerBlock(nn.Module):
     def __init__(self, dim: int, num_attention_heads: int, attention_head_dim: int, mlp_ratio: float = 4.0):
@@ -76,8 +80,10 @@ class FluxSingleTransformerBlock(nn.Module):
         gate = gate.unsqueeze(1)
         hidden_states = gate * self.proj_out(hidden_states)
         hidden_states = residual + hidden_states
-        if hidden_states.dtype == torch.float16:
-            hidden_states = hidden_states.clip(-65504, 65504)
+        # if hidden_states.dtype == torch.float16:
+        #     hidden_states = hidden_states.clip(-65504, 65504)
+        
+        hidden_states = hidden_states.clip(-65504, 65504)
 
         return hidden_states
 
@@ -132,14 +138,27 @@ class FluxTransformerBlock(nn.Module):
             **joint_attention_kwargs,
         )
 
-        if len(attention_outputs) == 2:
-            attn_output, context_attn_output = attention_outputs
-        elif len(attention_outputs) == 3:
-            attn_output, context_attn_output, ip_attn_output = attention_outputs
+        if not isinstance(attention_outputs, (list, tuple)):
+            attention_outputs = [attention_outputs]
+        try:
+            attn_output = attention_outputs[0]
+        except IndexError:
+            attn_output = None
+
+        try:
+            context_attn_output = attention_outputs[1]
+        except IndexError:
+            context_attn_output = None
+
+        try:
+            ip_attn_output = attention_outputs[2]
+        except IndexError:
+            ip_attn_output = None
 
         # Process attention outputs for the `hidden_states`.
-        attn_output = gate_msa.unsqueeze(1) * attn_output
-        hidden_states = hidden_states + attn_output
+        if attn_output is not None:
+            attn_output = gate_msa.unsqueeze(1) * attn_output
+            hidden_states = hidden_states + attn_output
 
         norm_hidden_states = self.norm2(hidden_states)
         norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
@@ -148,7 +167,8 @@ class FluxTransformerBlock(nn.Module):
         ff_output = gate_mlp.unsqueeze(1) * ff_output
 
         hidden_states = hidden_states + ff_output
-        if len(attention_outputs) == 3:
+
+        if ip_attn_output is not None:
             hidden_states = hidden_states + ip_attn_output
 
         # Process attention outputs for the `encoder_hidden_states`.
@@ -161,8 +181,10 @@ class FluxTransformerBlock(nn.Module):
 
         context_ff_output = self.ff_context(norm_encoder_hidden_states)
         encoder_hidden_states = encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
-        if encoder_hidden_states.dtype == torch.float16:
-            encoder_hidden_states = encoder_hidden_states.clip(-65504, 65504)
+        # if encoder_hidden_states.dtype == torch.float16:
+        #     encoder_hidden_states = encoder_hidden_states.clip(-65504, 65504)
+        
+        encoder_hidden_states = encoder_hidden_states.clip(-65504, 65504)
 
         return encoder_hidden_states, hidden_states
 
@@ -512,14 +534,14 @@ class FluxTransformer2DModel(nn.Module):
             # controlnet residual
             if controlnet_block_samples is not None:
                 interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
-                interval_control = int(np.ceil(interval_control))
+                # interval_control = int(np.ceil(interval_control))
                 # For Xlabs ControlNet.
                 if controlnet_blocks_repeat:
                     hidden_states = (
                         hidden_states + controlnet_block_samples[index_block % len(controlnet_block_samples)]
                     )
                 else:
-                    hidden_states = hidden_states + controlnet_block_samples[index_block // interval_control]
+                    hidden_states = hidden_states + controlnet_block_samples[int(index_block / interval_control)]
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
         for index_block, block in enumerate(self.single_transformer_blocks):
@@ -542,10 +564,10 @@ class FluxTransformer2DModel(nn.Module):
             # controlnet residual
             if controlnet_single_block_samples is not None:
                 interval_control = len(self.single_transformer_blocks) / len(controlnet_single_block_samples)
-                interval_control = int(np.ceil(interval_control))
+                # interval_control = int(np.ceil(interval_control))
                 hidden_states[:, encoder_hidden_states.shape[1] :, ...] = (
                     hidden_states[:, encoder_hidden_states.shape[1] :, ...]
-                    + controlnet_single_block_samples[index_block // interval_control]
+                    + controlnet_single_block_samples[int(index_block / interval_control)]
                 )
 
         hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :, ...]

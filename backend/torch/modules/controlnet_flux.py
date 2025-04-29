@@ -18,6 +18,7 @@ import inspect
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.fx
 import torch.nn as nn
 
 from safetensors.torch import load_file
@@ -26,8 +27,9 @@ from backend.torch.layers.embeddings import CombinedTimestepGuidanceTextProjEmbe
 from backend.torch.modules.transformer_flux import FluxSingleTransformerBlock, FluxTransformerBlock
 from backend.torch.utils import zero_module
 
-class FluxControlNetModel(nn.Module):
+torch.fx.wrap('len')
 
+class FluxControlNetModel(nn.Module):
     @classmethod
     def from_config(cls, config_path, weight_path):
         with open(config_path, "r", encoding="utf-8") as f:
@@ -391,10 +393,13 @@ class FluxControlNetModel(nn.Module):
         controlnet_block_samples = [sample * conditioning_scale for sample in controlnet_block_samples]
         controlnet_single_block_samples = [sample * conditioning_scale for sample in controlnet_single_block_samples]
 
-        controlnet_block_samples = None if len(controlnet_block_samples) == 0 else controlnet_block_samples
-        controlnet_single_block_samples = (
-            None if len(controlnet_single_block_samples) == 0 else controlnet_single_block_samples
-        )
+        controlnet_block_samples = controlnet_block_samples or None
+        controlnet_single_block_samples = controlnet_single_block_samples or None
+
+        # controlnet_block_samples = None if len(controlnet_block_samples) == 0 else controlnet_block_samples
+        # controlnet_single_block_samples = (
+        #     None if len(controlnet_single_block_samples) == 0 else controlnet_single_block_samples
+        # )
 
         return (controlnet_block_samples, controlnet_single_block_samples)
 

@@ -53,7 +53,7 @@ class BaseSampler:
         if self._valid_timestep():
             self.sample_line.append({
                 "timestep": self.cur_t,
-                "output": self._process_tensor_tree(output),
+                "output": self._process_tensor_tree(output[0]),
             })
         
         self._trigger_timestep()
@@ -66,7 +66,7 @@ class BaseSampler:
                     'args': self._process_tensor_tree(args),
                     'kwargs': self._process_tensor_tree(kwargs),
                 },
-                "output": self._process_tensor_tree(output),
+                "output": self._process_tensor_tree(output[0]),
             })
         
         self._trigger_timestep()
@@ -89,10 +89,11 @@ class BaseSampler:
         yield self.sample_line
         self.sample_line = []
 
-    def sample(self, model: nn.Module, data_loader: torch.utils.data.DataLoader, sample_layer: Literal['dit', 'controlnet'] = 'dit', max_timestep=30, sample_size=1, timestep_per_sample=5, sample_mode: Literal['input', 'output', 'inoutput'] = 'input', device='cpu', **kwargs):
+    def sample(self, model: nn.Module, data_loader: torch.utils.data.DataLoader, target_layer=None, sample_layer: Literal['dit', 'controlnet'] = 'dit', max_timestep=30, sample_size=1, timestep_per_sample=5, sample_mode: Literal['input', 'output', 'inoutput'] = 'input', device='cpu', **kwargs):
         self.device = device
         
-        target_layer = model_map[sample_layer](model)
+        if target_layer is None:
+            target_layer = model_map[sample_layer](model)
         sample_count = 0
         for batch in data_loader:
             batch_size = len(batch)
@@ -131,6 +132,8 @@ if __name__ == '__main__':
     from dataset.coco.coco_dataset import COCODataset
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
     from backend.torch.models.flux_controlnet import FluxControlNetModel
+    from scipy.stats import skew
+    import matplotlib.pyplot as plt
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # model = FluxControlNetModel.from_repo(('../FLUX.1-dev', '../FLUX.1-dev-Controlnet-Canny'), device)
@@ -141,11 +144,17 @@ if __name__ == '__main__':
     sampler = Q_DiffusionSampler()
     for sample_data in sampler.sample(model, 
                                       dataset.get_dataloader(), 
+                                      target_layer=model.controlnet.transformer_blocks[0].norm1.linear,
                                       sample_layer='dit', 
                                       max_timestep=30, 
                                       sample_size=1, 
-                                      timestep_per_sample=5, 
-                                      sample_mode='input',
+                                      timestep_per_sample=10, 
+                                      sample_mode='inoutput',
                                       controlnet_conditioning_scale=0.7,
                                       guidance_scale=3.5):
-        print(sample_data)
+        
+        for d in sample_data:
+            t = d['timestep']
+
+            input = d['input']['args'][0][0]
+            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = d['output'].chunk(6, dim=1)
