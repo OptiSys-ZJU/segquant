@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import fnmatch
 
 from segquant.config import DType, SegPattern, default_quantize_config
 from segquant.layers.SegmentLinear import BaseSegmentLinear, create_segment_linear
@@ -79,12 +80,27 @@ def trace_all_linears(model: nn.Module, calib_data_loader: torch.utils.data.Data
     
     return seg_linear_inputs
 
+def filter_disabled(seg_linear_inputs, config):
+    disable_patterns = [k for k, v in config.items() if k != "default" and v.get("enable") is False]
+    keys_to_remove = set()
+    for key in seg_linear_inputs.keys():
+        for pattern in disable_patterns:
+            if fnmatch.fnmatch(key, pattern):
+                keys_to_remove.add(key)
+                break
+    for key in keys_to_remove:
+        del seg_linear_inputs[key]
+
 def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, config=None, verbose=False, example=None,):
     device = next(model.parameters()).device
     final_config = config or default_quantize_config
     final_config['default'] = final_config.get('default', default_quantize_config['default'])
 
+    if not final_config['default']['enable']:
+        return model
+
     seg_linear_inputs = trace_all_linears(model, calib_data_loader, device)
+    filter_disabled(seg_linear_inputs, final_config)
 
     seg_names = set()
     dual_scale_linears = set()
@@ -105,8 +121,9 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
         for l in seg_result.values():
             for seg_linear_config in l:
                 name = seg_linear_config['linear_name']
-                replace_named_linear(model, name, seg_linear_config, final_config, dual_scale=(name in dual_scale_linears))
-                seg_names.add(name)
+                if name in seg_linear_inputs:
+                    replace_named_linear(model, name, seg_linear_config, final_config, dual_scale=(name in dual_scale_linears))
+                    seg_names.add(name)
 
     for name in seg_linear_inputs.keys():
         if name not in seg_names:

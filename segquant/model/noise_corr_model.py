@@ -106,6 +106,27 @@ def to_device(obj, device):
     else:
         raise TypeError(f"Unsupported type: {type(obj)}")
 
+def evaluate_init(batch_size, path, device='cuda'):
+    dataset = NoiseDiffDataset(data_dir=f'../noise_dataset/{path}')
+    data_loader = dataset.get_dataloader(batch_size=batch_size, shuffle=True)
+
+    total_loss = 0.0
+    loss_fn = MSE_QNSR_Loss(lambda_mse=0.5, lambda_qnsr=0.5)
+
+    with torch.no_grad():
+        for batch in data_loader:
+            real = to_device(batch['real_noise_pred'].squeeze(), device)
+            quant = to_device(batch['quant_noise_pred'].squeeze(), device)
+            target = real
+            
+            loss = loss_fn(target, quant)
+
+            total_loss += loss.item()
+
+    avg_loss = total_loss / len(data_loader)
+    print(f"Evaluation Init {path} Loss: {avg_loss:.6f}")
+    return avg_loss
+
 def evaluate(model, batch_size, path, device='cuda'):
     dataset = NoiseDiffDataset(data_dir=f'../noise_dataset/{path}')
     data_loader = dataset.get_dataloader(batch_size=batch_size, shuffle=True)
@@ -153,13 +174,16 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-2)
     scheduler = ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=5,
-        cooldown=3, min_lr=1e-6
+        cooldown=3, min_lr=1e-5
     )
 
     loss_fn = MSE_QNSR_Loss(lambda_mse=0.5, lambda_qnsr=0.5)
 
     loss_history = []
     best_loss = None
+
+    eval_loss = evaluate_init(batch_size, 'val', device)
+    eval_loss = evaluate_init(batch_size, 'train', device)
 
     model.train()
     for epoch in range(epochs):
@@ -213,4 +237,4 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
 
 
 if __name__ == '__main__':
-    train(epochs=1000, lr=1e-2, batch_size=32, device='cuda', eval_every=1)
+    train(epochs=1000, lr=1e-2, batch_size=32, device='cuda', eval_every=5)
