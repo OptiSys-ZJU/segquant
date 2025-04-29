@@ -75,7 +75,7 @@ def smooth_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: 
                 def hook_fn(mod, inp, out):
                     if n in to_calib_linears:
                         if hasattr(to_calib_linears[n], 'trace'):
-                            to_calib_linears[n].trace(inp[0].detach().cpu())
+                            to_calib_linears[n].trace(inp[0])
                 return hook_fn
 
             hooks.append(module.register_forward_hook(get_hook(name)))
@@ -99,7 +99,7 @@ def calib_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: t
             def get_hook(n):
                 def hook_fn(mod, inp, out):
                     if n in to_calib_linears:
-                        to_calib_linears[n].calibrate(inp[0].detach().cpu())
+                        to_calib_linears[n].calibrate(inp[0])
                 return hook_fn
 
             hooks.append(module.register_forward_hook(get_hook(name)))
@@ -138,6 +138,9 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
     filter_disabled(linears, final_config)
     to_calib_linears = {}
 
+    if verbose:
+        print(f'get valid linear num [{len(linears)}]')
+
     enable_seg = any(cfg.get("seglinear") for cfg in final_config.values())
     if enable_seg:
         example = example if example is not None else calib_data_loader.dataset[0]
@@ -162,8 +165,14 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
     for name in linears:
         to_calib_linears[name] = create_linear(linears[name], name, {'chunks': 1, 'seg_mode': 'weight'}, final_config)
 
+    if verbose:
+        print('start smooth ...')
     smooth_linears(model, to_calib_linears, calib_data_loader, device)
+    if verbose:
+        print('start calibrate ...')
     calib_linears(model, to_calib_linears, calib_data_loader, device)
+    if verbose:
+        print('start replace ...')
     replace_linears(model, to_calib_linears)
     
     if verbose:

@@ -13,7 +13,7 @@ def cali(quant_layer):
     dataset = COCODataset(path='../dataset/controlnet_datasets/controlnet_canny_dataset', cache_size=16)
     calibset = generate_calibrate_set(model, Q_DiffusionSampler(), dataset.get_dataloader(batch_size=1), quant_layer, 
                                         max_timestep=30, 
-                                        sample_size=64, 
+                                        sample_size=32, 
                                         timestep_per_sample=30, 
                                         controlnet_conditioning_scale=0.7,
                                         guidance_scale=3.5)
