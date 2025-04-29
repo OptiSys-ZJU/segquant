@@ -13,8 +13,8 @@ def cali(quant_layer):
     dataset = COCODataset(path='../dataset/controlnet_datasets/controlnet_canny_dataset', cache_size=16)
     calibset = generate_calibrate_set(model, Q_DiffusionSampler(), dataset.get_dataloader(batch_size=1), quant_layer, 
                                         max_timestep=30, 
-                                        sample_size=8, 
-                                        timestep_per_sample=10, 
+                                        sample_size=64, 
+                                        timestep_per_sample=30, 
                                         controlnet_conditioning_scale=0.7,
                                         guidance_scale=3.5)
     return calibset
@@ -38,9 +38,9 @@ def sample_noise_output(config, calibset, latents, quant_layer):
                                       dataset.get_dataloader(), 
                                       target_layer=model.transformer,
                                       sample_layer='dit', 
-                                      max_timestep=50, 
-                                      sample_size=8, 
-                                      timestep_per_sample=50, 
+                                      max_timestep=30, 
+                                      sample_size=1, 
+                                      timestep_per_sample=30, 
                                       sample_mode='output',
                                       controlnet_conditioning_scale=0.7,
                                       guidance_scale=3.5,
@@ -167,8 +167,8 @@ if __name__ == '__main__':
         'default': default_config,
         # 'seg': seg_config,
         # 'seg_dual': seg_dual_config,
-        'latent': enable_latent_config,
-        'time': enable_time_config,
+        # 'latent': enable_latent_config,
+        # 'time': enable_time_config,
     }
 
     latents = torch.load('../latents.pt')

@@ -46,10 +46,13 @@ def forward_loop(model):
 class TestModel(nn.Module):
     def __init__(self):
         super().__init__()
-        self.linear = nn.Linear(in_features=10, out_features=5, bias=False)
+        self.linear1 = nn.Linear(in_features=10, out_features=5, bias=False)
+        self.linear2 = nn.Linear(in_features=5, out_features=5, bias=False)
     
     def forward(self, x):
-        return self.linear(x)
+        y = self.linear1(x)
+        z = self.linear2(y)
+        return z
 
 def test_default_int8():
     test_model = TestModel()

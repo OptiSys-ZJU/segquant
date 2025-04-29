@@ -125,16 +125,16 @@ class DefaultSegmentLinear(BaseSegmentLinear):
         else:
             return base + f"  calib=False\n)"
 
-    def calibrate(self, input_datas):
+    def calibrate(self, input_data):
         if self.seg_mode == 'input':
-            inputs = [self.splitter.split_input(input_data) for input_data in input_datas]
+            input = self.splitter.split_input(input_data)
             weight = [self.linear.weight]
         elif self.seg_mode == 'weight':
-            inputs = [[input_data] for input_data in input_datas]
+            input = [input_data]
             weight = self.splitter.split_weight(self.linear.weight)
-        
-        self.calibrator.calibrate(inputs, weight)
+        self.calibrator.calibrate(input, weight)
 
+    def finish_calibrate(self):
         quantized_weight = self.calibrator.quantize_weight()
         if self.seg_mode == 'weight':
             self.linear.weight = nn.Parameter(self.splitter.concat_weight(quantized_weight))
@@ -242,16 +242,30 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
         else:
             return base + f"  calib=False\n)"
 
-    def calibrate(self, input_datas):
+    def trace(self, input_data):
         if self.seg_mode == 'input':
-            inputs = [self.splitter.split_input(input_data) for input_data in input_datas]
+            input = self.splitter.split_input(input_data)
             weight = self.linear.weight.split(self.chunksizes, dim=1)
         elif self.seg_mode == 'weight':
-            inputs = [[input_data] for input_data in input_datas]
+            input = [input_data]
             weight = self.splitter.split_weight(self.linear.weight)
         
-        self.calibrator.calibrate(inputs, weight)
+        self.calibrator.trace(input, weight)
+    
+    def smooth(self):
+        self.calibrator.smooth()
 
+    def calibrate(self, input_data):
+        if self.seg_mode == 'input':
+            input = self.splitter.split_input(input_data)
+            weight = self.linear.weight.split(self.chunksizes, dim=1)
+        elif self.seg_mode == 'weight':
+            input = [input_data]
+            weight = self.splitter.split_weight(self.linear.weight)
+        
+        self.calibrator.calibrate(input, weight)
+
+    def finish_calibrate(self):
         quantized_weight = self.calibrator.quantize_weight()
         if self.seg_mode == 'weight':
             self.linear.weight = nn.Parameter(self.splitter.concat_weight(quantized_weight))
@@ -265,7 +279,7 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
             self.linear = (layers, bias)
         
         self.has_calibrated = True
-
+    
     def forward(self, x):
         if self.seg_mode == 'input':
             input = self.splitter.split_input(x)

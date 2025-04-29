@@ -29,13 +29,8 @@ def get_quantization_config(final_config, name, dtype=None, input_axis=None, wei
     
     return dtype, input_axis, weight_axis, alpha
 
-def replace_named_linear(model, layer_name, seg_linear_config, final_config, dtype=None, dual_scale=False, input_axis=None, weight_axis=None, alpha=None):
-    parts = layer_name.split(".")
-    module = model
-    for part in parts[:-1]:
-        module = module[int(part)] if part.isdigit() else getattr(module, part)
-    
-    old_linear = getattr(module, parts[-1])
+def create_linear(layer, layer_name, seg_linear_config, final_config, dtype=None, dual_scale=False, input_axis=None, weight_axis=None, alpha=None):
+    old_linear = layer
     device = old_linear.weight.device
     old_dtype = old_linear.weight.dtype
     has_bias = hasattr(old_linear, "bias") and old_linear.bias is not None
@@ -55,17 +50,32 @@ def replace_named_linear(model, layer_name, seg_linear_config, final_config, dty
         new_linear.linear.bias.data.copy_(old_linear.bias.data)
     
     new_linear = new_linear.to(device).to(old_dtype)
-    setattr(module, parts[-1], new_linear)
+    return new_linear
 
-def trace_all_linears(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, device):
-    seg_linear_inputs = {}
-    hooks = []
+def replace_linears(model, to_replace_linears: dict):
+    for layer_name, new_linear in to_replace_linears.items():
+        parts = layer_name.split(".")
+        module = model
+        for part in parts[:-1]:
+            module = module[int(part)] if part.isdigit() else getattr(module, part)
+        setattr(module, parts[-1], new_linear)
+
+def get_all_linears(model: nn.Module):
+    linears = {}
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear):
-            seg_linear_inputs[name] = []
+            linears[name] = module
+    return linears
+
+def smooth_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: torch.utils.data.DataLoader, device):
+    hooks = []
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear) and name in to_calib_linears:
             def get_hook(n):
                 def hook_fn(mod, inp, out):
-                    seg_linear_inputs[n].append(inp[0].detach().cpu())
+                    if n in to_calib_linears:
+                        if hasattr(to_calib_linears[n], 'trace'):
+                            to_calib_linears[n].trace(inp[0].detach().cpu())
                 return hook_fn
 
             hooks.append(module.register_forward_hook(get_hook(name)))
@@ -78,18 +88,43 @@ def trace_all_linears(model: nn.Module, calib_data_loader: torch.utils.data.Data
     for h in hooks:
         h.remove()
     
-    return seg_linear_inputs
+    for l in to_calib_linears.values():
+        if hasattr(l, 'smooth'):
+            l.smooth()
 
-def filter_disabled(seg_linear_inputs, config):
+def calib_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: torch.utils.data.DataLoader, device):
+    hooks = []
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear) and name in to_calib_linears:
+            def get_hook(n):
+                def hook_fn(mod, inp, out):
+                    if n in to_calib_linears:
+                        to_calib_linears[n].calibrate(inp[0].detach().cpu())
+                return hook_fn
+
+            hooks.append(module.register_forward_hook(get_hook(name)))
+    
+    model.eval()
+    with torch.no_grad():
+        for batch in calib_data_loader:
+            this_input_tuple = move_to_device(batch[0], device)
+            model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(**this_input_tuple)    
+    for h in hooks:
+        h.remove()
+    
+    for l in to_calib_linears.values():
+        l.finish_calibrate()
+
+def filter_disabled(linears, config):
     disable_patterns = [k for k, v in config.items() if k != "default" and v.get("enable") is False]
     keys_to_remove = set()
-    for key in seg_linear_inputs.keys():
+    for key in linears.keys():
         for pattern in disable_patterns:
             if fnmatch.fnmatch(key, pattern):
                 keys_to_remove.add(key)
                 break
     for key in keys_to_remove:
-        del seg_linear_inputs[key]
+        del linears[key]
 
 def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, config=None, verbose=False, example=None,):
     device = next(model.parameters()).device
@@ -99,11 +134,9 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
     if not final_config['default']['enable']:
         return model
 
-    seg_linear_inputs = trace_all_linears(model, calib_data_loader, device)
-    filter_disabled(seg_linear_inputs, final_config)
-
-    seg_names = set()
-    dual_scale_linears = set()
+    linears = get_all_linears(model)
+    filter_disabled(linears, final_config)
+    to_calib_linears = {}
 
     enable_seg = any(cfg.get("seglinear") for cfg in final_config.values())
     if enable_seg:
@@ -114,6 +147,7 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
                                                search_patterns=[p.value for p in final_config['default']['search_patterns']])
         seg_result = seg_detector.find_all_patterns()
 
+        dual_scale_linears = set()
         if 'activation_to_linear' in seg_result:
             dual_scale_linears = set(seg_result['activation_to_linear'])
             del seg_result['activation_to_linear']
@@ -121,19 +155,16 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
         for l in seg_result.values():
             for seg_linear_config in l:
                 name = seg_linear_config['linear_name']
-                if name in seg_linear_inputs:
-                    replace_named_linear(model, name, seg_linear_config, final_config, dual_scale=(name in dual_scale_linears))
-                    seg_names.add(name)
+                if name in linears:
+                    to_calib_linears[name] = create_linear(linears[name], name, seg_linear_config, final_config, dual_scale=(name in dual_scale_linears))
+                    del linears[name]
 
-    for name in seg_linear_inputs.keys():
-        if name not in seg_names:
-            replace_named_linear(model, name, {'chunks': 1, 'seg_mode': 'weight'}, final_config)
+    for name in linears:
+        to_calib_linears[name] = create_linear(linears[name], name, {'chunks': 1, 'seg_mode': 'weight'}, final_config)
 
-    for name, module in model.named_modules():
-        if isinstance(module, BaseSegmentLinear):
-            if verbose:
-                print(f"Calibrating {name} with {len(seg_linear_inputs[name])} samples")
-            module.calibrate(move_to_device(seg_linear_inputs[name], device))
+    smooth_linears(model, to_calib_linears, calib_data_loader, device)
+    calib_linears(model, to_calib_linears, calib_data_loader, device)
+    replace_linears(model, to_calib_linears)
     
     if verbose:
         print(model)
