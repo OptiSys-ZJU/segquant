@@ -57,8 +57,25 @@ class NoiseCorrModel(nn.Module):
             nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),  # (32, 64, 64)
             nn.ReLU(),
             nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2, padding=1),  # (16, 128, 128)
-            nn.Tanh(),
         )
+
+        def init_last_layer(layer):
+            if hasattr(layer, 'weight') and layer.weight is not None:
+                nn.init.constant_(layer.weight, 0.0)
+            if hasattr(layer, 'bias') and layer.bias is not None:
+                nn.init.constant_(layer.bias, 0.0)
+
+        init_last_layer(self.decoder[-1])
+        self.init_lstm_weights()
+
+    def init_lstm_weights(self):
+        for name, param in self.lstm.named_parameters():
+            if 'weight_ih' in name:
+                nn.init.xavier_uniform_(param)
+            elif 'weight_hh' in name:
+                nn.init.orthogonal_(param)
+            elif 'bias' in name:
+                nn.init.constant_(param, 0.0)
     
     def __encode__(self, noise):
         B, T, C, H, W = noise.shape  # B=batch, T=window_size
@@ -87,14 +104,14 @@ class NoiseCorrModel(nn.Module):
             uncond_pred = self.__lstm__(uncond_feats, history_timestep, history_controlnet_scale, zero_guidance_scale)
             text_pred = self.__lstm__(text_feats, history_timestep, history_controlnet_scale, zero_guidance_scale)
 
-            uncond_noise = uncond_pred * history_uncond[:, -1, :, :, :]
-            text_noise = text_pred * history_text[:, -1, :, :, :]
+            uncond_noise = (1.0 + uncond_pred) * history_uncond[:, -1, :, :, :]
+            text_noise = (1.0 + text_pred) * history_text[:, -1, :, :, :]
 
-            final_noise = uncond_noise + history_guidance_scale[:, 0].view(-1, 1, 1, 1) * (uncond_noise - text_noise)
+            final_noise = uncond_noise + history_guidance_scale[:, 0].view(-1, 1, 1, 1) * (text_noise - uncond_noise)
         else:
             feats = self.__encode__(history_noise_pred)
             final_error = self.__lstm__(feats, history_timestep, history_controlnet_scale, history_guidance_scale)
-            final_noise = final_error * history_noise_pred[:, -1, :, :, :]
+            final_noise = (1.0 + final_error) * history_noise_pred[:, -1, :, :, :]
 
         return final_noise
 class NoiseCorrTransformerModel(nn.Module):
@@ -250,7 +267,7 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, path='
     model = NoiseCorrModel(hidden_dim=256).to(device)
     # model = NoiseCorrTransformerModel(hidden_dim=256).to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     # total_steps = epochs * len(data_loader)
     # num_warmup_steps = max(1, int(0.1 * total_steps))
     # scheduler = get_cosine_schedule_with_warmup(
@@ -265,7 +282,6 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, path='
     )
 
     evaluate_init(batch_size, path, device)
-    # evaluate_init(batch_size, path, device)
 
     loss_fn = MSE_QNSR_Loss(lambda_mse=0.5, lambda_qnsr=0.5)
 
@@ -324,4 +340,4 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, path='
     plt.savefig("loss_curve.png")
 
 if __name__ == '__main__':
-    train(epochs=500, lr=2e-4, batch_size=32, device='cuda', eval_every=1, path='')
+    train(epochs=500, lr=2e-4, batch_size=32, device='cuda', eval_every=1, path='noise_dataset_dit')
