@@ -23,6 +23,8 @@ final = torch.stack([chunk.mean(dim=1) for chunk in in_bins], dim=1)
 
 data = final.numpy()
 print(data.shape)
+np.savetxt("weight.csv", data, delimiter=",")
+
 y_vals = np.linspace(0, 9216, data.shape[0])
 x_vals = np.linspace(0, 1536, data.shape[1])
 X, Y = np.meshgrid(x_vals, y_vals)

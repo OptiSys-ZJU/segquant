@@ -95,9 +95,10 @@ class SmoothQuantCalibrator(BaseCalibrator):
         self.quantized_weights = None
 
     def _trace_max_w(self, weight: List[torch.Tensor]):
-        for i, weight_chunk in enumerate(weight):
-            weight_chunk_max = weight_chunk.abs().amax(dim=tuple(range(weight_chunk.ndim - 1)), keepdim=True).squeeze()
-            self.max_w.append(weight_chunk_max)
+        if len(self.max_w) < self.chunks:
+            for i, weight_chunk in enumerate(weight):
+                weight_chunk_max = weight_chunk.abs().amax(dim=tuple(range(weight_chunk.ndim - 1)), keepdim=True).squeeze()
+                self.max_w.append(weight_chunk_max)
     
     def _trace_max_x(self, input: List[torch.Tensor]):
         for i, input_chunk in enumerate(input):

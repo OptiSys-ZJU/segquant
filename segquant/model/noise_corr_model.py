@@ -46,7 +46,6 @@ class NoiseCorrModel(nn.Module):
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # (64, 32, 32)
             nn.ReLU(),
-            # nn.Dropout(dropout_rate)
         )
         self.flatten_dim = 64 * 32 * 32
 
@@ -59,7 +58,6 @@ class NoiseCorrModel(nn.Module):
             nn.ReLU(),
             nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2, padding=1),  # (16, 128, 128)
             nn.Tanh(),
-            # nn.Dropout(dropout_rate)
         )
     
     def __encode__(self, noise):
@@ -183,14 +181,15 @@ def to_device(obj, device):
         raise TypeError(f"Unsupported type: {type(obj)}")
 
 def evaluate_init(batch_size, path, device='cuda'):
-    dataset = NoiseDiffDataset(data_dir=f'../noise_dataset/{path}')
+    dataset = NoiseDiffDataset(data_dir=f'../{path}/val')
     data_loader = dataset.get_dataloader(batch_size=batch_size, shuffle=True)
 
     total_loss = 0.0
     loss_fn = MSE_QNSR_Loss(lambda_mse=0.5, lambda_qnsr=0.5)
 
     with torch.no_grad():
-        for batch in data_loader:
+        pbar = tqdm(data_loader, desc=f"Evaluating Init [{path}/val]")
+        for batch in pbar:
             real = to_device(batch['real_noise_pred'].squeeze(), device)
             quant = to_device(batch['quant_noise_pred'].squeeze(), device)
             target = real
@@ -198,13 +197,14 @@ def evaluate_init(batch_size, path, device='cuda'):
             loss = loss_fn(target, quant)
 
             total_loss += loss.item()
+            pbar.set_postfix(loss=loss.item())
 
     avg_loss = total_loss / len(data_loader)
     print(f"Evaluation Init {path} Loss: {avg_loss:.6f}")
     return avg_loss
 
 def evaluate(model, batch_size, path, device='cuda'):
-    dataset = NoiseDiffDataset(data_dir=f'../noise_dataset/{path}')
+    dataset = NoiseDiffDataset(data_dir=f'../{path}/val')
     data_loader = dataset.get_dataloader(batch_size=batch_size, shuffle=True)
 
     model.eval()
@@ -212,7 +212,8 @@ def evaluate(model, batch_size, path, device='cuda'):
     loss_fn = MSE_QNSR_Loss(lambda_mse=0.5, lambda_qnsr=0.5)
 
     with torch.no_grad():
-        for batch in data_loader:
+        pbar = tqdm(data_loader, desc=f"Evaluating [{path}/val]")
+        for batch in pbar:
             real = to_device(batch['real_noise_pred'].squeeze(), device)
             quant = to_device(batch['quant_noise_pred'].squeeze(), device)
             target = real
@@ -227,6 +228,7 @@ def evaluate(model, batch_size, path, device='cuda'):
             loss = loss_fn(target, res)
 
             total_loss += loss.item()
+            pbar.set_postfix(loss=loss.item())
 
     avg_loss = total_loss / len(data_loader)
     print(f"Evaluation {path} Loss: {avg_loss:.6f}")
@@ -241,29 +243,29 @@ def save_model(model, optimizer, epoch, filepath):
     }, filepath)
     print(f"Model saved to {filepath}")
 
-def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_path="noise_corr_model.pth"):
-    dataset = NoiseDiffDataset(data_dir='../noise_dataset/train')
+def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, path='noise_dataset', save_path="noise_corr_model.pth"):
+    dataset = NoiseDiffDataset(data_dir=f'../{path}/train')
     data_loader = dataset.get_dataloader(batch_size=batch_size, shuffle=True)
 
-    # model = NoiseCorrModel(hidden_dim=256, dropout_rate=0.1).to(device)
-    model = NoiseCorrTransformerModel(hidden_dim=256).to(device)
+    model = NoiseCorrModel(hidden_dim=256).to(device)
+    # model = NoiseCorrTransformerModel(hidden_dim=256).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
-    total_steps = epochs * len(data_loader)
-    num_warmup_steps = int(0.1 * total_steps)
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=num_warmup_steps,
-        num_training_steps=total_steps
-    )
-
-    # scheduler = ReduceLROnPlateau(
-    #     optimizer, mode='min', factor=0.5, patience=5,
-    #     cooldown=3, min_lr=1e-5
+    # total_steps = epochs * len(data_loader)
+    # num_warmup_steps = max(1, int(0.1 * total_steps))
+    # scheduler = get_cosine_schedule_with_warmup(
+    #     optimizer=optimizer,
+    #     num_warmup_steps=num_warmup_steps,
+    #     num_training_steps=total_steps
     # )
 
-    evaluate_init(batch_size, 'val', device)
-    evaluate_init(batch_size, 'train', device)
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5,
+        cooldown=3, min_lr=1e-5
+    )
+
+    evaluate_init(batch_size, path, device)
+    # evaluate_init(batch_size, path, device)
 
     loss_fn = MSE_QNSR_Loss(lambda_mse=0.5, lambda_qnsr=0.5)
 
@@ -286,12 +288,12 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
             history_controlnet_scale = to_device(batch['history_controlnet_scale'], device)
             history_guidance_scale = to_device(batch['history_guidance_scale'], device)
 
+            optimizer.zero_grad(set_to_none=True)
             pred = model(history_noise_pred, history_timestep, history_controlnet_scale, history_guidance_scale)
             loss = loss_fn(pred, target)
-            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            scheduler.step()
+            # scheduler.step()
             total_loss += loss.item()
             global_step += 1
 
@@ -303,7 +305,8 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
 
         if (epoch + 1) % eval_every == 0:
             print(f"Evaluating at epoch {epoch+1}")
-            val_loss = evaluate(model, batch_size, 'val', device)
+            val_loss = evaluate(model, batch_size, path, device)
+            scheduler.step(val_loss)
             print(f"[Epoch {epoch+1}] Val Loss: {val_loss:.6f}")
 
             if val_loss < best_loss:
@@ -321,4 +324,4 @@ def train(epochs=100, lr=1e-4, batch_size=1, device='cuda', eval_every=1, save_p
     plt.savefig("loss_curve.png")
 
 if __name__ == '__main__':
-    train(epochs=1000, lr=1e-4, batch_size=32, device='cuda', eval_every=5)
+    train(epochs=500, lr=2e-4, batch_size=32, device='cuda', eval_every=1, path='')
