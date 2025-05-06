@@ -137,9 +137,8 @@ class IntQuantizer(FakeQuantizer):
     def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
         if self.symmetric and self.dual_scale:
             if self.axis is not None:
-                # 创建一个与x相同维度的形状，除axis外其他维度都为1
                 shape = [1] * x.dim()
-                shape[self.axis] = -1  # 在指定轴上扩展
+                shape[self.axis] = -1
                 pos_scale = self.pos_scale.view(shape)
                 neg_scale = self.neg_scale.view(shape)
             else:

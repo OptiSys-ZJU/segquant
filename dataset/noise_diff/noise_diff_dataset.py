@@ -200,14 +200,14 @@ if __name__ == '__main__':
         sampler = Q_DiffusionSampler()
         sample_dataloader = dataset.get_dataloader(batch_size=1)
         calibset = generate_calibrate_set(model_real, sampler, sample_dataloader, quant_layer, 
-                                          max_timestep=30,
+                                          max_timestep=60,
                                           sample_size=16,
-                                          timestep_per_sample=10,
+                                          timestep_per_sample=30,
                                           controlnet_conditioning_scale=0.7,
                                           guidance_scale=7)
 
         calib_loader = calibset.get_dataloader(batch_size=1)
-        model_real.controlnet = quantize(model_map[quant_layer](model_real), calib_loader, config, True)
+        model_real.transformer = quantize(model_map[quant_layer](model_real), calib_loader, config, True)
         return model_real
     
     from segquant.config import DType, SegPattern
@@ -217,16 +217,20 @@ if __name__ == '__main__':
             "dtype": DType.INT8SMOOTH,
             "seglinear": True,
             'search_patterns': SegPattern.all(),
+            "input_axis": None,
+            "weight_axis": None,
+            "alpha": 1.0,
         },
     }
     
     ##### quant model
-    model_quant = quant_model(model, 'controlnet', config).to('cpu')
+    model_quant = quant_model(model, 'dit', config).to('cpu')
 
     ##### load real model
     model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
 
     ##### dump data
-    #generate_n_dump_noise('../noise_dataset/train', model_real, model_quant, dataset, 'cuda:0', max_timestep=30, sample_size=64, timestep_per_sample=30, window_size=3, controlnet_scales=[0.7], guidance_scales=[7], shuffle=True)
-    generate_n_dump_noise('../noise_dataset/val', model_real, model_quant, dataset, 'cuda:0', max_timestep=30, sample_size=8, timestep_per_sample=30, window_size=3, controlnet_scales=[0.7], guidance_scales=[7], shuffle=True)
+    path = 'noise_dataset_dit'
+    generate_n_dump_noise(f'../{path}/train', model_real, model_quant, dataset, 'cuda:0', max_timestep=60, sample_size=250, timestep_per_sample=60, window_size=3, controlnet_scales=[0.7], guidance_scales=[7], shuffle=True)
+    generate_n_dump_noise(f'../{path}/val', model_real, model_quant, dataset, 'cuda:0', max_timestep=60, sample_size=50, timestep_per_sample=60, window_size=3, controlnet_scales=[0.7], guidance_scales=[7], shuffle=True)
 

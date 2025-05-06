@@ -13,6 +13,7 @@ class DefaultCalibrator(BaseCalibrator):
 
         assert len(self.input_quantizers) == 1 or len(self.weight_quantizers) == 1
         self.chunks = len(self.weight_quantizers) if len(self.input_quantizers) == 1 else len(self.input_quantizers)
+        self.quantized_weight = None
 
     def _calibrate_weight(self, weight: List[torch.Tensor]):
         assert len(weight) == len(self.weight_quantizers)
@@ -30,7 +31,7 @@ class DefaultCalibrator(BaseCalibrator):
         for q, input_chunk in zip(self.input_quantizers, input):
             q.calibrate(input_chunk)
 
-    def calibrate(self, inputs: List[List[torch.Tensor]], weight: List[torch.Tensor]):
+    def calibrate(self, input: List[torch.Tensor], weight: List[torch.Tensor]):
         '''
         input segment: 
             input: [tensor(batch_size * split_size1), tensor(batch_size * split_size2), ...]
@@ -41,9 +42,9 @@ class DefaultCalibrator(BaseCalibrator):
             weight: [tensor(out_features, split_size1), tensor(out_features, split_size2), ...]
         '''
         
-        for input in inputs:
-            self._calibrate_input(input)
-        self.quantized_weight = self._calibrate_weight(weight)
+        self._calibrate_input(input)
+        if self.quantized_weight is None:
+            self.quantized_weight = self._calibrate_weight(weight)
     
     def quantize_weight(self):
         '''
@@ -91,10 +92,13 @@ class SmoothQuantCalibrator(BaseCalibrator):
         self.max_x = []  # if dual_s: [(neg_max, pos_max), ...] else: [max, ...]
         self.s = [None] * self.chunks  # if dual_s: [(neg_s, pos_s), ...] else: [s, ...]
 
+        self.quantized_weights = None
+
     def _trace_max_w(self, weight: List[torch.Tensor]):
-        for i, weight_chunk in enumerate(weight):
-            weight_chunk_max = weight_chunk.abs().amax(dim=tuple(range(weight_chunk.ndim - 1)), keepdim=True).squeeze()
-            self.max_w.append(weight_chunk_max)
+        if len(self.max_w) < self.chunks:
+            for i, weight_chunk in enumerate(weight):
+                weight_chunk_max = weight_chunk.abs().amax(dim=tuple(range(weight_chunk.ndim - 1)), keepdim=True).squeeze()
+                self.max_w.append(weight_chunk_max)
     
     def _trace_max_x(self, input: List[torch.Tensor]):
         for i, input_chunk in enumerate(input):
@@ -135,39 +139,30 @@ class SmoothQuantCalibrator(BaseCalibrator):
     def _calibrate_weight(self, weight: List[torch.Tensor]):
         quantized_weights = []
         weight_broadcast = self._broadcast_list(weight)
-
         for q, weight_chunk, s in zip(self.weight_quantizers, weight_broadcast, self.s):
             if self.dual_s:
-                weight_pos = torch.where(weight_chunk >= 0, weight_chunk, torch.zeros_like(weight_chunk))
-                weight_neg = torch.where(weight_chunk < 0, weight_chunk, torch.zeros_like(weight_chunk))
-
-                weight_pos_smooth = (weight_pos * s[1]).to(dtype=weight_chunk.dtype, device=weight_chunk.device)
-                weight_neg_smooth = (weight_neg * s[0]).to(dtype=weight_chunk.dtype, device=weight_chunk.device)
-
-                q.calibrate(weight_pos_smooth)
-                q.calibrate(weight_neg_smooth)
-                quantized_weights.append((q.quantize(weight_pos_smooth), q.quantize(weight_neg_smooth)))
+                assert False
             else:
                 weight_smooth = (weight_chunk * s).to(dtype=weight_chunk.dtype, device=weight_chunk.device)
                 q.calibrate(weight_smooth)
                 quantized_weights.append(q.quantize(weight_smooth))
-
+        
         return quantized_weights
-    
+
+
     def _calibrate_input(self, input: List[torch.Tensor]):
         input_broadcast = self._broadcast_list(input)
         for q, input_chunk, s in zip(self.input_quantizers, input_broadcast, self.s):
             if self.dual_s:
-                input_smooth = torch.where(input_chunk >= 0, input_chunk / s[1], input_chunk / s[0])
+                assert False
             else:
-                input_smooth = input_chunk / s
-            q.calibrate(input_smooth)
+                q.calibrate(input_chunk / s)
 
-    def calibrate(self, inputs: List[List[torch.Tensor]], weight: List[torch.Tensor]):
-        for input in inputs:
-            self._trace_max_x(input)
+    def trace(self, input: List[torch.Tensor], weight: List[torch.Tensor]):
+        self._trace_max_x(input)
         self._trace_max_w(weight)
 
+    def smooth(self):
         max_x, max_w = self._broadcast_lists(self.max_x, self.max_w)
         for i in range(self.chunks):
             epsilon = 1.0 / (1 << 31)
@@ -186,17 +181,18 @@ class SmoothQuantCalibrator(BaseCalibrator):
                 s = torch.where(s <= epsilon, torch.ones_like(s), s)
                 self.s[i] = torch.clamp(s.to(dtype=torch.float32), min=1e-4, max=1e4)
 
-        for input in inputs:
-            self._calibrate_input(input)
-        self.quantized_weight = self._calibrate_weight(weight)
+    def calibrate(self, input: List[torch.Tensor], weight: List[torch.Tensor]):
+        self._calibrate_input(input)
+        if self.quantized_weights is None:
+            self.quantized_weights = self._calibrate_weight(weight)
 
     def quantize_weight(self):
         '''
         Returns:
             Union[list[Tensor]], list[Tensor]]]: 
                 - [Tensor(out_features, split_size) * n]
-        '''
-        return self.quantized_weight
+        '''        
+        return self.quantized_weights
 
     def quantize(self, input: List[torch.Tensor]):
         '''
