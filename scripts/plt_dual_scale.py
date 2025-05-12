@@ -6,48 +6,77 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+import json
+
+def stat_channels(layers, model, dataset, output_file='channel_stats.json'):
+    sampler = Q_DiffusionSampler()
+    stats = []
+
+    layer_map = {id(m): name for name, m in model.named_modules()}
+
+    for layer in layers:
+        total_negative_channels = 0
+        total_positive_channels = 0
+        total_channels = 0
+
+        for sample_data in sampler.sample(model, 
+                                          dataset.get_dataloader(shuffle=True), 
+                                          target_layer=layer,
+                                          sample_layer='dit', 
+                                          max_timestep=30, 
+                                          sample_size=2, 
+                                          timestep_per_sample=30, 
+                                          sample_mode='input',
+                                          controlnet_conditioning_scale=0.7,
+                                          guidance_scale=3.5):
+            
+            for d in sample_data:
+                input = d['input']['args'][0][0]
+                silu_output = input.cpu().numpy()
+
+                if silu_output.ndim == 2:
+                    for i in range(silu_output.shape[0]):
+                        total_channels += silu_output.shape[1]
+                        total_negative_channels += (silu_output[i] < -1e-7).sum()
+                        total_positive_channels += (silu_output[i] > 1e-7).sum()
+                else:
+                    total_channels += silu_output.shape[0]
+                    total_negative_channels += (silu_output < -1e-7).sum()
+                    total_positive_channels += (silu_output > 1e-7).sum()
+
+        negative_channel_ratio = total_negative_channels / total_channels if total_channels > 0 else 0
+        positive_channel_ratio = total_positive_channels / total_channels if total_channels > 0 else 0
+
+        layer_name = layer_map.get(id(layer), str(layer))
+        layer_stats = {
+            "Layer": layer_name,
+            "Total Channels": int(total_channels),
+            "Negative Channels": int(total_negative_channels),
+            "Positive Channels": int(total_positive_channels),
+            "Negative Channel Ratio": round(float(negative_channel_ratio), 6),
+            "Positive Channel Ratio": round(float(positive_channel_ratio), 6)
+        }
+        stats.append(layer_stats)
+
+        with open(output_file, 'w') as json_file:
+            json.dump(stats, json_file, indent=4)
+
+        print(f'{layer} ok -> saved to {output_file}')
+
+    print(f"All statistics saved to {output_file}")
+
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), device)
-
     dataset = COCODataset(path='../dataset/controlnet_datasets/controlnet_canny_dataset', cache_size=16)
 
-    sampler = Q_DiffusionSampler()
-    for sample_data in sampler.sample(model, 
-                                      dataset.get_dataloader(), 
-                                    #   target_layer=model.transformer.transformer_blocks[0].norm1.linear,
-                                      target_layer=model.transformer.transformer_blocks[0].ff.net[2],
-                                      sample_layer='dit', 
-                                      max_timestep=30, 
-                                      sample_size=1, 
-                                      timestep_per_sample=10, 
-                                      sample_mode='input',
-                                      controlnet_conditioning_scale=0.7,
-                                      guidance_scale=3.5):
-        
-        for d in sample_data:
-            t = d['timestep']
-            input = d['input']['args'][0][0]
-            silu_output = input.cpu().numpy()
-            negative_ratio_sampled = (silu_output < -1e-6).sum() / silu_output.flatten().size
-            print(t, input.shape, (silu_output < 0).sum(), silu_output.flatten().size, f"Negative value ratio: {negative_ratio_sampled:.4f}")
-
-            # plt.figure(figsize=(12, 6))
-            # plt.hist(silu_output.flatten(), bins=100, alpha=0.7, density=True, color='blue')
-            # plt.xlabel("Activation Value")
-            # plt.ylabel("Density")
-            # plt.title("Activation Distribution Across All Channels (SiLU Output)")
-            # plt.tight_layout()
-
-            # plt.figure(figsize=(10, 3))
-            # plt.plot(range(len(silu_output)), silu_output, color='purple', linewidth=1)
-            # plt.title("SiLU Activation across Channels")
-            # plt.xlabel("Channel Index")
-            # plt.ylabel("Activation Value")
-            # plt.axhline(y=0, color='black', linestyle='--', linewidth=0.8)
-            # plt.grid(True, linestyle='--', alpha=0.4)
-            
-            # plt.savefig("silu.png", dpi=300, bbox_inches='tight')
-
-            
-            
+    layers_to_stat = []
+    for i in range(len(model.transformer.transformer_blocks)):
+        layers_to_stat.append(model.transformer.transformer_blocks[i].norm1.linear)
+        layers_to_stat.append(model.transformer.transformer_blocks[i].ff.net[2])
+    for i in range(len(model.controlnet.transformer_blocks)):
+        layers_to_stat.append(model.controlnet.transformer_blocks[i].norm1.linear)
+        layers_to_stat.append(model.controlnet.transformer_blocks[i].ff.net[2])
+    
+    print(layers_to_stat)
+    stat_channels(layers_to_stat, model, dataset)

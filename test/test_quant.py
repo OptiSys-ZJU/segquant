@@ -53,6 +53,41 @@ def sample_noise_output(config, calibset, latents, quant_layer):
     
     return all_outputs
 
+def sample_noise_dis(config, calibset, latents, quant_layer):
+    from dataset.coco.coco_dataset import COCODataset
+    from sample.sampler import Q_DiffusionSampler
+    from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
+    from sample.sampler import model_map
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), device)
+    if quant_layer == 'controlnet':
+        model.controlnet = quantize(model_map[quant_layer](model), calibset.get_dataloader(batch_size=1), config, verbose=True)
+    elif quant_layer == 'dit':
+        model.transformer = quantize(model_map[quant_layer](model), calibset.get_dataloader(batch_size=1), config, verbose=True)
+
+    all_outputs = []
+    dataset = COCODataset(path='../dataset/controlnet_datasets/controlnet_canny_dataset', cache_size=16)
+    for sample_data in Q_DiffusionSampler().sample(model, 
+                                      dataset.get_dataloader(), 
+                                      target_layer=model.transformer,
+                                      sample_layer='dit', 
+                                      max_timestep=30, 
+                                      sample_size=1, 
+                                      timestep_per_sample=30, 
+                                      sample_mode='output',
+                                      controlnet_conditioning_scale=0.7,
+                                      guidance_scale=3.5,
+                                      latents=latents):
+        all_outputs.append([])
+        for d in sample_data:
+            output = d['output'] #[batch, channel, h, w]
+            mean = output.mean()
+            std = output.std()
+            all_outputs[-1].append((mean.item(), std.item()))
+    
+    return all_outputs
+
 def compute_frobenius_norms(outputs_a, outputs_b):
     outputs_a_T = list(zip(*outputs_a))
     outputs_b_T = list(zip(*outputs_b))
@@ -67,108 +102,106 @@ def compute_frobenius_norms(outputs_a, outputs_b):
         norms.append(avg_norm)
     return norms
 
-if __name__ == '__main__':
-    base_config = {
-        "default": {
-            "enable": False,
-        },
-    }
-    default_config = {
-        "default": {
-            "enable": True,
-            "dtype": DType.INT8SMOOTH,
-            "seglinear": False,
-            'search_patterns': SegPattern.all(),
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 1.0,
-        },
-    }
-    seg_config = {
-        "default": {
-            "enable": True,
-            "dtype": DType.INT8SMOOTH,
-            "seglinear": True,
-            'search_patterns': [SegPattern.Linear2Chunk, SegPattern.Linear2Split, SegPattern.Concat2Linear, SegPattern.Stack2Linear],
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 1.0,
-        },
-    }
-    seg_dual_config = {
-        "default": {
-            "enable": True,
-            "dtype": DType.INT8SMOOTH,
-            "seglinear": True,
-            'search_patterns': SegPattern.all(),
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 1.0,
-        },
-    }
-    enable_latent_config = {
-        "default": {
-            "enable": True,
-            "dtype": DType.INT8SMOOTH,
-            "seglinear": False,
-            'search_patterns': SegPattern.all(),
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 1.0,
-        },
-        "*time_text_embed*": {
-            "enable": False,
-        },
-        "*transformer_blocks.*.norm1.linear*": {
-            "enable": False,
-        },
-        "*transformer_blocks.*.norm1_context.linear*": {
-            "enable": False,
-        }
-    }
-    enable_time_config = {
-        "default": {
-            "enable": True,
-            "dtype": DType.INT8SMOOTH,
-            "seglinear": False,
-            'search_patterns': SegPattern.all(),
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 1.0,
-        },
-        "*pos_embed.proj*": {
-            "enable": False,
-        },
-        "*pos_embed_input.proj*": {
-            "enable": False,
-        },
-        "*context_embedder.proj*": {
-            "enable": False,
-        },
 
-        "*transformer_blocks.*.attn*": {
-            "enable": False,
-        },
-        "*transformer_blocks.*.ff.net*": {
-            "enable": False,
-        },
-        "*transformer_blocks.*.ff_context.net*": {
-            "enable": False,
-        },
-        "*controlnet_blocks*": {
-            "enable": False,
-        },
+base_config = {
+    "default": {
+        "enable": False,
+    },
+}
+default_config = {
+    "default": {
+        "enable": True,
+        "dtype": DType.INT8SMOOTH,
+        "seglinear": False,
+        'search_patterns': SegPattern.all(),
+        "input_axis": None,
+        "weight_axis": None,
+        "alpha": 1.0,
+    },
+}
+seg_config = {
+    "default": {
+        "enable": True,
+        "dtype": DType.INT8SMOOTH,
+        "seglinear": True,
+        'search_patterns': [SegPattern.Linear2Chunk, SegPattern.Linear2Split, SegPattern.Concat2Linear, SegPattern.Stack2Linear],
+        "input_axis": None,
+        "weight_axis": None,
+        "alpha": 1.0,
+    },
+}
+seg_dual_config = {
+    "default": {
+        "enable": True,
+        "dtype": DType.INT8SMOOTH,
+        "seglinear": True,
+        'search_patterns': SegPattern.all(),
+        "input_axis": None,
+        "weight_axis": None,
+        "alpha": 1.0,
+    },
+}
+enable_latent_config = {
+    "default": {
+        "enable": True,
+        "dtype": DType.INT8SMOOTH,
+        "seglinear": False,
+        'search_patterns': SegPattern.all(),
+        "input_axis": None,
+        "weight_axis": None,
+        "alpha": 1.0,
+    },
+    "*time_text_embed*": {
+        "enable": False,
+    },
+    "*transformer_blocks.*.norm1.linear*": {
+        "enable": False,
+    },
+    "*transformer_blocks.*.norm1_context.linear*": {
+        "enable": False,
     }
+}
+enable_time_config = {
+    "default": {
+        "enable": True,
+        "dtype": DType.INT8SMOOTH,
+        "seglinear": False,
+        'search_patterns': SegPattern.all(),
+        "input_axis": None,
+        "weight_axis": None,
+        "alpha": 1.0,
+    },
+    "*pos_embed.proj*": {
+        "enable": False,
+    },
+    "*pos_embed_input.proj*": {
+        "enable": False,
+    },
+    "*context_embedder.proj*": {
+        "enable": False,
+    },
 
+    "*transformer_blocks.*.attn*": {
+        "enable": False,
+    },
+    "*transformer_blocks.*.ff.net*": {
+        "enable": False,
+    },
+    "*transformer_blocks.*.ff_context.net*": {
+        "enable": False,
+    },
+    "*controlnet_blocks*": {
+        "enable": False,
+    },
+}
+
+def cal_multistep_for():
     results = {}
-
     configs = {
         'base': base_config,
         'default': default_config,
-        # 'seg': seg_config,
-        # 'seg_dual': seg_dual_config,
-        # 'latent': enable_latent_config,
-        # 'time': enable_time_config,
+        'latent': enable_latent_config,
+        'time': enable_time_config,
     }
 
     latents = torch.load('../latents.pt')
@@ -194,3 +227,21 @@ if __name__ == '__main__':
             val = results[name][i] if i < len(results[name]) else None
             line += f"{name} = {val:.4f} " if val is not None else f"{name} = N/A "
         print(line)
+
+def cal_multistep_dis():
+    results = {}
+
+    latents = torch.load('../latents.pt')
+
+    quant_layer = 'dit'
+
+    calibset = cali(quant_layer)
+
+    base_outputs = sample_noise_dis(base_config, calibset, latents, quant_layer)[0]
+    outputs = sample_noise_dis(default_config, calibset, latents, quant_layer)[0]
+
+    for b, i in zip(base_outputs, outputs):
+        print('mean', b[0], i[0], 'std', b[1], i[1])
+
+if __name__ == '__main__':
+    cal_multistep_dis()
