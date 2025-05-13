@@ -186,6 +186,7 @@ if __name__ == '__main__':
             "enable": True,
             "dtype": DType.INT8SMOOTH,
             "seglinear": True,
+            "blockwise_affine_size": 128,
             'search_patterns': SegPattern.all(),
             "input_axis": None,
             "weight_axis": None,
