@@ -35,6 +35,12 @@ def custom_loss(K, epsilon_hat, epsilon, lambda1=0.5, lambda2=0.1):
 
     return loss
 
+def solve_optimal_k(epsilon_hat, epsilon, lambda1=0.5, lambda2=0.1):
+    B, C, H, W = epsilon.shape
+    N = C * H * W
+    a = (1 - lambda1) * (epsilon_hat * epsilon).sum(dim=(2, 3)) + lambda1 * N * (epsilon_hat / epsilon).sum(dim=(2, 3)) + lambda2 * N
+    b = (1 - lambda1) * (epsilon_hat ** 2).sum(dim=(2, 3)) + lambda1 * N * ((epsilon_hat ** 2) / (epsilon ** 2)).sum(dim=(2, 3)) + lambda2 * N
+
 def solve_optimal_K_block(epsilon_hat, epsilon, lambda1=0.5, lambda2=0.1, block=1):
     """
     epsilon_hat: [B, C, H, W]
