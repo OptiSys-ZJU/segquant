@@ -820,6 +820,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 256,
         early_stop: int = None,
+        replay_timestep: int = None,
         affiner: BlockwiseAffiner = None,
     ):
         r"""
@@ -1124,6 +1125,12 @@ class StableDiffusion3ControlNetModel(nn.Module):
         # 8. Denoising loop
         with tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
+                if replay_timestep is not None:
+                    if i < replay_timestep:
+                        if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                            progress_bar.update()
+                        continue
+
                 if early_stop is not None:
                     if i == early_stop:
                         break
