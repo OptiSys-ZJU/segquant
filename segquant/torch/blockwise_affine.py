@@ -44,8 +44,14 @@ class BlockwiseAffiner:
         loss = self.alpha * mse_loss + (1 - self.alpha) * rel_loss
         return loss
 
-    def get_solution(self, timestep):
-        return self.solutions[timestep]
+    def get_solution(self, timestep, example=None):
+        if self.learning:
+            if timestep in self.solutions:
+                return self.solutions[timestep]
+            else:
+                return (torch.ones_like(example), torch.zeros_like(example))
+        else:
+            return self.solutions[timestep]
     
     def finish_learning(self):
         self.learning = False
@@ -157,13 +163,15 @@ def blockwise_affine(
     shuffle=True, 
     config=None, 
     verbose=False,
-    pack_per_file=2,
+    pack_per_file=8,
 ):
     if config is None:
         config = default_affine_config
     
     affiner = BlockwiseAffiner(max_timestep=config['max_timestep'], blocksize=config['blockwise'])
     learning_samples = config['learning_samples']
+
+    pack_per_file = min(learning_samples, pack_per_file)
 
     if verbose:
         print(f"[BlockwiseAffiner] Init max_timestep[{config['max_timestep']}], blocksize[{config['blockwise']}], learning_samples[{config['learning_samples']}]")
@@ -180,36 +188,6 @@ def blockwise_affine(
     
     save_dir = '.'
 
-    def sample_noise(model: nn.Module, t: str):
-        file_idx = 0
-        outputs = []
-        model.to(torch.device(target_device))
-        data_loader = dataset.get_dataloader(sampler=SubsetRandomSampler(indices.copy()))
-        print(f"[INFO] Sampling noise for {t} model...")  # Log start of sampling
-        for sample_data in noise_sampler.sample(
-            model,
-            data_loader,
-            max_timestep=config['max_timestep'],
-            sample_size=learning_samples,
-            timestep_per_sample=config['max_timestep']
-        ):
-            outputs.append(sample_data)
-            file_idx += 1
-            if file_idx % pack_per_file == 0:
-                save_path = os.path.join(save_dir, f'tmp_{t}{file_idx}.pt')
-                torch.save(outputs, save_path)
-                print(f"[INFO] Saved {file_idx} samples for {t} model to {save_path}")  # Log every save
-                outputs = []  # Clear the outputs after saving
-
-        # Ensure any remaining samples are saved
-        if len(outputs) > 0:
-            save_path = os.path.join(save_dir, f'tmp_{t}{file_idx}.pt')
-            torch.save(outputs, save_path)
-            print(f"[INFO] Saved remaining {len(outputs)} samples for {t} model to {save_path}")  # Log final save
-
-        print(f"[INFO] Finished sampling noise for {t} model.")  # Log end of sampling
-        model.to(torch.device('cpu'))
-    
     def process_noise_pred(noise_pred: torch.Tensor, mix=False, guidance=None):
         if noise_pred.dim() == 0:
             raise ValueError("Unexpected scalar tensor")
@@ -225,34 +203,73 @@ def blockwise_affine(
         else:
             raise ValueError(f"Unsupported first dimension size: {noise_pred.size(0)}")
 
-    # Sample noise for both models
-    print("[INFO] Starting noise sampling for real model.")
-    sample_noise(model_real, 'real')
-    print("[INFO] Starting noise sampling for quant model.")
-    sample_noise(model_quant, 'quant')
-    
-    # List temporary files created during sampling
-    real_files = sorted([f for f in os.listdir(save_dir) if f.startswith('tmp_real')])
-    quant_files = sorted([f for f in os.listdir(save_dir) if f.startswith('tmp_quant')])
+    max_timestep = affiner.max_timestep #30
 
-    print(f"[INFO] Found {len(real_files)} temporary files for real model.")
-    print(f"[INFO] Found {len(quant_files)} temporary files for quant model.")
+    for cur_learning_timestep in range(max_timestep - 1, -1, -1):
+        def learning_noise(model: nn.Module, t: str):
+            file_idx = 0
+            outputs = []
+            model.to(torch.device(target_device))
+            data_loader = dataset.get_dataloader(sampler=SubsetRandomSampler(indices.copy()))
+            print(f"[INFO] Learning noise for {t} model...")  # Log start of sampling
+            for sample_data in noise_sampler.sample(
+                model,
+                data_loader,
+                max_timestep=config['max_timestep'],
+                sample_size=learning_samples,
+                timestep_per_sample=config['max_timestep'],
+                affiner=affiner if t == 'quant' else None,
+                early_stop=max_timestep-cur_learning_timestep
+            ):
+                # one image
+                assert len(sample_data) == max_timestep-cur_learning_timestep
 
-    for real_file, quant_file in zip(real_files, quant_files):
-        print(f"[INFO] Processing files: {real_file} and {quant_file}")
+                to_learn_line = sample_data[-1]
+                outputs.append(to_learn_line)
+                file_idx += 1
+                if file_idx % pack_per_file == 0:
+                    save_path = os.path.join(save_dir, f'tmp_{t}{file_idx}.pt')
+                    torch.save(outputs, save_path)
+                    print(f"[INFO] Saved {file_idx} samples for {t} model to {save_path}")  # Log every save
+                    outputs = []  # Clear the outputs after saving
+
+            # Ensure any remaining samples are saved
+            if len(outputs) > 0:
+                save_path = os.path.join(save_dir, f'tmp_{t}{file_idx}.pt')
+                torch.save(outputs, save_path)
+                print(f"[INFO] Saved remaining {len(outputs)} samples for {t} model to {save_path}")  # Log final save
+
+            print(f"[INFO] Finished sampling noise for {t} model.")  # Log end of sampling
+            model.to(torch.device('cpu'))
         
-        # Load the temp files
-        real_datas = torch.load(os.path.join(save_dir, real_file))
-        quant_datas = torch.load(os.path.join(save_dir, quant_file))
+        # Sample noise for both models
+        print("[INFO] Starting noise learning for real model.")
+        learning_noise(model_real, 'real')
+        print("[INFO] Starting noise learning for quant model.")
+        learning_noise(model_quant, 'quant')
 
-        # Process noise predictions
-        for real_data, quant_data in zip(real_datas, quant_datas):
-            timesteps = [r['timestep'] for r in real_data]
-            timestep_values = [r['extra_features']['timestep'] for r in real_data]
-            reals = [process_noise_pred(r['noise_pred'], mix=True, guidance=r['extra_features']['guidance_scale']) for r in real_data]
-            quants = [process_noise_pred(q['noise_pred'], mix=True, guidance=q['extra_features']['guidance_scale']) for q in quant_data]
+        real_files = sorted([f for f in os.listdir(save_dir) if f.startswith('tmp_real')])
+        quant_files = sorted([f for f in os.listdir(save_dir) if f.startswith('tmp_quant')])
 
-            for ts, tv, real, quant in zip(timesteps, timestep_values, reals, quants):
+        print(f"[INFO] Found {len(real_files)} temporary files for real model.")
+        print(f"[INFO] Found {len(quant_files)} temporary files for quant model.")
+
+        for real_file, quant_file in zip(real_files, quant_files):
+            print(f"[INFO] Processing files: {real_file} and {quant_file}")
+            
+            # Load the temp files
+            real_datas = torch.load(os.path.join(save_dir, real_file))
+            quant_datas = torch.load(os.path.join(save_dir, quant_file))
+
+            # Process noise predictions
+            for real_data, quant_data in zip(real_datas, quant_datas):
+                assert real_data['timestep'] == cur_learning_timestep
+                assert quant_data['timestep'] == cur_learning_timestep
+
+                ts = cur_learning_timestep
+                real = process_noise_pred(real_data['noise_pred'], mix=True, guidance=real_data['extra_features']['guidance_scale'])
+                quant = process_noise_pred(quant_data['noise_pred'], mix=True, guidance=quant_data['extra_features']['guidance_scale'])
+
                 K = torch.ones_like(real)
                 b = torch.zeros_like(real)
                 init = (affiner.loss(K, b, quant, real), affiner.error(K, b, quant, real))
@@ -263,10 +280,87 @@ def blockwise_affine(
                 if verbose:
                     print(f'BlockwiseAffiner [{ts}] block[{affiner.blocksize}] Learning init: [{init[0]:5f}/{init[1]:5f}], affine: [{affine[0]:5f}/{affine[1]:5f}]')
 
-        # Delete temporary files after processing
-        os.remove(os.path.join(save_dir, real_file))
-        os.remove(os.path.join(save_dir, quant_file))
-        print(f"[INFO] Deleted temporary files: {real_file}, {quant_file}")
+            # Delete temporary files after processing
+            os.remove(os.path.join(save_dir, real_file))
+            os.remove(os.path.join(save_dir, quant_file))
+            print(f"[INFO] Deleted temporary files: {real_file}, {quant_file}")
+
+        assert len(affiner.solutions) == max_timestep - cur_learning_timestep
+        print(f'Finish {cur_learning_timestep}\'s learning, Affiner solution nums[{len(affiner.solutions)}]')
+
+    if False:
+        def sample_noise(model: nn.Module, t: str):
+            file_idx = 0
+            outputs = []
+            model.to(torch.device(target_device))
+            data_loader = dataset.get_dataloader(sampler=SubsetRandomSampler(indices.copy()))
+            print(f"[INFO] Sampling noise for {t} model...")  # Log start of sampling
+            for sample_data in noise_sampler.sample(
+                model,
+                data_loader,
+                max_timestep=config['max_timestep'],
+                sample_size=learning_samples,
+                timestep_per_sample=config['max_timestep']
+            ):
+                outputs.append(sample_data)
+                file_idx += 1
+                if file_idx % pack_per_file == 0:
+                    save_path = os.path.join(save_dir, f'tmp_{t}{file_idx}.pt')
+                    torch.save(outputs, save_path)
+                    print(f"[INFO] Saved {file_idx} samples for {t} model to {save_path}")  # Log every save
+                    outputs = []  # Clear the outputs after saving
+
+            # Ensure any remaining samples are saved
+            if len(outputs) > 0:
+                save_path = os.path.join(save_dir, f'tmp_{t}{file_idx}.pt')
+                torch.save(outputs, save_path)
+                print(f"[INFO] Saved remaining {len(outputs)} samples for {t} model to {save_path}")  # Log final save
+
+            print(f"[INFO] Finished sampling noise for {t} model.")  # Log end of sampling
+            model.to(torch.device('cpu'))
+        
+        # Sample noise for both models
+        print("[INFO] Starting noise sampling for real model.")
+        sample_noise(model_real, 'real')
+        print("[INFO] Starting noise sampling for quant model.")
+        sample_noise(model_quant, 'quant')
+        
+        # List temporary files created during sampling
+        real_files = sorted([f for f in os.listdir(save_dir) if f.startswith('tmp_real')])
+        quant_files = sorted([f for f in os.listdir(save_dir) if f.startswith('tmp_quant')])
+
+        print(f"[INFO] Found {len(real_files)} temporary files for real model.")
+        print(f"[INFO] Found {len(quant_files)} temporary files for quant model.")
+
+        for real_file, quant_file in zip(real_files, quant_files):
+            print(f"[INFO] Processing files: {real_file} and {quant_file}")
+            
+            # Load the temp files
+            real_datas = torch.load(os.path.join(save_dir, real_file))
+            quant_datas = torch.load(os.path.join(save_dir, quant_file))
+
+            # Process noise predictions
+            for real_data, quant_data in zip(real_datas, quant_datas):
+                timesteps = [r['timestep'] for r in real_data]
+                timestep_values = [r['extra_features']['timestep'] for r in real_data]
+                reals = [process_noise_pred(r['noise_pred'], mix=True, guidance=r['extra_features']['guidance_scale']) for r in real_data]
+                quants = [process_noise_pred(q['noise_pred'], mix=True, guidance=q['extra_features']['guidance_scale']) for q in quant_data]
+
+                for ts, tv, real, quant in zip(timesteps, timestep_values, reals, quants):
+                    K = torch.ones_like(real)
+                    b = torch.zeros_like(real)
+                    init = (affiner.loss(K, b, quant, real), affiner.error(K, b, quant, real))
+
+                    K, b = affiner.step_learning(ts, quant, real)
+                    affine = (affiner.loss(K, b, quant, real), affiner.error(K, b, quant, real))
+
+                    if verbose:
+                        print(f'BlockwiseAffiner [{ts}] block[{affiner.blocksize}] Learning init: [{init[0]:5f}/{init[1]:5f}], affine: [{affine[0]:5f}/{affine[1]:5f}]')
+
+            # Delete temporary files after processing
+            os.remove(os.path.join(save_dir, real_file))
+            os.remove(os.path.join(save_dir, quant_file))
+            print(f"[INFO] Deleted temporary files: {real_file}, {quant_file}")
 
     affiner.finish_learning()
     return affiner

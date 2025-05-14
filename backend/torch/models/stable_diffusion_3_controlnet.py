@@ -819,6 +819,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 256,
+        early_stop: int = None,
         affiner: BlockwiseAffiner = None,
     ):
         r"""
@@ -1123,6 +1124,10 @@ class StableDiffusion3ControlNetModel(nn.Module):
         # 8. Denoising loop
         with tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
+                if early_stop is not None:
+                    if i == early_stop:
+                        break
+
                 if self.interrupt:
                     continue
                 # expand the latents if we are doing classifier free guidance
@@ -1167,11 +1172,15 @@ class StableDiffusion3ControlNetModel(nn.Module):
                 if affiner is not None:
                     if affiner.max_timestep != num_inference_steps:
                         print(f'[Warning] BlockwiseAffiner: max_timestep[{affiner.max_timestep}] != num_inference_steps[{num_inference_steps}]')
-                    K, b = affiner.get_solution(num_inference_steps-1-i)
                     
-                    K = K.to(device=noise_pred.device)
-                    b = b.to(device=noise_pred.device)
-                    noise_pred = (K * noise_pred.to(dtype=K.dtype) + b).to(dtype=noise_pred.dtype)
+                    if i == 0:
+                        K, b = affiner.get_solution(num_inference_steps-1-i, noise_pred)
+                        
+                        pre_type = noise_pred.dtype
+                        K = K.to(device=noise_pred.device, dtype=torch.float32)
+                        b = b.to(device=noise_pred.device, dtype=torch.float32)
+                        noise_pred = noise_pred.to(K.dtype)
+                        noise_pred = (K * noise_pred + b).to(dtype=pre_type)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype

@@ -31,7 +31,7 @@ class NoiseSampler(UniformSampler):
         
         self._trigger_timestep()
     
-    def sample(self, model, data_loader, max_timestep=30, sample_size=1, timestep_per_sample=5, device='cpu'):
+    def sample(self, model, data_loader, max_timestep=30, sample_size=1, timestep_per_sample=5, device='cpu', **kwargs):
         return super().sample(model, 
                               data_loader, 
                               None, 
@@ -42,7 +42,7 @@ class NoiseSampler(UniformSampler):
                               'inoutput', 
                               device, 
                               controlnet_conditioning_scale=self.controlnet_scale, 
-                              guidance_scale=self.guidance_scale,)
+                              guidance_scale=self.guidance_scale, **kwargs)
 
 
 if __name__ == '__main__':

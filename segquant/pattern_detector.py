@@ -6,6 +6,7 @@ from collections import namedtuple
 from torch.fx.passes.shape_prop import ShapeProp
 from torch._subclasses.fake_tensor import FakeTensorMode
 import torch.nn.functional as F
+import warnings
 
 LinearInfo = namedtuple("LinearInfo", ["found", "name", "in_features", "out_features"])
 ChunkInfo = namedtuple("ChunkInfo", ["found", "chunks"])
@@ -40,18 +41,22 @@ class SegQuantPatternDetector:
                 })
                 del concrete[key]
 
-        self.traced = fx.symbolic_trace(model, concrete_args=concrete)
-        self.module_map = dict(self.traced.named_modules())
-        
-        if search_patterns is None:
-            self.search_patterns = [
-                'linear_to_chunk', 'concat_to_linear', 'linear_to_split', 'stack_to_linear'
-            ]
-        else:
-            self.search_patterns = search_patterns
-        
-        fake_mode = FakeTensorMode(allow_non_fake_inputs=True)
-        ShapeProp(self.traced, fake_mode).propagate(*example_inputs)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore"
+            )
+            self.traced = fx.symbolic_trace(model, concrete_args=concrete)
+            self.module_map = dict(self.traced.named_modules())
+            
+            if search_patterns is None:
+                self.search_patterns = [
+                    'linear_to_chunk', 'concat_to_linear', 'linear_to_split', 'stack_to_linear'
+                ]
+            else:
+                self.search_patterns = search_patterns
+            
+            fake_mode = FakeTensorMode(allow_non_fake_inputs=True)
+            ShapeProp(self.traced, fake_mode).propagate(*example_inputs)
 
     def _is_transparent(self, node):
         if node.op == 'call_method' and node.target == 'to':
