@@ -368,7 +368,7 @@ if __name__ == '__main__':
     this_affine_config = {
         "blockwise": 128,
         "learning_samples": 8,
-        "max_timestep": 30
+        "max_timestep": 60
     }
 
     def quant_model(model_real: nn.Module, quant_layer: str, config, dataset, calib_args: dict) -> nn.Module:
