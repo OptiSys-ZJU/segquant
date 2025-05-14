@@ -5,6 +5,7 @@ import inspect
 from collections import namedtuple
 from torch.fx.passes.shape_prop import ShapeProp
 from torch._subclasses.fake_tensor import FakeTensorMode
+import torch.nn.functional as F
 
 LinearInfo = namedtuple("LinearInfo", ["found", "name", "in_features", "out_features"])
 ChunkInfo = namedtuple("ChunkInfo", ["found", "chunks"])
@@ -14,9 +15,10 @@ StackInfo = namedtuple("StackInfo", ["found", "chunksizes"])
 ActInfo = namedtuple("ActInfo", ["found", "name"])
 
 class SegQuantPatternDetector:
-    def __init__(self, model: nn.Module, example_inputs: tuple, search_patterns=None, acts=[nn.SiLU, nn.GELU]):
+    def __init__(self, model: nn.Module, example_inputs: tuple, search_patterns=None, acts=[nn.SiLU, nn.GELU], act_funcs=[F.silu, F.gelu]):
         self.model = model
         self.acts = acts
+        self.act_funcs = act_funcs
 
         sig = inspect.signature(self.model.forward)
         param_names = list(sig.parameters.keys())
@@ -50,6 +52,16 @@ class SegQuantPatternDetector:
         
         fake_mode = FakeTensorMode(allow_non_fake_inputs=True)
         ShapeProp(self.traced, fake_mode).propagate(*example_inputs)
+
+    def _is_transparent(self, node):
+        if node.op == 'call_method' and node.target == 'to':
+            return True
+        if node.op == 'call_module':
+            submod = self.module_map.get(node.target, None)
+            if isinstance(submod, torch.nn.Dropout):
+                return True
+        
+        return False
 
     def _is_linear(self, node):
         if node.op == 'call_module':
@@ -110,6 +122,8 @@ class SegQuantPatternDetector:
             act_mod = self.module_map.get(node.target, None)
             if any(isinstance(act_mod, act) for act in self.acts):
                 return ActInfo(True, node.target)
+        elif node.op == 'call_function' and node.target in self.act_funcs:
+            return ActInfo(True, node.target)
         return ActInfo(False, None)
 
     def _find_pattern(self, node, pattern_type):
@@ -161,7 +175,7 @@ class SegQuantPatternDetector:
             linear_info = self._is_linear(node)
             if linear_info.found:
                 input_node = node.args[0]
-                if isinstance(input_node, torch.fx.Node):
+                while isinstance(input_node, torch.fx.Node):
                     concat_info = self._is_concat(input_node)
                     if concat_info.found:
                         return {
@@ -172,11 +186,16 @@ class SegQuantPatternDetector:
                             "chunksizes": concat_info.chunksizes,
                         }
 
+                    if self._is_transparent(input_node):
+                        input_node = input_node.args[0]
+                        continue
+                    break
+
         elif pattern_type == 'stack_to_linear':
             linear_info = self._is_linear(node)
             if linear_info.found:
                 input_node = node.args[0]
-                if isinstance(input_node, torch.fx.Node):
+                while isinstance(input_node, torch.fx.Node):
                     stack_info = self._is_stack(input_node)
                     if stack_info.found:
                         return {
@@ -187,14 +206,24 @@ class SegQuantPatternDetector:
                             "stack_size": stack_info.chunksizes,
                         }
 
+                    if self._is_transparent(input_node):
+                        input_node = input_node.args[0]
+                        continue
+                    break
+
         elif pattern_type == 'activation_to_linear':
             linear_info = self._is_linear(node)
             if linear_info.found:
                 input_node = node.args[0]
-                if isinstance(input_node, torch.fx.Node):
+                while isinstance(input_node, torch.fx.Node):
                     act_info = self._is_activation(input_node)
                     if act_info.found:
                         return linear_info.name
+
+                    if self._is_transparent(input_node):
+                        input_node = input_node.args[0]
+                        continue
+                    break
 
         return None
 
@@ -213,6 +242,38 @@ class SegQuantPatternDetector:
 
 
 if __name__ == '__main__':
+    from typing import Optional
+    from backend.torch.layers.activations import GELU
+    class MyModel2(nn.Module):
+        def __init__(
+            self,
+            dim: int,
+            dim_out: Optional[int] = None,
+            mult: int = 4,
+            dropout: float = 0.0,
+            inner_dim=None,
+            bias: bool = True,
+        ):
+            super().__init__()
+            if inner_dim is None:
+                inner_dim = int(dim * mult)
+            dim_out = dim_out if dim_out is not None else dim
+
+            act_fn = GELU(dim, inner_dim, bias=bias)
+
+            self.net = nn.ModuleList([])
+            # project in
+            self.net.append(act_fn)
+            # project dropout
+            self.net.append(nn.Dropout(dropout))
+            # project out
+            self.net.append(nn.Linear(inner_dim, dim_out, bias=bias))
+
+        def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+            for module in self.net:
+                hidden_states = module(hidden_states)
+            return hidden_states
+
     class MyModel(nn.Module):
         def __init__(self):
             super().__init__()
@@ -233,7 +294,7 @@ if __name__ == '__main__':
             return out
 
     search_patterns = ['linear_to_chunk', 'linear_to_split', 'concat_to_linear', 'stack_to_linear', 'activation_to_linear']
-    detector = SegQuantPatternDetector(MyModel(), example_inputs=(torch.randn(2, 10),), search_patterns=search_patterns)
+    detector = SegQuantPatternDetector(MyModel2(dim=10), example_inputs=(torch.randn(2, 10),), search_patterns=search_patterns)
     results = detector.find_all_patterns()
 
     from pprint import pprint

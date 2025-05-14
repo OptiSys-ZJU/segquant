@@ -51,6 +51,9 @@ if __name__ == '__main__':
             break
     
     ##### testing
+    [affiner.finish_learning() for affiner in block_affiners]
+    tac_affiner.finish_learning()
+
     def testing(timestep, real, quant, affiner, log_prefix):
         if hasattr(affiner, 'blocksize'):
             K = torch.ones_like(real)

@@ -9,6 +9,7 @@ class TACDiffution:
         self.lambda1 = lambda1
         self.lambda2 = lambda2
         self.max_timestep = max_timestep
+        self.learning = True
 
     def loss(self, K, quantized, real):
         quantized = quantized.to(torch.float32)
@@ -37,6 +38,9 @@ class TACDiffution:
 
     def get_solution(self, timestep):
         return self.solutions[timestep]
+    
+    def finish_learning(self):
+        self.learning = False
 
     def step_learning(self, timestep, quantized, real):
         quantized = quantized.to(torch.float32)
@@ -57,19 +61,20 @@ class TACDiffution:
 
         K_mean = K_out.mean(dim=0, keepdim=True)
 
-        if timestep not in self.cumulative:
-            self.cumulative[timestep] = {
-                'sum_K': K_mean.clone(),
-                'count': 1
-            }
-        else:
-            self.cumulative[timestep]['sum_K'] += K_mean
-            self.cumulative[timestep]['count'] += 1
+        if self.learning:
+            if timestep not in self.cumulative:
+                self.cumulative[timestep] = {
+                    'sum_K': K_mean.clone(),
+                    'count': 1
+                }
+            else:
+                self.cumulative[timestep]['sum_K'] += K_mean
+                self.cumulative[timestep]['count'] += 1
 
-        count = self.cumulative[timestep]['count']
-        mean_K = self.cumulative[timestep]['sum_K'] / count
+            count = self.cumulative[timestep]['count']
+            mean_K = self.cumulative[timestep]['sum_K'] / count
 
-        self.solutions[timestep] = mean_K
+            self.solutions[timestep] = mean_K
         return K_mean
 
 
@@ -100,6 +105,8 @@ if __name__ == '__main__':
         if step >= learning_sample:
             break
     
+    affiner.finish_learning()
+
     ##### testing
     dataloader = dataset.get_dataloader(batch_size=1, shuffle=True)
     test_sample = 2

@@ -24,12 +24,14 @@ default_quantize_config = {
         "enable": True,
         "dtype": DType.INT8,
         "seglinear": True,
-        "blockwise_affine": {
-            "block": 128,
-            "learn_sample": 32 
-        },
         "input_axis": None,
         "weight_axis": None,
         'search_patterns': SegPattern.all(),
     },
+}
+
+default_affine_config = {
+    "blockwise": 128,
+    "learning_samples": 8,
+    "max_timestep": 30
 }

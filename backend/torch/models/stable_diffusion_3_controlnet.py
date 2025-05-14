@@ -33,6 +33,8 @@ from transformers import (
     T5TokenizerFast,
 )
 
+from segquant.torch.blockwise_affine import BlockwiseAffiner
+
 if is_torch_xla_available():
     XLA_AVAILABLE = True
 else:
@@ -817,6 +819,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 256,
+        affiner: BlockwiseAffiner = None,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -1120,8 +1123,6 @@ class StableDiffusion3ControlNetModel(nn.Module):
         # 8. Denoising loop
         with tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                # DebugContext.set_i(i)
-
                 if self.interrupt:
                     continue
                 # expand the latents if we are doing classifier free guidance
@@ -1161,6 +1162,16 @@ class StableDiffusion3ControlNetModel(nn.Module):
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+                # perform affine
+                if affiner is not None:
+                    if affiner.max_timestep != num_inference_steps:
+                        print(f'[Warning] BlockwiseAffiner: max_timestep[{affiner.max_timestep}] != num_inference_steps[{num_inference_steps}]')
+                    K, b = affiner.get_solution(num_inference_steps-1-i)
+                    
+                    K = K.to(device=noise_pred.device)
+                    b = b.to(device=noise_pred.device)
+                    noise_pred = (K * noise_pred.to(dtype=K.dtype) + b).to(dtype=noise_pred.dtype)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype

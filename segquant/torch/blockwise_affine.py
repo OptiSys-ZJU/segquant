@@ -1,6 +1,12 @@
+import os
+import numpy as np
 import torch
-
+import torch.nn as nn
+from benchmark import trace_pic
 from dataset.affine.noise_dataset import NoiseDataset
+from sample.noise_sampler import NoiseSampler
+from segquant.config import default_affine_config
+from torch.utils.data import Dataset, SubsetRandomSampler, DataLoader
 
 class BlockwiseAffiner:
     def __init__(self, blocksize=128, alpha=0.5, lambda1=0.1, lambda2=0.1, max_timestep=30):
@@ -11,6 +17,7 @@ class BlockwiseAffiner:
         self.lambda1 = lambda1
         self.lambda2 = lambda2
         self.max_timestep = max_timestep
+        self.learning = True
 
     def loss(self, K, b, quantized, real):
         quantized = quantized.to(torch.float32)
@@ -39,6 +46,9 @@ class BlockwiseAffiner:
 
     def get_solution(self, timestep):
         return self.solutions[timestep]
+    
+    def finish_learning(self):
+        self.learning = False
 
     def step_learning(self, timestep, quantized, real):
         B, C, H, W = quantized.shape
@@ -118,88 +128,218 @@ class BlockwiseAffiner:
         K_mean = K_out.mean(dim=0, keepdim=True)
         b_mean = b_out.mean(dim=0, keepdim=True)
 
-        if timestep not in self.cumulative:
-            self.cumulative[timestep] = {
-                'sum_K': K_mean.clone(),
-                'sum_b': b_mean.clone(),
-                'count': 1
-            }
-        else:
-            self.cumulative[timestep]['sum_K'] += K_mean
-            self.cumulative[timestep]['sum_b'] += b_mean
-            self.cumulative[timestep]['count'] += 1
+        if self.learning:
+            if timestep not in self.cumulative:
+                self.cumulative[timestep] = {
+                    'sum_K': K_mean.clone(),
+                    'sum_b': b_mean.clone(),
+                    'count': 1
+                }
+            else:
+                self.cumulative[timestep]['sum_K'] += K_mean
+                self.cumulative[timestep]['sum_b'] += b_mean
+                self.cumulative[timestep]['count'] += 1
 
-        count = self.cumulative[timestep]['count']
-        mean_K = self.cumulative[timestep]['sum_K'] / count
-        mean_b = self.cumulative[timestep]['sum_b'] / count
+            count = self.cumulative[timestep]['count']
+            mean_K = self.cumulative[timestep]['sum_K'] / count
+            mean_b = self.cumulative[timestep]['sum_b'] / count
 
-        self.solutions[timestep] = (mean_K, mean_b)
+            self.solutions[timestep] = (mean_K, mean_b)
 
         return (K_mean, b_mean)
+
+def blockwise_affine(
+    model_real: nn.Module, 
+    model_quant: nn.Module, 
+    target_device='cuda:0', 
+    controlnet_scale=0.7, 
+    guidance_scale=7, 
+    shuffle=True, 
+    config=None, 
+    verbose=False,
+    pack_per_file=2,
+):
+    if config is None:
+        config = default_affine_config
+    
+    affiner = BlockwiseAffiner(max_timestep=config['max_timestep'], blocksize=config['blockwise'])
+    learning_samples = config['learning_samples']
+
+    if verbose:
+        print(f"[BlockwiseAffiner] Init max_timestep[{config['max_timestep']}], blocksize[{config['blockwise']}], learning_samples[{config['learning_samples']}]")
+    
+    assert next(model_real.parameters()).device == torch.device("cpu")
+    assert next(model_quant.parameters()).device == torch.device("cpu")
+
+    noise_sampler = NoiseSampler(controlnet_scale=controlnet_scale, guidance_scale=guidance_scale)
+
+    indices = np.arange(len(dataset))
+    if shuffle:
+        np.random.seed(42)
+        np.random.shuffle(indices)
+    
+    save_dir = '.'
+
+    def sample_noise(model: nn.Module, t: str):
+        file_idx = 0
+        outputs = []
+        model.to(torch.device(target_device))
+        data_loader = dataset.get_dataloader(sampler=SubsetRandomSampler(indices.copy()))
+        print(f"[INFO] Sampling noise for {t} model...")  # Log start of sampling
+        for sample_data in noise_sampler.sample(
+            model,
+            data_loader,
+            max_timestep=config['max_timestep'],
+            sample_size=learning_samples,
+            timestep_per_sample=config['max_timestep']
+        ):
+            outputs.append(sample_data)
+            file_idx += 1
+            if file_idx % pack_per_file == 0:
+                save_path = os.path.join(save_dir, f'tmp_{t}{file_idx}.pt')
+                torch.save(outputs, save_path)
+                print(f"[INFO] Saved {file_idx} samples for {t} model to {save_path}")  # Log every save
+                outputs = []  # Clear the outputs after saving
+
+        # Ensure any remaining samples are saved
+        if len(outputs) > 0:
+            save_path = os.path.join(save_dir, f'tmp_{t}{file_idx}.pt')
+            torch.save(outputs, save_path)
+            print(f"[INFO] Saved remaining {len(outputs)} samples for {t} model to {save_path}")  # Log final save
+
+        print(f"[INFO] Finished sampling noise for {t} model.")  # Log end of sampling
+        model.to(torch.device('cpu'))
+    
+    def process_noise_pred(noise_pred: torch.Tensor, mix=False, guidance=None):
+        if noise_pred.dim() == 0:
+            raise ValueError("Unexpected scalar tensor")
+        if noise_pred.size(0) == 2:
+            if mix:
+                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                noise_pred = noise_pred_uncond + guidance * (noise_pred_text - noise_pred_uncond)
+                return noise_pred
+            else:
+                return (noise_pred[0], noise_pred[1])
+        elif noise_pred.size(0) == 1:
+            return noise_pred.squeeze(0)
+        else:
+            raise ValueError(f"Unsupported first dimension size: {noise_pred.size(0)}")
+
+    # Sample noise for both models
+    print("[INFO] Starting noise sampling for real model.")
+    sample_noise(model_real, 'real')
+    print("[INFO] Starting noise sampling for quant model.")
+    sample_noise(model_quant, 'quant')
+    
+    # List temporary files created during sampling
+    real_files = sorted([f for f in os.listdir(save_dir) if f.startswith('tmp_real')])
+    quant_files = sorted([f for f in os.listdir(save_dir) if f.startswith('tmp_quant')])
+
+    print(f"[INFO] Found {len(real_files)} temporary files for real model.")
+    print(f"[INFO] Found {len(quant_files)} temporary files for quant model.")
+
+    for real_file, quant_file in zip(real_files, quant_files):
+        print(f"[INFO] Processing files: {real_file} and {quant_file}")
+        
+        # Load the temp files
+        real_datas = torch.load(os.path.join(save_dir, real_file))
+        quant_datas = torch.load(os.path.join(save_dir, quant_file))
+
+        # Process noise predictions
+        for real_data, quant_data in zip(real_datas, quant_datas):
+            timesteps = [r['timestep'] for r in real_data]
+            timestep_values = [r['extra_features']['timestep'] for r in real_data]
+            reals = [process_noise_pred(r['noise_pred'], mix=True, guidance=r['extra_features']['guidance_scale']) for r in real_data]
+            quants = [process_noise_pred(q['noise_pred'], mix=True, guidance=q['extra_features']['guidance_scale']) for q in quant_data]
+
+            for ts, tv, real, quant in zip(timesteps, timestep_values, reals, quants):
+                K = torch.ones_like(real)
+                b = torch.zeros_like(real)
+                init = (affiner.loss(K, b, quant, real), affiner.error(K, b, quant, real))
+
+                K, b = affiner.step_learning(ts, quant, real)
+                affine = (affiner.loss(K, b, quant, real), affiner.error(K, b, quant, real))
+
+                if verbose:
+                    print(f'BlockwiseAffiner [{ts}] block[{affiner.blocksize}] Learning init: [{init[0]:5f}/{init[1]:5f}], affine: [{affine[0]:5f}/{affine[1]:5f}]')
+
+        # Delete temporary files after processing
+        os.remove(os.path.join(save_dir, real_file))
+        os.remove(os.path.join(save_dir, quant_file))
+        print(f"[INFO] Deleted temporary files: {real_file}, {quant_file}")
+
+    affiner.finish_learning()
+    return affiner
 
 
 
 if __name__ == '__main__':
-    blocksizes = [1, 2, 4, 8, 16, 32, 64, 128]
-    # blocksizes = [1]
-    affiners = [BlockwiseAffiner(max_timestep=60, blocksize=block) for block in blocksizes]
-    dataset = NoiseDataset('../dataset/affine_noise')
+    from dataset.coco.coco_dataset import COCODataset
+    dataset = COCODataset(path='../dataset/controlnet_datasets/controlnet_canny_dataset', cache_size=16)
 
-    ###### learning
-    dataloader = dataset.get_dataloader(batch_size=1, shuffle=False)
-    learning_sample = 8
-    step = 0
-    for batch in dataloader:
-        assert isinstance(batch, list) and len(batch) == dataset.max_timestep
-        for data in batch:
-            timestep = int(data["timestep"][0].item())
-            quant = data["quant"]
-            real = data["real"]
+    from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
+    model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cuda:0')
 
-            for affiner in affiners:
-                K = torch.ones_like(real)
-                b = torch.zeros_like(real)
-                init = (affiner.loss(K, b, quant, real), affiner.error(K, b, quant, real))
+    from segquant.config import DType, SegPattern
+    quant_config = {
+        "default": {
+            "enable": True,
+            "dtype": DType.INT8SMOOTH,
+            "seglinear": True,
+            'search_patterns': SegPattern.all(),
+            "input_axis": None,
+            "weight_axis": None,
+            "alpha": 0.5,
+        },
+    }
+    calib_args = {
+        "max_timestep": 60,
+        "sample_size": 16,
+        "timestep_per_sample": 30,
+        "controlnet_conditioning_scale": 0,
+        "guidance_scale": 7,
+        "shuffle": True,
+    }
 
-                K, b = affiner.step_learning(timestep, quant, real)
-                affine = (affiner.loss(K, b, quant, real), affiner.error(K, b, quant, real))
+    this_affine_config = {
+        "blockwise": 128,
+        "learning_samples": 8,
+        "max_timestep": 30
+    }
 
-                print(f'[{timestep}] block[{affiner.blocksize}] init: [{init[0]:5f}/{init[1]:5f}], affine: [{affine[0]:5f}/{affine[1]:5f}]')
+    def quant_model(model_real: nn.Module, quant_layer: str, config, dataset, calib_args: dict) -> nn.Module:
+        from sample.sampler import Q_DiffusionSampler, model_map
+        from segquant.torch.calibrate_set import generate_calibrate_set
+        from segquant.torch.quantization import quantize
 
-            exit(0)
+        sampler = Q_DiffusionSampler()
+        sample_dataloader = dataset.get_dataloader(batch_size=1, shuffle=calib_args["shuffle"])
+        calibset = generate_calibrate_set(model_real, sampler, sample_dataloader, quant_layer, 
+                                        max_timestep=calib_args["max_timestep"],
+                                        sample_size=calib_args["sample_size"],
+                                        timestep_per_sample=calib_args["timestep_per_sample"],
+                                        controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
+                                        guidance_scale=calib_args["guidance_scale"])
 
-        step += 1
-        if step >= learning_sample:
-            break
+        calib_loader = calibset.get_dataloader(batch_size=1)
+        model_real.transformer = quantize(model_map[quant_layer](model_real), calib_loader, config, True)
+        return model_real
+    model_quant = quant_model(model, 'dit', quant_config, dataset, calib_args).to('cpu')
+    model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
+
+    affiner = blockwise_affine(model_real, model_quant, config=this_affine_config, verbose=True)
+
+    ## perform
+    max_num = 1
+    model_quant = model_quant.to('cuda')
+    latents = torch.load('../latents.pt')
+    trace_pic(model_quant, 'affine_pics/blockaffine', dataset.get_dataloader(), latents, max_num=max_num, 
+              controlnet_conditioning_scale=0, guidance_scale=7, num_inference_steps=30, affiner=affiner)
+
+    trace_pic(model_quant, 'affine_pics/quant', dataset.get_dataloader(), latents, max_num=max_num, 
+              controlnet_conditioning_scale=0, guidance_scale=7, num_inference_steps=30)
     
-    ##### testing
-    dataloader = dataset.get_dataloader(batch_size=1, shuffle=True)
-    test_sample = 2
-    step = 0
-    for batch in dataloader:
-        assert isinstance(batch, list) and len(batch) == dataset.max_timestep
-        for data in batch:
-            timestep = int(data["timestep"][0].item())
-            quant = data["quant"]
-            real = data["real"]
-
-            for affiner in affiners:
-                K = torch.ones_like(real)
-                b = torch.zeros_like(real)
-                init = (affiner.loss(K, b, quant, real), affiner.error(K, b, quant, real))
-
-                K, b = affiner.get_solution(timestep)
-                affine = (affiner.loss(K, b, quant, real), affiner.error(K, b, quant, real))
-
-                K, b = affiner.step_learning(timestep, quant, real)
-                opt = (affiner.loss(K, b, quant, real), affiner.error(K, b, quant, real))
-
-                print(f'[{timestep}] block[{affiner.blocksize}] init: [{init[0]:5f}/{init[1]:5f}], affine: [{affine[0]:5f}/{affine[1]:5f}], opt: [{opt[0]:5f}/{opt[1]:5f}]')
-        
-        step += 1
-        if step >= test_sample:
-            break
-
-
-
-
+    del model_quant
+    model_real = model_real.to('cuda')
+    trace_pic(model_real, 'affine_pics/real', dataset.get_dataloader(), latents, max_num=max_num, 
+              controlnet_conditioning_scale=0, guidance_scale=7, num_inference_steps=30)

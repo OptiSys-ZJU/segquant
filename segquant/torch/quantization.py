@@ -163,7 +163,7 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
                     del linears[name]
 
     for name in linears:
-        to_calib_linears[name] = create_linear(linears[name], name, {'chunks': 1, 'seg_mode': 'weight'}, final_config)
+        to_calib_linears[name] = create_linear(linears[name], name, {'chunks': 1, 'seg_mode': 'weight'}, final_config, dual_scale=(name in dual_scale_linears))
 
     if verbose:
         print('start smooth ...')
@@ -186,7 +186,6 @@ if __name__ == '__main__':
             "enable": True,
             "dtype": DType.INT8SMOOTH,
             "seglinear": True,
-            "blockwise_affine_size": 128,
             'search_patterns': SegPattern.all(),
             "input_axis": None,
             "weight_axis": None,
