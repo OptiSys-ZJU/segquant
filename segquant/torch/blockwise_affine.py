@@ -398,12 +398,12 @@ if __name__ == '__main__':
     model_quant = model_quant.to('cuda')
     latents = torch.load('../latents.pt')
     trace_pic(model_quant, 'affine_pics/blockaffine', dataset.get_dataloader(), latents, max_num=max_num, 
-              controlnet_conditioning_scale=0, guidance_scale=7, num_inference_steps=30, affiner=affiner)
+              controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=this_affine_config['max_timestep'], affiner=affiner)
 
     trace_pic(model_quant, 'affine_pics/quant', dataset.get_dataloader(), latents, max_num=max_num, 
-              controlnet_conditioning_scale=0, guidance_scale=7, num_inference_steps=30)
+              controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=this_affine_config['max_timestep'])
     
     del model_quant
     model_real = model_real.to('cuda')
     trace_pic(model_real, 'affine_pics/real', dataset.get_dataloader(), latents, max_num=max_num, 
-              controlnet_conditioning_scale=0, guidance_scale=7, num_inference_steps=30)
+              controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=this_affine_config['max_timestep'])
