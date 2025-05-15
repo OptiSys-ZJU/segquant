@@ -397,8 +397,8 @@ if __name__ == '__main__':
 
     this_affine_config = {
         'sample_mode': 'block',
-        "blockwise": 8,
-        "learning_samples": 1,
+        "blockwise": 128,
+        "learning_samples": 8,
         "max_timestep": 50
     }
 
@@ -435,7 +435,7 @@ if __name__ == '__main__':
     affiner = blockwise_affine(model_real, model_quant, config=this_affine_config, verbose=True, shuffle=False)
 
     ## perform
-    max_num = 1
+    max_num = 64
     model_quant = model_quant.to('cuda')
     latents = torch.load('../latents.pt')
     trace_pic(model_quant, 'affine_pics/blockaffine', dataset.get_dataloader(), latents, max_num=max_num, 

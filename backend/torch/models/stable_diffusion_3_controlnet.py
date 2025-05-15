@@ -1209,7 +1209,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
                         
                         K, b = affiner.get_solution(num_inference_steps - 1 - i, noise_pred_uncond)
                         # noise_pred_uncond = apply_affine_with_threshold(noise_pred_uncond, K, b, threshold_coef=3.6, alpha=1)
-                        noise_pred_uncond = apply_affine_with_threshold(noise_pred_uncond, K, b, percentile=97, alpha=1)
+                        noise_pred_uncond = apply_affine_with_threshold(noise_pred_uncond, K, b, percentile=98, alpha=0.4)
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
                 if debug_noise_pred:
