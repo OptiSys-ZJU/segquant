@@ -7,9 +7,10 @@ from dataset.affine.noise_dataset import NoiseDataset
 from sample.noise_sampler import NoiseSampler
 from segquant.config import default_affine_config
 from torch.utils.data import Dataset, SubsetRandomSampler, DataLoader
+import torch.nn.functional as F
 
 class BlockwiseAffiner:
-    def __init__(self, blocksize=128, alpha=0.5, lambda1=0.1, lambda2=0.1, max_timestep=30):
+    def __init__(self, sample_mode='block', blocksize=128, alpha=0.5, lambda1=0.1, lambda2=0.1, max_timestep=30):
         self.solutions = {}  # timestep -> (mean_K, mean_b)
         self.cumulative = {}  # timestep -> {'sum_K': ..., 'sum_b': ..., 'count': ...}
         self.blocksize = blocksize
@@ -18,6 +19,7 @@ class BlockwiseAffiner:
         self.lambda2 = lambda2
         self.max_timestep = max_timestep
         self.learning = True
+        self.sample_mode = sample_mode # 'interpolate' 
 
     def loss(self, K, b, quantized, real):
         quantized = quantized.to(torch.float32)
@@ -49,19 +51,25 @@ class BlockwiseAffiner:
             if timestep in self.solutions:
                 return self.solutions[timestep]
             else:
+                print(f'Warning: [{timestep}] get default solution')
                 return (torch.ones_like(example), torch.zeros_like(example))
         else:
             return self.solutions[timestep]
     
     def finish_learning(self):
         self.learning = False
+    
+    def _solve_single(self, e, e_hat):
+        A = self.alpha + (1 - self.alpha) / (e ** 2 + 1e-8)
+        delta = e - e_hat
+        denominator = 1 + (self.lambda2 * e_hat ** 2) / self.lambda1 + self.lambda2 / A
+        b = delta / denominator
+        K = 1 + (self.lambda2 * e_hat / self.lambda1) * b
+        return (K, b)
 
-    def step_learning(self, timestep, quantized, real):
+    def _sample_block(self, quantized, real):
         B, C, H, W = quantized.shape
         assert H % self.blocksize == 0 and W % self.blocksize == 0, "H and W must be divisible by block size"
-
-        quantized = quantized.to(torch.float32)
-        real = real.to(torch.float32)
 
         h_blocks = H // self.blocksize
         w_blocks = W // self.blocksize
@@ -130,7 +138,32 @@ class BlockwiseAffiner:
                     # Assign the computed s_block_full and b_block_full back to the output tensors
                     K_out[:, :, h_start:h_end, w_start:w_end] = s_block_full  # Assuming s_block is stored in K_out
                     b_out[:, :, h_start:h_end, w_start:w_end] = b_block_full
+        
+        return (K_out, b_out)
 
+    def _sample_interpolate(self, quantized, real):
+        B, C, H, W = quantized.shape
+        assert H % self.blocksize == 0 and W % self.blocksize == 0, "H and W must be divisible by block size"
+
+        size = H // self.blocksize
+        quantized_sample = F.interpolate(quantized, size=(size, size), mode='bilinear', align_corners=False)
+        real_sample = F.interpolate(real, size=(size, size), mode='bilinear', align_corners=False)
+
+        K, b = self._solve_single(real_sample, quantized_sample)
+        K = F.interpolate(K, size=(H, W), mode='bilinear', align_corners=False)
+        b = F.interpolate(b, size=(H, W), mode='bilinear', align_corners=False)
+        return (K, b)
+
+    def step_learning(self, timestep, quantized, real):
+        quantized = quantized.to(torch.float32)
+        real = real.to(torch.float32)
+
+        if self.sample_mode == 'block':
+            K_out, b_out = self._sample_block(quantized, real)
+        elif self.sample_mode == 'interpolate':
+            K_out, b_out = self._sample_interpolate(quantized, real)
+
+        #############################################
         K_mean = K_out.mean(dim=0, keepdim=True)
         b_mean = b_out.mean(dim=0, keepdim=True)
 
@@ -168,13 +201,13 @@ def blockwise_affine(
     if config is None:
         config = default_affine_config
     
-    affiner = BlockwiseAffiner(max_timestep=config['max_timestep'], blocksize=config['blockwise'])
+    affiner = BlockwiseAffiner(sample_mode=config['sample_mode'], max_timestep=config['max_timestep'], blocksize=config['blockwise'])
     learning_samples = config['learning_samples']
 
     pack_per_file = min(learning_samples, pack_per_file)
 
     if verbose:
-        print(f"[BlockwiseAffiner] Init max_timestep[{config['max_timestep']}], blocksize[{config['blockwise']}], learning_samples[{config['learning_samples']}]")
+        print(f"[BlockwiseAffiner] Init sample_mode [{config['sample_mode']}], max_timestep[{config['max_timestep']}], blocksize[{config['blockwise']}], learning_samples[{config['learning_samples']}]")
     
     assert next(model_real.parameters()).device == torch.device("cpu")
     assert next(model_quant.parameters()).device == torch.device("cpu")
@@ -195,7 +228,8 @@ def blockwise_affine(
             if mix:
                 noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                 noise_pred = noise_pred_uncond + guidance * (noise_pred_text - noise_pred_uncond)
-                return noise_pred
+                #return noise_pred
+                return noise_pred_uncond
             else:
                 return (noise_pred[0], noise_pred[1])
         elif noise_pred.size(0) == 1:
@@ -339,11 +373,7 @@ def blockwise_affine(
 
 if __name__ == '__main__':
     from dataset.coco.coco_dataset import COCODataset
-    dataset = COCODataset(path='../dataset/controlnet_datasets/controlnet_canny_dataset', cache_size=16)
-
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
-    model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cuda:0')
-
     from segquant.config import DType, SegPattern
     quant_config = {
         "default": {
@@ -366,9 +396,10 @@ if __name__ == '__main__':
     }
 
     this_affine_config = {
-        "blockwise": 128,
-        "learning_samples": 8,
-        "max_timestep": 60
+        'sample_mode': 'block',
+        "blockwise": 8,
+        "learning_samples": 1,
+        "max_timestep": 50
     }
 
     def quant_model(model_real: nn.Module, quant_layer: str, config, dataset, calib_args: dict) -> nn.Module:
@@ -388,22 +419,34 @@ if __name__ == '__main__':
         calib_loader = calibset.get_dataloader(batch_size=1)
         model_real.transformer = quantize(model_map[quant_layer](model_real), calib_loader, config, True)
         return model_real
-    model_quant = quant_model(model, 'dit', quant_config, dataset, calib_args).to('cpu')
-    model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
+    
+    dataset = COCODataset(path='../dataset/controlnet_datasets/controlnet_canny_dataset', cache_size=16)
+    
+    # model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cuda:0')
+    # model_quant = quant_model(model, 'dit', quant_config, dataset, calib_args).to('cpu')
+    # torch.save(model_quant.transformer, 'transformer.pt')
+    # exit(0)
 
-    affiner = blockwise_affine(model_real, model_quant, config=this_affine_config, verbose=True)
+    model_quant = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
+    model_quant.transformer = torch.load('transformer.pt', weights_only=False)
+
+    model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
+    
+    affiner = blockwise_affine(model_real, model_quant, config=this_affine_config, verbose=True, shuffle=False)
 
     ## perform
-    max_num = 128
+    max_num = 1
     model_quant = model_quant.to('cuda')
     latents = torch.load('../latents.pt')
     trace_pic(model_quant, 'affine_pics/blockaffine', dataset.get_dataloader(), latents, max_num=max_num, 
               controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=this_affine_config['max_timestep'], affiner=affiner)
 
+    latents = torch.load('../latents.pt')
     trace_pic(model_quant, 'affine_pics/quant', dataset.get_dataloader(), latents, max_num=max_num, 
               controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=this_affine_config['max_timestep'])
     
     del model_quant
     model_real = model_real.to('cuda')
+    latents = torch.load('../latents.pt')
     trace_pic(model_real, 'affine_pics/real', dataset.get_dataloader(), latents, max_num=max_num, 
               controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=this_affine_config['max_timestep'])
