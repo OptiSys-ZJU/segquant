@@ -5,6 +5,7 @@ import fnmatch
 from segquant.config import DType, SegPattern, default_quantize_config
 from segquant.layers.SegmentLinear import BaseSegmentLinear, create_segment_linear
 from segquant.pattern_detector import SegQuantPatternDetector
+from concurrent.futures import ThreadPoolExecutor
 
 def move_to_device(batch, device):
     if isinstance(batch, torch.Tensor):
@@ -67,15 +68,17 @@ def get_all_linears(model: nn.Module):
             linears[name] = module
     return linears
 
-def smooth_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: torch.utils.data.DataLoader, device):
+def smooth_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: torch.utils.data.DataLoader, device, max_workers=16):
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    
     hooks = []
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear) and name in to_calib_linears:
             def get_hook(n):
-                def hook_fn(mod, inp, out):
-                    if n in to_calib_linears:
-                        if hasattr(to_calib_linears[n], 'trace'):
-                            to_calib_linears[n].trace(inp[0])
+                def hook_fn(mod, inp, out, n=n):
+                    if hasattr(to_calib_linears[n], 'trace'):
+                        executor.submit(to_calib_linears[n].trace, inp[0])
+                        # to_calib_linears[n].trace(inp[0])
                 return hook_fn
 
             hooks.append(module.register_forward_hook(get_hook(name)))
@@ -88,18 +91,22 @@ def smooth_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: 
     for h in hooks:
         h.remove()
     
+    executor.shutdown(wait=True)
+
     for l in to_calib_linears.values():
         if hasattr(l, 'smooth'):
             l.smooth()
 
-def calib_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: torch.utils.data.DataLoader, device):
+def calib_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: torch.utils.data.DataLoader, device, max_workers=16):
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    
     hooks = []
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear) and name in to_calib_linears:
             def get_hook(n):
-                def hook_fn(mod, inp, out):
-                    if n in to_calib_linears:
-                        to_calib_linears[n].calibrate(inp[0])
+                def hook_fn(mod, inp, out, n=n):
+                    executor.submit(to_calib_linears[n].calibrate, inp[0])
+                    # to_calib_linears[n].calibrate(inp[0])
                 return hook_fn
 
             hooks.append(module.register_forward_hook(get_hook(name)))
@@ -112,6 +119,8 @@ def calib_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: t
     for h in hooks:
         h.remove()
     
+    executor.shutdown(wait=True)
+
     for l in to_calib_linears.values():
         l.finish_calibrate()
 
