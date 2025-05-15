@@ -33,6 +33,8 @@ from transformers import (
     T5TokenizerFast,
 )
 
+from segquant.torch.blockwise_affine import BlockwiseAffiner
+
 if is_torch_xla_available():
     XLA_AVAILABLE = True
 else:
@@ -817,6 +819,9 @@ class StableDiffusion3ControlNetModel(nn.Module):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 256,
+        early_stop: int = None,
+        replay_timestep: int = None,
+        affiner: BlockwiseAffiner = None,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -1120,7 +1125,15 @@ class StableDiffusion3ControlNetModel(nn.Module):
         # 8. Denoising loop
         with tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                # DebugContext.set_i(i)
+                if replay_timestep is not None:
+                    if i < replay_timestep:
+                        if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                            progress_bar.update()
+                        continue
+
+                if early_stop is not None:
+                    if i == early_stop:
+                        break
 
                 if self.interrupt:
                     continue
@@ -1161,6 +1174,20 @@ class StableDiffusion3ControlNetModel(nn.Module):
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+                # perform affine
+                if affiner is not None:
+                    if affiner.max_timestep != num_inference_steps:
+                        print(f'[Warning] BlockwiseAffiner: max_timestep[{affiner.max_timestep}] != num_inference_steps[{num_inference_steps}]')
+                    
+                    if i == 0:
+                        K, b = affiner.get_solution(num_inference_steps-1-i, noise_pred)
+                        
+                        pre_type = noise_pred.dtype
+                        K = K.to(device=noise_pred.device, dtype=torch.float32)
+                        b = b.to(device=noise_pred.device, dtype=torch.float32)
+                        noise_pred = noise_pred.to(K.dtype)
+                        noise_pred = (K * noise_pred + b).to(dtype=pre_type)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype

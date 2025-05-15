@@ -1,13 +1,14 @@
-from datasets import load_dataset
+import torch
 import time
-
-
+from transformers import DPTFeatureExtractor, DPTForDepthEstimation
 import cv2
 import numpy as np
+from torch.utils.data import Dataset
 from PIL import Image
-import torch
-from transformers import DPTFeatureExtractor, DPTForDepthEstimation
-import time # To measure processing time
+from typing import OrderedDict
+import os
+import json
+from backend.torch.utils import load_image
 
 class ControlNetPreprocessor:
     """
@@ -142,151 +143,63 @@ class ControlNetPreprocessor:
         Returns:
             tuple[Image.Image | None, Image.Image | None]: (canny_map, depth_map)
         """
-        start_time = time.time()
-        print(f"Processing image of size {image.size}...")
-
         if cn_type == 'canny':
             res_map = self.get_canny_map(image)
         elif cn_type == 'depth':
             res_map = self.get_depth_map(image)
         else:
             print("Type does not exist")
-        
-        end_time = time.time()
-        print(f"Processing finished in {end_time - start_time:.2f} seconds.")
         return res_map
-    
 
-def create_controlnet_dataset(preprocessor, dataset, output_dir, cn_type='canny', limit=None):
-    """
-    Creates a ControlNet dataset by processing images from a source dataset.
-    
-    Args:
-        preprocessor: The ControlNetPreprocessor instance
-        dataset: The source dataset (e.g., COCO)
-        output_dir: Directory to save the processed dataset
-        cn_type: Type of control map ('canny' or 'depth')
-        limit: Maximum number of samples to process (None for all)
-    
-    Returns:
-        Path to the created dataset
-    """
-    import os
-    import json
-    
-    # Create output directories
-    dataset_dir = os.path.join(output_dir, f"controlnet_{cn_type}_dataset")
-    images_dir = os.path.join(dataset_dir, "images")
-    controls_dir = os.path.join(dataset_dir, "controls")
-    
-    os.makedirs(dataset_dir, exist_ok=True)
-    os.makedirs(images_dir, exist_ok=True)
-    os.makedirs(controls_dir, exist_ok=True)
-    
-    # Prepare metadata
-    metadata = []
-    
-    # Determine how many samples to process
-    total_samples = len(dataset) if limit is None else min(limit, len(dataset))
-    print(f"Processing {total_samples} samples for ControlNet {cn_type} dataset...")
-    
-    # Process each sample
-    for i in range(total_samples):
-        if i % 100 == 0:
-            print(f"Processing sample {i}/{total_samples}...")
-        
-        # Get sample from dataset
-        sample = dataset[i]
-        input_image = sample['image']
-        
-        # Get prompt (caption)
-        if 'answer' in sample and sample['answer']:
-            prompt = sample['answer'][0]
-        elif 'caption' in sample:
-            prompt = sample['caption']
+class LimitedCache:
+    def __init__(self, max_size):
+        self.cache = OrderedDict()
+        self.max_size = max_size
+
+    def get(self, key, loader_fn):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+            return self.cache[key]
         else:
-            prompt = "No caption available"
-        
-        # Process image with ControlNet preprocessor
-        try:
-            control_map = preprocessor.process(cn_type=cn_type, image=input_image)
-            
-            # Save original image and control map
-            image_filename = f"image_{i:06d}.png"
-            control_filename = f"control_{i:06d}.png"
-            
-            input_image.save(os.path.join(images_dir, image_filename))
-            control_map.save(os.path.join(controls_dir, control_filename))
-            
-            # Add to metadata
-            metadata.append({
-                "id": i,
-                "prompt": prompt,
-                "image": f"images/{image_filename}",
-                "control": f"controls/{control_filename}"
-            })
-        except Exception as e:
-            print(f"Error processing sample {i}: {e}")
-            continue
-    
-    # Save metadata
-    metadata_path = os.path.join(dataset_dir, "metadata.json")
-    with open(metadata_path, "w") as f:
-        json.dump(metadata, f, indent=2)
-    
-    print(f"Dataset created at: {dataset_dir}")
-    print(f"Total processed samples: {len(metadata)}")
-    return dataset_dir
+            value = loader_fn(key)
+            self.cache[key] = value
+            if len(self.cache) > self.max_size:
+                self.cache.popitem(last=False)
+            return value
 
+class CaptionControlDataset(Dataset):
+    @staticmethod
+    def collate_fn(batch):
+        return [(prompt, image, control) for prompt, image, control in batch]
 
-if __name__ == "__main__":
-    import argparse
-    
-    # Set up command line arguments
-    parser = argparse.ArgumentParser(description="Create ControlNet dataset from COCO")
-    parser.add_argument("--output_dir", type=str, default="./controlnet_datasets", 
-                        help="Directory to save the processed dataset")
-    parser.add_argument("--cn_type", type=str, default="canny", choices=["canny", "depth"],
-                        help="Type of control map to generate")
-    parser.add_argument("--limit", type=int, default=None, 
-                        help="Maximum number of samples to process")
-    parser.add_argument("--enable_blur", action="store_true", 
-                        help="Enable Gaussian blur for Canny edge detection")
-    parser.add_argument("--dataset", type=str, default="lmms-lab/COCO-Caption2017",
-                        help="Dataset to use (default: COCO-Caption2017)")
-    parser.add_argument("--split", type=str, default="val",
-                        help="Dataset split to use (default: val)")
-    parser.add_argument("--blur_kernel_size", type=int, default=3,
-                        help="Kernel size used to blur the image before Canny edge detection (must be odd)")
-    args = parser.parse_args()
-    
-    print("Loading dataset...")
-    start_time = time.time()
+    def __init__(self, path, cache_size=1024):
+        super().__init__()
+        self.base_path = path
+        with open(os.path.join(path, 'metadata.json'), "r") as f:
+            self.metadata = json.load(f)
 
-    # Load the dataset
-    try:
-        dataset = load_dataset(args.dataset, split=args.split, trust_remote_code=True)
-        print(f"Dataset loaded successfully in {time.time() - start_time:.2f} seconds.")
-        print(f"Number of examples: {len(dataset)}")
-        print("Dataset features:", dataset.features)
-    except Exception as e:
-        print(f"Error loading dataset: {e}")
-        print("Please ensure you have an internet connection and the dataset name is correct.")
-        exit()
+        self.image_cache = LimitedCache(cache_size)
+        self.control_cache = LimitedCache(cache_size)
 
-    # Initialize preprocessor
-    preprocessor = ControlNetPreprocessor(enable_blur=args.enable_blur, blur_kernel_size=args.blur_kernel_size)
-    
-    # Create ControlNet dataset
-    dataset_dir = create_controlnet_dataset(
-        preprocessor=preprocessor,
-        dataset=dataset,
-        output_dir=args.output_dir,
-        cn_type=args.cn_type,
-        limit=args.limit
-    )
-    
-    print(f"\nControlNet dataset created at: {dataset_dir}")
-    print("Done!")
+    def __len__(self):
+        return len(self.metadata)
 
-    
+    def __getitem__(self, idx):
+        item = self.metadata[idx]
+        prompt = item["prompt"]
+        image_path = os.path.join(self.base_path, item["image"])
+        control_path = os.path.join(self.base_path, item["control"])
+
+        image = self.image_cache.get(image_path, load_image)
+        control = self.control_cache.get(control_path, load_image)
+
+        return prompt, image, control
+
+    def get_dataloader(self, batch_size=1, shuffle=False, **kwargs):
+        return torch.utils.data.DataLoader(
+            self,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            collate_fn=self.collate_fn,
+            **kwargs
+        )

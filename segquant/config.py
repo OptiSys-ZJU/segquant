@@ -29,3 +29,9 @@ default_quantize_config = {
         'search_patterns': SegPattern.all(),
     },
 }
+
+default_affine_config = {
+    "blockwise": 128,
+    "learning_samples": 8,
+    "max_timestep": 30
+}

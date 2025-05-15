@@ -1,9 +1,9 @@
 from dataset.processor import CaptionControlDataset
 
-COCODataset = CaptionControlDataset
+MJHQDataset = CaptionControlDataset
 
 if __name__ == '__main__':
-    dataset = COCODataset(path='../dataset/controlnet_datasets/coco_canny', cache_size=16)
+    dataset = MJHQDataset(path='../dataset/controlnet_datasets/mjhq_canny', cache_size=16)
     data_loader = dataset.get_dataloader(batch_size=2)
 
     for i, batch in enumerate(data_loader):

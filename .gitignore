@@ -4,3 +4,4 @@ __pycache__/
 *.svg
 *.pdf
 *.png
+*.log
