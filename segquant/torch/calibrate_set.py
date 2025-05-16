@@ -1,7 +1,6 @@
 import io
 import os
-from typing import Union
-import zlib
+import zstandard as zstd
 import torch
 from torch.utils.data import Dataset
 from collections import OrderedDict
@@ -19,7 +18,7 @@ class BaseCalibSet(Dataset):
         elif folder is not None:
             self.data = None
             self.folder = folder
-            suffix = '.pt.z' if self.compress else '.pt'
+            suffix = '.pt.zst' if self.compress else '.pt'
             self.chunk_files = sorted([
                 os.path.join(folder, f) for f in os.listdir(folder)
                 if f.endswith(suffix)
@@ -38,9 +37,10 @@ class BaseCalibSet(Dataset):
             return torch.load(path)
         else:
             with open(path, 'rb') as f:
-                compressed = f.read()
-            decompressed = zlib.decompress(compressed)
-            return torch.load(io.BytesIO(decompressed))
+                compressed_bytes = f.read()
+            dctx = zstd.ZstdDecompressor()
+            decompressed_bytes = dctx.decompress(compressed_bytes)
+            return torch.load(io.BytesIO(decompressed_bytes))
 
     def __len__(self):
         if self.data is not None:
@@ -84,7 +84,7 @@ def generate_calibrate_set(
     sample_dataloader,
     calib_layer,
     dump_path,
-    chunk_size=16,
+    chunk_size=50,
     compress=True,
     **kwargs
 ):
@@ -114,13 +114,15 @@ def generate_calibrate_set(
 
             if dump:
                 if len(buffer) >= chunk_size:
-                    chunk_path = os.path.join(dump_path, f"chunk_{chunk_idx:03d}" + (".pt.z" if compress else ".pt"))
+                    chunk_path = os.path.join(dump_path, f"chunk_{chunk_idx:03d}" + (".pt.zst" if compress else ".pt"))
                     if not compress:
                         torch.save(buffer, chunk_path)
                     else:
-                        raw_bytes = torch.save(buffer, _use_new_zipfile_serialization=False, _return_bytes=True)
-                        import zlib
-                        compressed_bytes = zlib.compress(raw_bytes)
+                        buffer_io = io.BytesIO()
+                        torch.save(buffer, buffer_io, _use_new_zipfile_serialization=False)
+                        raw_bytes = buffer_io.getvalue()
+                        cctx = zstd.ZstdCompressor(level=9, threads=os.cpu_count())
+                        compressed_bytes = cctx.compress(raw_bytes)
                         with open(chunk_path, 'wb') as f:
                             f.write(compressed_bytes)
                     buffer.clear()
@@ -128,12 +130,15 @@ def generate_calibrate_set(
 
     if dump:
         if buffer:
-            chunk_path = os.path.join(dump_path, f"chunk_{chunk_idx:03d}" + (".pt.z" if compress else ".pt"))
+            chunk_path = os.path.join(dump_path, f"chunk_{chunk_idx:03d}" + (".pt.zst" if compress else ".pt"))
             if not compress:
                 torch.save(buffer, chunk_path)
             else:
-                raw_bytes = torch.save(buffer, _use_new_zipfile_serialization=False, _return_bytes=True)
-                compressed_bytes = zlib.compress(raw_bytes)
+                buffer_io = io.BytesIO()
+                torch.save(buffer, buffer_io, _use_new_zipfile_serialization=False)
+                raw_bytes = buffer_io.getvalue()
+                cctx = zstd.ZstdCompressor(level=9, threads=os.cpu_count())
+                compressed_bytes = cctx.compress(raw_bytes)
                 with open(chunk_path, 'wb') as f:
                     f.write(compressed_bytes)
 
