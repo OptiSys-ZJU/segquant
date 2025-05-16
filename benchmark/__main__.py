@@ -3,6 +3,7 @@ import torch
 from benchmark import trace_pic
 import torch.nn as nn
 from segquant.config import DType
+import os
 
 calib_args = {
     "max_timestep": 50,
@@ -98,6 +99,9 @@ def run_seg_module():
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
     from segquant.config import SegPattern
 
+    root_dir = 'benchmark_record/run_seg_module'
+    os.makedirs(root_dir, exist_ok=True)
+
     quant_config_with_seg = {
         "default": {
             "enable": True,
@@ -115,9 +119,18 @@ def run_seg_module():
         from segquant.torch.calibrate_set import generate_calibrate_set
         from segquant.torch.quantization import quantize
 
+        calib_key = (
+            f"maxT{calib_args['max_timestep']}_"
+            f"sz{calib_args['sample_size']}_"
+            f"tps{calib_args['timestep_per_sample']}_"
+            f"cond{calib_args['controlnet_conditioning_scale']}_"
+            f"gs{calib_args['guidance_scale']}_"
+            f"{'shuffle' if calib_args['shuffle'] else 'noshuffle'}"
+        )
+        calibset_path = os.path.join('calibset', 'dit', calib_key)
         sampler = Q_DiffusionSampler()
         sample_dataloader = dataset.get_dataloader(batch_size=1, shuffle=calib_args["shuffle"])
-        calibset = generate_calibrate_set(model_real, sampler, sample_dataloader, quant_layer, 
+        calibset = generate_calibrate_set(model_real, sampler, sample_dataloader, quant_layer, calibset_path, 
                                         max_timestep=calib_args["max_timestep"],
                                         sample_size=calib_args["sample_size"],
                                         timestep_per_sample=calib_args["timestep_per_sample"],
@@ -137,26 +150,43 @@ def run_seg_module():
     model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')    
     model_real = model_real.to('cuda')
     latents = torch.load('../latents.pt')
-    trace_pic(model_real, 'pics/run_seg_module/real', dataset.get_dataloader(), latents, max_num=max_num, 
+    trace_pic(model_real, os.path.join(root_dir, 'pics/real'), dataset.get_dataloader(), latents, max_num=max_num, 
               controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
     print('model_real completed')
 
+    def quant_or_load(model_target_path, target_config):
+        if not os.path.exists(model_target_path):
+            print(f'[INFO] {model_target_path} not found, start quantizing...')
+
+            model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cuda:0')
+            target_model = quant_model(model, 'dit', target_config, dataset, calib_args).to('cpu')
+
+            os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
+            torch.save(target_model.transformer, model_target_path)
+            print(f'[INFO] Model quantizing ok, saved to {model_target_path}')
+        else:
+            print(f'[INFO] {model_target_path} found, start loading...')
+            target_model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
+            target_model.transformer = torch.load(model_target_path, weights_only=False)
+        
+        return target_model
+
     ### 1
-    model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cuda:0')
-    model_quant = quant_model(model, 'dit', quant_config, dataset, calib_args).to('cpu')
+    model_quant_path = os.path.join(root_dir, 'model/dit/model_quant.pt')
+    model_quant = quant_or_load(model_quant_path, quant_config)
     model_quant = model_quant.to('cuda')
     latents = torch.load('../latents.pt')
-    trace_pic(model_quant, 'pics/run_seg_module/quant', dataset.get_dataloader(), latents, max_num=max_num, 
+    trace_pic(model_quant, os.path.join(root_dir, 'pics/quant'), dataset.get_dataloader(), latents, max_num=max_num, 
               controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
     del model_quant
     print('model_quant completed')
 
     ### 2
-    model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cuda:0')
-    model_quant_seg = quant_model(model, 'dit', quant_config_with_seg, dataset, calib_args).to('cpu')
+    model_quant_seg_path = os.path.join(root_dir, 'model/dit/model_quant_seg.pt')
+    model_quant_seg = quant_or_load(model_quant_seg_path, quant_config_with_seg)
     model_quant_seg = model_quant_seg.to('cuda')
     latents = torch.load('../latents.pt')
-    trace_pic(model_quant_seg, 'pics/run_seg_module/quant_seg', dataset.get_dataloader(), latents, max_num=max_num, 
+    trace_pic(model_quant_seg, os.path.join(root_dir, 'pics/quant_seg'), dataset.get_dataloader(), latents, max_num=max_num, 
               controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
     del model_quant_seg
     print('model_quant_seg completed')
