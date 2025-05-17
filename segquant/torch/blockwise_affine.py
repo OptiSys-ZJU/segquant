@@ -2,6 +2,7 @@ import os
 import numpy as np
 import torch
 import torch.nn as nn
+from baseline.tac_diffusion import TACDiffution
 from benchmark import trace_pic
 from dataset.affine.noise_dataset import NoiseDataset
 from sample.noise_sampler import NoiseSampler
@@ -202,6 +203,7 @@ def blockwise_affine(
         config = default_affine_config
     
     affiner = BlockwiseAffiner(sample_mode=config['sample_mode'], max_timestep=config['max_timestep'], blocksize=config['blockwise'])
+    #affiner = TACDiffution(max_timestep=config['max_timestep'])
     learning_samples = config['learning_samples']
 
     pack_per_file = min(learning_samples, pack_per_file)
@@ -321,7 +323,7 @@ def blockwise_affine(
                 affine = (affiner.loss(K, b, quant, real), affiner.error(K, b, quant, real))
 
                 if verbose:
-                    print(f'BlockwiseAffiner [{ts}] block[{affiner.blocksize}] Learning init: [{init[0]:5f}/{init[1]:5f}], affine: [{affine[0]:5f}/{affine[1]:5f}]')
+                    print(f'BlockwiseAffiner [{ts}] block[{affiner.blocksize if hasattr(affiner, "blocksize") else 128}] Learning init: [{init[0]:5f}/{init[1]:5f}], affine: [{affine[0]:5f}/{affine[1]:5f}]')
 
             # Delete temporary files after processing
             os.remove(os.path.join(save_dir, real_file))
@@ -395,13 +397,6 @@ if __name__ == '__main__':
         "shuffle": True,
     }
 
-    this_affine_config = {
-        'sample_mode': 'block',
-        "blockwise": 128,
-        "learning_samples": 8,
-        "max_timestep": 50
-    }
-
     def quant_model(model_real: nn.Module, quant_layer: str, config, dataset, calib_args: dict) -> nn.Module:
         from sample.sampler import Q_DiffusionSampler, model_map
         from segquant.torch.calibrate_set import generate_calibrate_set
@@ -432,10 +427,17 @@ if __name__ == '__main__':
 
     model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
     
+    this_affine_config = {
+        'sample_mode': 'block',
+        "blockwise": 128,
+        "learning_samples": 1,
+        "max_timestep": 1
+    }
+    
     affiner = blockwise_affine(model_real, model_quant, config=this_affine_config, verbose=True, shuffle=False)
 
     ## perform
-    max_num = 64
+    max_num = 1
     model_quant = model_quant.to('cuda')
     latents = torch.load('../latents.pt')
     trace_pic(model_quant, 'affine_pics/blockaffine', dataset.get_dataloader(), latents, max_num=max_num, 

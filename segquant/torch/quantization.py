@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 import fnmatch
 
+from tqdm import tqdm
+import fnmatch
+
 from segquant.config import DType, SegPattern, default_quantize_config
 from segquant.layers.SegmentLinear import BaseSegmentLinear, create_segment_linear
 from segquant.pattern_detector import SegQuantPatternDetector
@@ -68,58 +71,48 @@ def get_all_linears(model: nn.Module):
             linears[name] = module
     return linears
 
-def smooth_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: torch.utils.data.DataLoader, device, max_workers=16):
-    executor = ThreadPoolExecutor(max_workers=max_workers)
-    
+def smooth_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: torch.utils.data.DataLoader, device):
     hooks = []
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear) and name in to_calib_linears:
             def get_hook(n):
                 def hook_fn(mod, inp, out, n=n):
                     if hasattr(to_calib_linears[n], 'trace'):
-                        executor.submit(to_calib_linears[n].trace, inp[0])
-                        # to_calib_linears[n].trace(inp[0])
+                        to_calib_linears[n].trace(inp[0])
                 return hook_fn
 
             hooks.append(module.register_forward_hook(get_hook(name)))
     
     model.eval()
     with torch.no_grad():
-        for batch in calib_data_loader:
+        for batch in tqdm(calib_data_loader, desc="[Smooth Linears] Running model on calibration data"):
             this_input_tuple = move_to_device(batch[0], device)
-            model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(**this_input_tuple)    
+            model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(**this_input_tuple) 
     for h in hooks:
         h.remove()
-    
-    executor.shutdown(wait=True)
 
     for l in to_calib_linears.values():
         if hasattr(l, 'smooth'):
             l.smooth()
 
-def calib_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: torch.utils.data.DataLoader, device, max_workers=16):
-    executor = ThreadPoolExecutor(max_workers=max_workers)
-    
+def calib_linears(model: nn.Module, to_calib_linears: dict, calib_data_loader: torch.utils.data.DataLoader, device):
     hooks = []
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear) and name in to_calib_linears:
             def get_hook(n):
                 def hook_fn(mod, inp, out, n=n):
-                    executor.submit(to_calib_linears[n].calibrate, inp[0])
-                    # to_calib_linears[n].calibrate(inp[0])
+                    to_calib_linears[n].calibrate(inp[0])
                 return hook_fn
 
             hooks.append(module.register_forward_hook(get_hook(name)))
     
     model.eval()
     with torch.no_grad():
-        for batch in calib_data_loader:
+        for batch in tqdm(calib_data_loader, desc="[Calib Linears] Running model on calibration data"):
             this_input_tuple = move_to_device(batch[0], device)
             model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(**this_input_tuple)    
     for h in hooks:
         h.remove()
-    
-    executor.shutdown(wait=True)
 
     for l in to_calib_linears.values():
         l.finish_calibrate()
@@ -150,6 +143,7 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
     if verbose:
         print(f'get valid linear num [{len(linears)}]')
 
+    dual_scale_linears = set()
     enable_seg = any(cfg.get("seglinear") for cfg in final_config.values())
     if enable_seg:
         example = example if example is not None else calib_data_loader.dataset[0]
@@ -159,7 +153,6 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
                                                search_patterns=[p.value for p in final_config['default']['search_patterns']])
         seg_result = seg_detector.find_all_patterns()
 
-        dual_scale_linears = set()
         if 'activation_to_linear' in seg_result:
             dual_scale_linears = set(seg_result['activation_to_linear'])
             del seg_result['activation_to_linear']
@@ -168,7 +161,17 @@ def quantize(model: nn.Module, calib_data_loader: torch.utils.data.DataLoader, c
             for seg_linear_config in l:
                 name = seg_linear_config['linear_name']
                 if name in linears:
+                    disabled = False
+                    for pattern in final_config:
+                        if fnmatch.fnmatch(name, pattern):
+                            if not final_config[pattern].get('seglinear', True):
+                                print(f'[INFO] Detect but disabled [{name}] (matched pattern: {pattern})')
+                                disabled = True
+                            break
+                    if disabled:
+                        continue
                     to_calib_linears[name] = create_linear(linears[name], name, seg_linear_config, final_config, dual_scale=(name in dual_scale_linears))
+                    print(f'[INFO] Detected [{name}]')
                     del linears[name]
 
     for name in linears:

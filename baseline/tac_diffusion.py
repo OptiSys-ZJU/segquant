@@ -11,7 +11,7 @@ class TACDiffution:
         self.max_timestep = max_timestep
         self.learning = True
 
-    def loss(self, K, quantized, real):
+    def loss(self, K, b, quantized, real):
         quantized = quantized.to(torch.float32)
         real = real.to(torch.float32)
 
@@ -24,7 +24,7 @@ class TACDiffution:
         loss = (1 - self.lambda1) * mse_loss + self.lambda1 * qnsr_loss + self.lambda2 * k_penalty
         return loss
     
-    def error(self, K, quantized, real):
+    def error(self, K, b, quantized, real):
         quantized = quantized.to(torch.float32)
         real = real.to(torch.float32)
 
@@ -36,8 +36,15 @@ class TACDiffution:
         loss = (1 - self.lambda1) * mse_loss + self.lambda1 * qnsr_loss
         return loss
 
-    def get_solution(self, timestep):
-        return self.solutions[timestep]
+    def get_solution(self, timestep, example=None):
+        if self.learning:
+            if timestep in self.solutions:
+                return (self.solutions[timestep], torch.zeros_like(self.solutions[timestep]))
+            else:
+                print(f'Warning: [{timestep}] get default solution')
+                return (torch.ones_like(example), torch.zeros_like(example))
+        else:
+            return (self.solutions[timestep], torch.zeros_like(self.solutions[timestep]))
     
     def finish_learning(self):
         self.learning = False
@@ -75,7 +82,7 @@ class TACDiffution:
             mean_K = self.cumulative[timestep]['sum_K'] / count
 
             self.solutions[timestep] = mean_K
-        return K_mean
+        return (K_mean, torch.zeros_like(K_mean))
 
 
 if __name__ == '__main__':
