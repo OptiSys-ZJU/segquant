@@ -131,90 +131,80 @@ def run_seg_module():
     del model_quant_seg
     print('model_quant_seg completed')
 
-
-def run_seg_ctrl():
+def run_dual_scale_module():
     from dataset.coco.coco_dataset import COCODataset
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
     from segquant.config import SegPattern
 
-    root_dir = 'benchmark_record/run_seg_ctrl'
+    root_dir = 'benchmark_record/run_dual_scale_module'
     os.makedirs(root_dir, exist_ok=True)
     
     dataset = COCODataset(path='../dataset/controlnet_datasets/coco_canny', cache_size=16)
 
     max_timestep = 50
-    max_num = 128
+    max_num = 1024
 
-    calib_args = {
-        "max_timestep": 50,
-        "sample_size": 256,
-        "timestep_per_sample": 50,
-        "controlnet_conditioning_scale": 0.7,
-        "guidance_scale": 7,
-        "shuffle": True,
-    }
-
-    ### 0
-    model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')    
-    model_real = model_real.to('cuda')
-    latents = None
-    pic_path = os.path.join(root_dir, 'pics/real')
-    if not os.path.exists(pic_path):
-        print(f'[INFO] generating pics in [{pic_path}]...')
-        trace_pic(model_real, pic_path, dataset.get_dataloader(), latents, max_num=max_num, 
-                controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
-        print('model_real completed')
-    else:
-        print(f'[INFO] found pics in [{pic_path}], skip')
+    # ### 0
+    # model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')    
+    # model_real = model_real.to('cuda')
+    # latents = torch.load('../latents.pt')
+    # pic_path = os.path.join(root_dir, 'pics/real')
+    # if not os.path.exists(pic_path):
+    #     print(f'[INFO] generating pics in [{pic_path}]...')
+    #     trace_pic(model_real, pic_path, dataset.get_dataloader(), latents, max_num=max_num, 
+    #             controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
+    #     print('model_real completed')
+    # else:
+    #     print(f'[INFO] found pics in [{pic_path}], skip')
 
     def quant_or_load(model_target_path, target_config):
         if not os.path.exists(model_target_path):
             print(f'[INFO] {model_target_path} not found, start quantizing...')
 
             model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cuda:0')
-            target_model = quant_model(model, 'controlnet', target_config, dataset, calib_args).to('cpu')
+            target_model = quant_model(model, 'dit', target_config, dataset, calib_args).to('cpu')
 
             os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
-            torch.save(target_model.controlnet, model_target_path)
+            torch.save(target_model.transformer, model_target_path)
             print(f'[INFO] Model quantizing ok, saved to {model_target_path}')
         else:
             print(f'[INFO] {model_target_path} found, start loading...')
             target_model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
-            target_model.controlnet = torch.load(model_target_path, weights_only=False)
+            target_model.transformer = torch.load(model_target_path, weights_only=False)
         
         return target_model
 
-    ### 1
-    model_quant_path = os.path.join(root_dir, 'model/controlnet/model_quant.pt')
-    model_quant = quant_or_load(model_quant_path, quant_config)
-    model_quant = model_quant.to('cuda')
-    latents = None
-    trace_pic(model_quant, os.path.join(root_dir, 'pics/quant'), dataset.get_dataloader(), latents, max_num=max_num, 
-              controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
-    del model_quant
-    print('model_quant completed')
+    # ### 1
+    # model_quant_path = os.path.join(root_dir, 'model/dit/model_quant.pt')
+    # model_quant = quant_or_load(model_quant_path, quant_config)
+    # model_quant = model_quant.to('cuda')
+    # latents = torch.load('../latents.pt')
+    # trace_pic(model_quant, os.path.join(root_dir, 'pics/quant'), dataset.get_dataloader(), latents, max_num=max_num, 
+    #           controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
+    # del model_quant
+    # print('model_quant completed')
+
 
     ### 2
-    quant_config_with_seg = {
+    quant_config_with_dual_scale = {
         "default": {
             "enable": True,
             "dtype": DType.INT8SMOOTH,
             "seglinear": True,
-            'search_patterns': SegPattern.seg(),
+            'search_patterns': [SegPattern.Activation2Linear],
             "input_axis": None,
             "weight_axis": None,
             "alpha": 0.5,
         },
     }
-    model_quant_seg_path = os.path.join(root_dir, 'model/controlnet/model_quant_seg.pt')
-    model_quant_seg = quant_or_load(model_quant_seg_path, quant_config_with_seg)
-    model_quant_seg = model_quant_seg.to('cuda')
-    latents = None
-    trace_pic(model_quant_seg, os.path.join(root_dir, 'pics/quant_seg'), dataset.get_dataloader(), latents, max_num=max_num, 
+    model_quant_dual_scale_path = os.path.join(root_dir, 'model/dit/model_quant_dual_scale.pt')
+    model_quant_dual_scale = quant_or_load(model_quant_dual_scale_path, quant_config_with_dual_scale)
+    model_quant_dual_scale = model_quant_dual_scale.to('cuda')
+    latents = torch.load('../latents.pt')
+    trace_pic(model_quant_dual_scale, os.path.join(root_dir, 'pics/quant_dual_scale'), dataset.get_dataloader(), latents, max_num=max_num, 
               controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
-    del model_quant_seg
-    print('model_quant_seg completed')
-
+    del model_quant_dual_scale
+    print('model_quant_dual_scale completed')
 
 if __name__ == '__main__':
-    run_seg_module()
+    run_dual_scale_module()

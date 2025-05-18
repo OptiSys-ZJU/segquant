@@ -241,8 +241,11 @@ def blockwise_affine(
 
     max_timestep = affiner.max_timestep #30
 
-    latent_real = [None for _ in range(learning_samples)]
-    latent_quant = [None for _ in range(learning_samples)]
+    # latent_real = [None for _ in range(learning_samples)]
+    # latent_quant = [None for _ in range(learning_samples)]
+
+    latent_real = [torch.load('../latents.pt') for _ in range(learning_samples)]
+    latent_quant = [torch.load('../latents.pt') for _ in range(learning_samples)]
 
     for cur_learning_timestep in range(max_timestep - 1, -1, -1):
         def learning_noise(model: nn.Module, t: str, latent_list):
@@ -423,7 +426,7 @@ if __name__ == '__main__':
     # exit(0)
 
     model_quant = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
-    model_quant.transformer = torch.load('transformer.pt', weights_only=False)
+    model_quant.transformer = torch.load('benchmark_record/run_seg_module/model/dit/model_quant_seg.pt', weights_only=False)
 
     model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
     
@@ -431,7 +434,7 @@ if __name__ == '__main__':
         'sample_mode': 'block',
         "blockwise": 128,
         "learning_samples": 1,
-        "max_timestep": 1
+        "max_timestep": 30
     }
     
     affiner = blockwise_affine(model_real, model_quant, config=this_affine_config, verbose=True, shuffle=False)
@@ -439,16 +442,19 @@ if __name__ == '__main__':
     ## perform
     max_num = 1
     model_quant = model_quant.to('cuda')
+    # latents = None
     latents = torch.load('../latents.pt')
     trace_pic(model_quant, 'affine_pics/blockaffine', dataset.get_dataloader(), latents, max_num=max_num, 
               controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=this_affine_config['max_timestep'], affiner=affiner)
 
+    # latents = None
     latents = torch.load('../latents.pt')
     trace_pic(model_quant, 'affine_pics/quant', dataset.get_dataloader(), latents, max_num=max_num, 
               controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=this_affine_config['max_timestep'])
     
     del model_quant
     model_real = model_real.to('cuda')
+    # latents = None
     latents = torch.load('../latents.pt')
     trace_pic(model_real, 'affine_pics/real', dataset.get_dataloader(), latents, max_num=max_num, 
               controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=this_affine_config['max_timestep'])
