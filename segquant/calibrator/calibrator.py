@@ -159,7 +159,8 @@ class SmoothQuantCalibrator(BaseCalibrator):
                 q.calibrate(input_chunk / s)
 
     def trace(self, input: List[torch.Tensor], weight: List[torch.Tensor]):
-        self._trace_max_x(input)
+        input_broadcast = self._broadcast_list(input)
+        self._trace_max_x(input_broadcast)
         self._trace_max_w(weight)
 
     def smooth(self):

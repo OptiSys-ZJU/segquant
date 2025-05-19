@@ -183,7 +183,10 @@ class IntQuantizer(FakeQuantizer):
                         f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})")
             else:
                 if isinstance(self.amax, torch.Tensor):
-                    amax_str = ', '.join([f"{x:.4f}" for x in self.amax.tolist()])
+                    amin = self.amax.min().item()
+                    amax = self.amax.max().item()
+                    amax_str = f"[{amin:.4f}, {amax:.4f}]"
+                    # amax_str = ', '.join([f"{x:.4f}" for x in self.amax.tolist()])
                     return (f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, dual_scale=False, axis={self.axis}, "
                             f"amax=[{amax_str}])")
                 else:

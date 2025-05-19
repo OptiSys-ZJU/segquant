@@ -16,6 +16,9 @@ class SegPattern(Enum):
     Stack2Linear = 'stack_to_linear'
     Activation2Linear = 'activation_to_linear'
 
+    def seg():
+        return [SegPattern.Linear2Chunk, SegPattern.Linear2Split, SegPattern.Concat2Linear, SegPattern.Stack2Linear]
+
     def all():
         return [SegPattern.Linear2Chunk, SegPattern.Linear2Split, SegPattern.Concat2Linear, SegPattern.Stack2Linear, SegPattern.Activation2Linear]
 

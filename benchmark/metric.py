@@ -1,5 +1,4 @@
 import os
-from typing import List
 import torch
 from tqdm import tqdm
 import lpips
@@ -9,8 +8,6 @@ from PIL import Image
 from pytorch_fid import fid_score
 from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import structural_similarity as ssim
-from pathlib import Path
-import argparse
 
 lpips_model = lpips.LPIPS(net='alex')
 
@@ -47,6 +44,7 @@ def calculate_ssim(img1, img2):
     return ssim(img1, img2, data_range=img1.max() - img1.min())
 
 def generate_metric(path1, path2):
+    print(path1, path2)
     fid = calculate_fid(path1, path2)
     names1 = set(os.listdir(path1))
     names2 = set(os.listdir(path2))
@@ -74,3 +72,7 @@ def generate_metric(path1, path2):
     }
 
     return result
+
+if __name__ == '__main__':
+    print(generate_metric('benchmark_record/run_dual_scale_module/pics/real', 'benchmark_record/run_dual_scale_module/pics/quant'))
+    print(generate_metric('benchmark_record/run_dual_scale_module/pics/real', 'benchmark_record/run_dual_scale_module/pics/quant_dual_scale'))
