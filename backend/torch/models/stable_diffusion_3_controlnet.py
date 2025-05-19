@@ -1200,37 +1200,6 @@ class StableDiffusion3ControlNetModel(nn.Module):
                         print(f"[Affine Replace] Threshold={threshold.item():.4f}, Replace Ratio={replaced_ratio*100:.2f}%")
                         return out.to(dtype=pre_type)
 
-                def get_gaussian_kernel(kernel_size: int, sigma: float, device: torch.device, dtype: torch.dtype):
-                    x = torch.arange(kernel_size, dtype=dtype, device=device) - kernel_size // 2
-                    kernel = torch.exp(-0.5 * (x / sigma) ** 2)
-                    kernel = kernel / kernel.sum()
-                    return kernel
-
-                def gaussian_blur_2d(input: torch.Tensor, kernel_size: int = 7, sigma: float = 1.0):
-                    """
-                    Apply 2D Gaussian blur on 4D input (B, C, H, W) using depthwise separable convs.
-                    Supports float16 (half precision).
-                    """
-                    B, C, H, W = input.shape
-                    device = input.device
-                    dtype = input.dtype  # Fix: match the dtype to avoid Float vs Half mismatch
-
-                    # Build 1D kernel with correct dtype
-                    kernel_1d = get_gaussian_kernel(kernel_size, sigma, device, dtype)
-
-                    # Expand kernel for depthwise conv
-                    kernel_h = kernel_1d.view(1, 1, 1, -1).repeat(C, 1, 1, 1)
-                    kernel_v = kernel_1d.view(1, 1, -1, 1).repeat(C, 1, 1, 1)
-
-                    padding = kernel_size // 2
-                    import torch.nn.functional as F
-
-                    # Apply depthwise separable convs
-                    out = F.conv2d(input, kernel_h, padding=(0, padding), groups=C)
-                    out = F.conv2d(out, kernel_v, padding=(padding, 0), groups=C)
-
-                    return out
-
                 # perform guidance
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
@@ -1239,9 +1208,14 @@ class StableDiffusion3ControlNetModel(nn.Module):
                         if affiner.max_timestep != num_inference_steps:
                             print(f'[Warning] BlockwiseAffiner: max_timestep[{affiner.max_timestep}] != num_inference_steps[{num_inference_steps}]')
                         
-                        K, b = affiner.get_solution(num_inference_steps - 1 - i, noise_pred_uncond)
-                        noise_pred_uncond = apply_affine_with_threshold(noise_pred_uncond, K, b, percentile=95, alpha=1)
+                        # K, b = affiner.get_solution(num_inference_steps - 1 - i, noise_pred_uncond)
+                        # if i in [0]:
+                        #     noise_pred_uncond = apply_affine_with_threshold(noise_pred_uncond, K, b, threshold_coef=0, alpha=1)
+
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+                    if affiner is not None:
+                        noise_pred = affiner.step(noise_pred, num_inference_steps - 1 - i)
 
                 if debug_noise_pred:
                     record_noise_preds.append(noise_pred)

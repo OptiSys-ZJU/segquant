@@ -5,3 +5,4 @@ __pycache__/
 *.pdf
 *.png
 *.log
+affine_pics/
