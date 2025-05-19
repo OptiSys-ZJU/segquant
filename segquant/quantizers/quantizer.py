@@ -246,7 +246,7 @@ class FloatQuantizer(FakeQuantizer):
                 f"clip_max={self.clip_max})")
 
 @QuantizerRegistry.register("int16")
-def int6_factory():
+def int16_factory():
     return IntQuantizer(num_bits=16)
 
 @QuantizerRegistry.register("int6")
