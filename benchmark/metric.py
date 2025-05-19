@@ -74,5 +74,5 @@ def generate_metric(path1, path2):
     return result
 
 if __name__ == '__main__':
-    print(generate_metric('benchmark_record/run_seg_module/pics/real', 'benchmark_record/run_seg_module/pics/quant'))
-    print(generate_metric('benchmark_record/run_seg_module/pics/real', 'benchmark_record/run_seg_module/pics/quant_seg'))
+    print(generate_metric('benchmark_record/run_dual_scale_module/pics/real', 'benchmark_record/run_dual_scale_module/pics/quant'))
+    print(generate_metric('benchmark_record/run_dual_scale_module/pics/real', 'benchmark_record/run_dual_scale_module/pics/quant_dual_scale'))

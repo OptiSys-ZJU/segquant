@@ -1240,7 +1240,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
                             print(f'[Warning] BlockwiseAffiner: max_timestep[{affiner.max_timestep}] != num_inference_steps[{num_inference_steps}]')
                         
                         K, b = affiner.get_solution(num_inference_steps - 1 - i, noise_pred_uncond)
-                        noise_pred_uncond = apply_affine_with_threshold(noise_pred_uncond, K, b, percentile=0, alpha=1)
+                        noise_pred_uncond = apply_affine_with_threshold(noise_pred_uncond, K, b, percentile=95, alpha=1)
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
                 if debug_noise_pred:
