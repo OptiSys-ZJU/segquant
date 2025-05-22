@@ -355,6 +355,7 @@ class FlowMatchEulerDiscreteScheduler:
         s_tmax: float = float("inf"),
         s_noise: float = 1.0,
         generator: Optional[torch.Generator] = None,
+        affiner = None,
     ) -> Tuple:
         """
         Predict the sample from the previous timestep by reversing the SDE. This function propagates the diffusion
@@ -407,7 +408,10 @@ class FlowMatchEulerDiscreteScheduler:
         sigma = self.sigmas[self.step_index]
         sigma_next = self.sigmas[self.step_index + 1]
 
-        prev_sample = sample + (sigma_next - sigma) * model_output
+        if affiner is not None:
+            prev_sample = affiner.hook(self.step_index, sample, sigma_next, sigma, model_output)
+        else:
+            prev_sample = sample + (sigma_next - sigma) * model_output
 
         # Cast sample back to model compatible dtype
         prev_sample = prev_sample.to(model_output.dtype)

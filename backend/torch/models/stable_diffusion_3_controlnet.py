@@ -33,7 +33,7 @@ from transformers import (
     T5TokenizerFast,
 )
 
-from segquant.torch.blockwise_affine import BlockwiseAffiner
+from segquant.solver.base_steper import BaseSteper
 
 if is_torch_xla_available():
     XLA_AVAILABLE = True
@@ -821,8 +821,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
         max_sequence_length: int = 256,
         early_stop: int = None,
         replay_timestep: int = None,
-        affiner: BlockwiseAffiner = None,
-        debug_noise_pred = False,
+        steper: BaseSteper = None,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -1124,7 +1123,8 @@ class StableDiffusion3ControlNetModel(nn.Module):
                 self._joint_attention_kwargs.update(ip_adapter_image_embeds=ip_adapter_image_embeds)
 
         # 8. Denoising loop
-        record_noise_preds = []
+        if steper is not None:
+            steper.register_scheduler(self.scheduler)
         with tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if replay_timestep is not None:
@@ -1172,57 +1172,24 @@ class StableDiffusion3ControlNetModel(nn.Module):
                     skip_layers=None,
                 )[0]
 
-                def apply_affine_with_threshold(noise_pred, K, b, threshold_coef=None, percentile=None, alpha=0.3):
-                    if threshold_coef is None and percentile is None:
-                        raise ValueError("Must provide either threshold_coef or percentile.")
-
-                    with torch.no_grad():
-                        device = noise_pred.device
-                        pre_type = noise_pred.dtype
-
-                        noise_pred_float = noise_pred.to(dtype=torch.float32)
-                        K = K.to(device=device, dtype=torch.float32)
-                        b = b.to(device=device, dtype=torch.float32)
-
-                        abs_noise = noise_pred_float.abs()
-
-                        if threshold_coef is not None:
-                            threshold = abs_noise.mean() * threshold_coef
-                        else:
-                            threshold = torch.quantile(abs_noise.flatten(), percentile / 100.0)
-
-                        mask = abs_noise > threshold
-                        # mask = abs_noise < threshold
-                        affine_pred = K * noise_pred_float + b
-                        blended = noise_pred_float * (1 - alpha) + affine_pred * alpha
-                        out = torch.where(mask, blended, noise_pred_float)
-                        replaced_ratio = mask.sum().item() / mask.numel()
-                        print(f"[Affine Replace] Threshold={threshold.item():.4f}, Replace Ratio={replaced_ratio*100:.2f}%")
-                        return out.to(dtype=pre_type)
-
-                # perform guidance
-                if self.do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    # perform affine
-                    if affiner is not None:
-                        if affiner.max_timestep != num_inference_steps:
-                            print(f'[Warning] BlockwiseAffiner: max_timestep[{affiner.max_timestep}] != num_inference_steps[{num_inference_steps}]')
-                        
-                        # K, b = affiner.get_solution(num_inference_steps - 1 - i, noise_pred_uncond)
-                        # if i in [0]:
-                        #     noise_pred_uncond = apply_affine_with_threshold(noise_pred_uncond, K, b, threshold_coef=0, alpha=1)
-
-                    noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-                    if affiner is not None:
-                        noise_pred = affiner.step(noise_pred, num_inference_steps - 1 - i)
-
-                if debug_noise_pred:
-                    record_noise_preds.append(noise_pred)
-
-                # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
-                latents = self.scheduler.step(noise_pred, t, latents)[0]
+
+                if steper is not None:
+                    latents = steper.step_forward(latents=latents,
+                                                  noise_pred=noise_pred,
+                                                  i=i,
+                                                  t=t,
+                                                  num_inference_steps=num_inference_steps,
+                                                  do_classifier_free_guidance=self.do_classifier_free_guidance,
+                                                  guidance_scale=self.guidance_scale)
+                else:
+                    # perform guidance
+                    if self.do_classifier_free_guidance:
+                        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                        noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+                    # compute the previous noisy sample x_t -> x_t-1
+                    latents = self.scheduler.step(noise_pred, t, latents)[0]
 
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
@@ -1257,10 +1224,7 @@ class StableDiffusion3ControlNetModel(nn.Module):
 
         # # Offload all models
         # self.maybe_free_model_hooks()
-        if debug_noise_pred:
-            return (image, record_noise_preds,)
-        else:
-            return (image,)
+        return (image,)
 
 
 if __name__ == '__main__':

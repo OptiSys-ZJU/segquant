@@ -1,6 +1,7 @@
 import torch
 import time
 from transformers import DPTFeatureExtractor, DPTForDepthEstimation
+from torch.utils.data import Subset, DataLoader
 import cv2
 import numpy as np
 from torch.utils.data import Dataset
@@ -201,5 +202,18 @@ class CaptionControlDataset(Dataset):
             batch_size=batch_size,
             shuffle=shuffle,
             collate_fn=self.collate_fn,
+            **kwargs
+        )
+
+class SubsetWrapper(Subset):
+    def __getattr__(self, name):
+        return getattr(self.dataset, name)
+
+    def get_dataloader(self, batch_size=1, shuffle=False, **kwargs):
+        return DataLoader(
+            self,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            collate_fn=self.dataset.collate_fn,
             **kwargs
         )
