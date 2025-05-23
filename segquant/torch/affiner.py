@@ -1,7 +1,7 @@
 import numpy as np
 import torch
-from dataset.processor import SubsetWrapper
 from segquant.solver.blockwise_affiner import BlockwiseAffiner
+from segquant.subset_wrapper import SubsetWrapper
 
 def process_affiner(config, dataset, model_real, model_quant, latents=None, shuffle=True):
     indices = np.arange(len(dataset))
