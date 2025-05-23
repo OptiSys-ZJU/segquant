@@ -7,7 +7,7 @@ from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3C
 from benchmark import trace_pic
 from dataset.coco.coco_dataset import COCODataset
 from sample.sampler import Q_DiffusionSampler, model_map
-from segquant.config import DType, SegPattern
+from segquant.config import DType, Optimum, SegPattern
 from segquant.torch.calibrate_set import generate_calibrate_set
 from segquant.torch.quantization import quantize
 import modelopt.torch.quantization as mtq
@@ -92,7 +92,9 @@ def segquant_test():
     quant_config = {
         "default": {
             "enable": True,
-            "dtype": DType.INT8SMOOTH,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.SMOOTH,
             "seglinear": True,
             'search_patterns': SegPattern.seg(),
             "input_axis": None,

@@ -2,12 +2,16 @@ from enum import Enum
 
 class DType(Enum):
     INT4 = 'int4'
-    INT4SVD = 'int4-svd'
+    INT6 = 'int6'
     INT8 = 'int8'
-    INT8SMOOTH = 'int8-smooth'
     FP8E5M2 = 'fpe5m2'
     FP8E4M3 = 'fpe4m3'
     FP16 = 'fp16'
+
+class Optimum(Enum):
+    DEFAULT = 'default'
+    SMOOTH = 'smooth'
+    SVD = 'svd'
 
 class SegPattern(Enum):
     Linear2Chunk = 'linear_to_chunk'
@@ -25,16 +29,12 @@ class SegPattern(Enum):
 default_quantize_config = {
     "default": {
         "enable": True,
-        "dtype": DType.INT8,
+        "input_dtype": DType.INT8,
+        "weight_dtype": DType.INT8,
+        "opt": Optimum.SMOOTH,
         "seglinear": True,
         "input_axis": None,
         "weight_axis": None,
         'search_patterns': SegPattern.all(),
     },
-}
-
-default_affine_config = {
-    "blockwise": 128,
-    "learning_samples": 8,
-    "max_timestep": 30
 }

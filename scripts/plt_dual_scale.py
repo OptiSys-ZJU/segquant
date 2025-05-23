@@ -2,9 +2,6 @@ import torch
 from sample.sampler import Q_DiffusionSampler
 from dataset.coco.coco_dataset import COCODataset
 from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 import json
 

@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import copy
 import modelopt.torch.quantization as mtq
-from segquant.config import DType, SegPattern
+from segquant.config import DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 class RandomTensorDataset:
@@ -83,7 +83,9 @@ def test_default_int8():
     config = {
         "default": {
             "enable": True,
-            "dtype": DType.INT8,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.DEFAULT,
             "seglinear": True,
             'search_patterns': SegPattern.all(),
             "input_axis": None,
@@ -127,7 +129,9 @@ def test_smooth_int8():
     config = {
         "default": {
             "enable": True,
-            "dtype": DType.INT8SMOOTH,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.SMOOTH,
             "seglinear": True,
             'search_patterns': SegPattern.seg(),
             "input_axis": None,

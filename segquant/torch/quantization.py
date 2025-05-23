@@ -5,10 +5,9 @@ import fnmatch
 from tqdm import tqdm
 import fnmatch
 
-from segquant.config import DType, SegPattern, default_quantize_config
-from segquant.layers.SegmentLinear import BaseSegmentLinear, create_segment_linear
+from segquant.config import DType, Optimum, SegPattern, default_quantize_config
+from segquant.layers.SegmentLinear import create_segment_linear
 from segquant.pattern_detector import SegQuantPatternDetector
-from concurrent.futures import ThreadPoolExecutor
 
 def move_to_device(batch, device):
     if isinstance(batch, torch.Tensor):
@@ -19,29 +18,33 @@ def move_to_device(batch, device):
         return {k: move_to_device(v, device) for k, v in batch.items()}
     return batch
 
-def get_quantization_config(final_config, name, dtype=None, input_axis=None, weight_axis=None, alpha=None):
-    dtype = dtype or final_config['default'].get('dtype')
+def get_quantization_config(final_config, name, input_dtype=None, weight_dtype=None, opt=None, input_axis=None, weight_axis=None, alpha=None):
+    input_dtype = input_dtype or final_config['default'].get('input_dtype')
+    weight_dtype = weight_dtype or final_config['default'].get('weight_dtype')
+    opt = opt or final_config['default'].get('opt')
     input_axis = input_axis or final_config['default'].get('input_axis')
     weight_axis = weight_axis or final_config['default'].get('weight_axis')
     alpha = alpha or final_config['default'].get('alpha')
     
     if name in final_config:
-        dtype = final_config[name].get('dtype', dtype)
+        input_dtype = final_config[name].get('input_dtype', input_dtype)
+        weight_dtype = final_config[name].get('weight_dtype', weight_dtype)
+        opt = final_config[name].get('opt', opt)
         input_axis = final_config[name].get('input_axis', input_axis)
         weight_axis = final_config[name].get('weight_axis', weight_axis)
         alpha = final_config[name].get('alpha', alpha)
     
-    return dtype, input_axis, weight_axis, alpha
+    return input_dtype, weight_dtype, opt, input_axis, weight_axis, alpha
 
-def create_linear(layer, layer_name, seg_linear_config, final_config, dtype=None, dual_scale=False, input_axis=None, weight_axis=None, alpha=None):
+def create_linear(layer, layer_name, seg_linear_config, final_config, input_dtype=None, weight_dtype=None, opt=None, dual_scale=False, input_axis=None, weight_axis=None, alpha=None):
     old_linear = layer
     device = old_linear.weight.device
     old_dtype = old_linear.weight.dtype
     has_bias = hasattr(old_linear, "bias") and old_linear.bias is not None
     
-    dtype, input_axis, weight_axis, alpha = get_quantization_config(final_config, layer_name, dtype, input_axis, weight_axis, alpha)
+    input_dtype, weight_dtype, opt, input_axis, weight_axis, alpha = get_quantization_config(final_config, layer_name, input_dtype, weight_dtype, opt, input_axis, weight_axis, alpha)
     
-    new_linear = create_segment_linear(dtype, old_linear.in_features, old_linear.out_features,
+    new_linear = create_segment_linear(input_dtype, weight_dtype, opt, old_linear.in_features, old_linear.out_features,
                                        bias=has_bias,
                                        seg_mode=seg_linear_config['seg_mode'],
                                        chunks=seg_linear_config.get('chunks', len(seg_linear_config.get('chunksizes', []))),
@@ -196,7 +199,9 @@ if __name__ == '__main__':
     config = {
         "default": {
             "enable": True,
-            "dtype": DType.INT8SMOOTH,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.SMOOTH,
             "seglinear": True,
             'search_patterns': SegPattern.all(),
             "input_axis": None,

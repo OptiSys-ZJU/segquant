@@ -1,5 +1,5 @@
 import torch
-from segquant.config import DType, SegPattern
+from segquant.config import DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 def cali(quant_layer):
@@ -111,7 +111,9 @@ base_config = {
 default_config = {
     "default": {
         "enable": True,
-        "dtype": DType.INT8SMOOTH,
+        "input_dtype": DType.INT8,
+        "weight_dtype": DType.INT8,
+        "opt": Optimum.SMOOTH,
         "seglinear": False,
         'search_patterns': SegPattern.all(),
         "input_axis": None,
@@ -122,7 +124,9 @@ default_config = {
 seg_config = {
     "default": {
         "enable": True,
-        "dtype": DType.INT8SMOOTH,
+        "input_dtype": DType.INT8,
+        "weight_dtype": DType.INT8,
+        "opt": Optimum.SMOOTH,
         "seglinear": True,
         'search_patterns': [SegPattern.Linear2Chunk, SegPattern.Linear2Split, SegPattern.Concat2Linear, SegPattern.Stack2Linear],
         "input_axis": None,
@@ -133,7 +137,9 @@ seg_config = {
 seg_dual_config = {
     "default": {
         "enable": True,
-        "dtype": DType.INT8SMOOTH,
+        "input_dtype": DType.INT8,
+        "weight_dtype": DType.INT8,
+        "opt": Optimum.SMOOTH,
         "seglinear": True,
         'search_patterns': SegPattern.all(),
         "input_axis": None,
@@ -144,7 +150,9 @@ seg_dual_config = {
 enable_latent_config = {
     "default": {
         "enable": True,
-        "dtype": DType.INT8SMOOTH,
+        "input_dtype": DType.INT8,
+        "weight_dtype": DType.INT8,
+        "opt": Optimum.SMOOTH,
         "seglinear": False,
         'search_patterns': SegPattern.all(),
         "input_axis": None,
@@ -164,7 +172,9 @@ enable_latent_config = {
 enable_time_config = {
     "default": {
         "enable": True,
-        "dtype": DType.INT8SMOOTH,
+        "input_dtype": DType.INT8,
+        "weight_dtype": DType.INT8,
+        "opt": Optimum.SMOOTH,
         "seglinear": False,
         'search_patterns': SegPattern.all(),
         "input_axis": None,

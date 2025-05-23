@@ -1,8 +1,5 @@
-
-import torch
 from segquant.solver.recurrent_steper import RecurrentSteper
 from segquant.solver.solver import MSERelSolver
-from collections import deque
 
 class BlockwiseAffiner(RecurrentSteper):
     def __init__(self, max_timestep, blocksize=1, sample_size=1, solver_type='mserel', solver_config=None, latents=None, recurrent=True, noise_target='all', enable_latent_affine=False, enable_timesteps=None, device='cuda:0'):

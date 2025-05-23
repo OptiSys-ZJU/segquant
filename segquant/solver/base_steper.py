@@ -1,5 +1,3 @@
-import torch
-
 class BaseSteper:
     def __init__(self, max_timestep):
         self.max_timestep = max_timestep

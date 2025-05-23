@@ -3,7 +3,7 @@ from typing import Literal
 import torch
 import torch.nn as nn
 from segquant.calibrator.calibrator import DefaultCalibrator, SmoothQuantCalibrator
-from segquant.config import DType
+from segquant.config import DType, Optimum
 from segquant.layers.splitter import BaseSplitter
 from segquant.quantizers.quantizer import FakeQuantizer, QuantizerRegistry
 
@@ -74,14 +74,17 @@ class DefaultSegmentLinear(BaseSegmentLinear):
     def __init__(self, in_features, out_features, bias=True, 
                  seg_mode: Literal['input', 'weight'] = 'weight', chunks=1, chunksizes=None,
                  custom_weight_tensor=None,
-                 quant_type=None, input_quant_args=None, weight_quant_args=None):
+                 input_quant_type=None, weight_quant_type=None, input_quant_args=None, weight_quant_args=None):
         super().__init__(in_features, out_features, bias, seg_mode, chunks, chunksizes, custom_weight_tensor)
 
-        if quant_type is not None:
-            input_gen = lambda: QuantizerRegistry.create(quant_type, **(input_quant_args or {}))
-            weight_gen = lambda: QuantizerRegistry.create(quant_type, **(weight_quant_args or {}))
+        if input_quant_type is not None:
+            input_gen = lambda: QuantizerRegistry.create(input_quant_type, **(input_quant_args or {}))
         else:
-            input_gen = weight_gen = lambda: None
+            input_gen = lambda: None
+        if weight_quant_type is not None:
+            weight_gen = lambda: QuantizerRegistry.create(weight_quant_type, **(weight_quant_args or {}))
+        else:
+            weight_gen = lambda: None
         
         if seg_mode == 'input':
             self.input_quantizers = [input_gen() for _ in range(chunks)]
@@ -189,16 +192,19 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
     def __init__(self, in_features, out_features, bias=True, 
                  seg_mode: Literal['input', 'weight'] = 'weight', chunks=1, chunksizes=None,
                  custom_weight_tensor=None,
-                 quant_type=None, input_quant_args=None, weight_quant_args=None,
+                 input_quant_type=None, weight_quant_type=None, input_quant_args=None, weight_quant_args=None,
                  alpha=1.0, dual_s=False):
         
         super().__init__(in_features, out_features, bias, seg_mode, chunks, chunksizes, custom_weight_tensor)
 
-        if quant_type is not None:
-            input_gen = lambda: QuantizerRegistry.create(quant_type, **(input_quant_args or {}))
-            weight_gen = lambda: QuantizerRegistry.create(quant_type, **(weight_quant_args or {}))
+        if input_quant_type is not None:
+            input_gen = lambda: QuantizerRegistry.create(input_quant_type, **(input_quant_args or {}))
         else:
-            input_gen = weight_gen = lambda: None
+            input_gen = lambda: None
+        if weight_quant_type is not None:
+            weight_gen = lambda: QuantizerRegistry.create(weight_quant_type, **(weight_quant_args or {}))
+        else:
+            weight_gen = lambda: None
         
         self.input_quantizers = [input_gen() for _ in range(chunks)]
         self.weight_quantizers = [weight_gen() for _ in range(chunks)]
@@ -319,27 +325,27 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
                     res += quantized_output_chunk
             return res + bias if bias is not None else res
 
-def create_segment_linear(dtype: DType, in_features, out_features, **kwargs):
-    dtype_map = {
-        DType.INT8: DefaultSegmentLinear,
-        DType.INT8SMOOTH: SmoothQuantSegmentLinear,
+def create_segment_linear(input_dtype: DType, weight_dtype: DType, opt: Optimum, in_features, out_features, **kwargs):
+    opt_map = {
+        Optimum.DEFAULT: DefaultSegmentLinear,
+        Optimum.SMOOTH: SmoothQuantSegmentLinear,
     }
 
-    if dtype not in dtype_map:
-        raise ValueError(f"Dtype '{dtype}' not supported")
+    if opt not in opt_map:
+        raise ValueError(f"Algorithm '{opt}' not supported")
 
-    if dtype == DType.INT8:
+    if opt == Optimum.DEFAULT:
         kwargs.pop('alpha', None)
 
-    return dtype_map[dtype](in_features, out_features, quant_type='int8', **kwargs)
+    return opt_map[opt](in_features, out_features, input_quant_type=input_dtype.value, weight_quant_type=weight_dtype.value, **kwargs)
 
 if __name__ == '__main__':
     weight = torch.randn(4, 6)
     print(weight)
     linear = nn.Linear(in_features=6, out_features=4, bias=False)
     linear.weight = nn.Parameter(weight)
-    model1 = DefaultSegmentLinear(in_features=6, out_features=4, bias=False, seg_mode='input', chunks=3, chunksizes=[3,2,1], quant_type="int8", custom_weight_tensor=copy.deepcopy(weight))
-    model2 = SmoothQuantSegmentLinear(in_features=6, out_features=4, bias=False, seg_mode='input', chunks=3, chunksizes=[3,2,1], quant_type="int8", custom_weight_tensor=copy.deepcopy(weight))
+    model1 = DefaultSegmentLinear(in_features=6, out_features=4, bias=False, seg_mode='input', chunks=3, chunksizes=[3,2,1], input_quant_type="int8", weight_quant_type='int8', custom_weight_tensor=copy.deepcopy(weight))
+    model2 = SmoothQuantSegmentLinear(in_features=6, out_features=4, bias=False, seg_mode='input', chunks=3, chunksizes=[3,2,1], input_quant_type="int8", weight_quant_type='int8', custom_weight_tensor=copy.deepcopy(weight))
     x = torch.randn(2, 6)
     print("Input:\n", x)
     y = linear(x)

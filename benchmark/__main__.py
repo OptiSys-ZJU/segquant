@@ -2,7 +2,7 @@
 import torch
 from benchmark import trace_pic
 import torch.nn as nn
-from segquant.config import DType
+from segquant.config import DType, Optimum
 import os
 
 calib_args = {
@@ -17,7 +17,9 @@ calib_args = {
 quant_config = {
     "default": {
         "enable": True,
-        "dtype": DType.INT8SMOOTH,
+        "input_dtype": DType.INT8,
+        "weight_dtype": DType.INT8,
+        "opt": Optimum.SMOOTH,
         "seglinear": False,
         'search_patterns': [],
         "input_axis": None,
@@ -114,7 +116,9 @@ def run_seg_module():
     quant_config_with_seg = {
         "default": {
             "enable": True,
-            "dtype": DType.INT8SMOOTH,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.SMOOTH,
             "seglinear": True,
             'search_patterns': SegPattern.seg(),
             "input_axis": None,
@@ -189,7 +193,9 @@ def run_dual_scale_module():
     quant_config_with_dual_scale = {
         "default": {
             "enable": True,
-            "dtype": DType.INT8SMOOTH,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.SMOOTH,
             "seglinear": True,
             'search_patterns': [SegPattern.Activation2Linear],
             "input_axis": None,

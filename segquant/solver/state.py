@@ -37,7 +37,7 @@ def solver_trans(from_stages, to_stage):
     def decorator(func):
         def wrapper(self, *args, **kwargs):
             if self.fsm.state not in from_stages:
-                raise RuntimeError(f"❌ 当前状态 {self.fsm.state.name} 不允许调用 {func.__name__}()")
+                raise RuntimeError(f"Invalid call to {func.__name__}() in current state: {self.fsm.state.name}")
             self.fsm.transition_to(to_stage)
             return func(self, *args, **kwargs)
         return wrapper
