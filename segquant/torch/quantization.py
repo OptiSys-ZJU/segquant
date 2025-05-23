@@ -211,7 +211,7 @@ if __name__ == '__main__':
     }
 
     from dataset.coco.coco_dataset import COCODataset
-    from sample.sampler import Q_DiffusionSampler
+    from segquant.sample.sampler import Q_DiffusionSampler
     from segquant.torch.calibrate_set import generate_calibrate_set
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
     from backend.torch.models.flux_controlnet import FluxControlNetModel

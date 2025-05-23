@@ -29,7 +29,7 @@ quant_config = {
 }
 
 def quant_model(model_real: nn.Module, quant_layer: str, config, dataset, calib_args: dict) -> nn.Module:
-    from sample.sampler import Q_DiffusionSampler, model_map
+    from segquant.sample.sampler import Q_DiffusionSampler, model_map
     from segquant.torch.calibrate_set import generate_calibrate_set
     from segquant.torch.quantization import quantize
 

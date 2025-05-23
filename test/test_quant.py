@@ -4,7 +4,7 @@ from segquant.torch.quantization import quantize
 
 def cali(quant_layer):
     from dataset.coco.coco_dataset import COCODataset
-    from sample.sampler import Q_DiffusionSampler
+    from segquant.sample.sampler import Q_DiffusionSampler
     from segquant.torch.calibrate_set import generate_calibrate_set
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
 
@@ -21,9 +21,9 @@ def cali(quant_layer):
 
 def sample_noise_output(config, calibset, latents, quant_layer):
     from dataset.coco.coco_dataset import COCODataset
-    from sample.sampler import Q_DiffusionSampler
+    from segquant.sample.sampler import Q_DiffusionSampler
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
-    from sample.sampler import model_map
+    from segquant.sample.sampler import model_map
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), device)
@@ -55,9 +55,9 @@ def sample_noise_output(config, calibset, latents, quant_layer):
 
 def sample_noise_dis(config, calibset, latents, quant_layer):
     from dataset.coco.coco_dataset import COCODataset
-    from sample.sampler import Q_DiffusionSampler
+    from segquant.sample.sampler import Q_DiffusionSampler
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
-    from sample.sampler import model_map
+    from segquant.sample.sampler import model_map
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), device)

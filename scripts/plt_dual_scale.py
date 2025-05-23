@@ -1,5 +1,5 @@
 import torch
-from sample.sampler import Q_DiffusionSampler
+from segquant.sample.sampler import Q_DiffusionSampler
 from dataset.coco.coco_dataset import COCODataset
 from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
 

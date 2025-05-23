@@ -164,7 +164,7 @@ def generate_calibrate_set(
 
 if __name__ == '__main__':
     from dataset.coco.coco_dataset import COCODataset
-    from sample.sampler import Q_DiffusionSampler
+    from segquant.sample.sampler import Q_DiffusionSampler
     from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
