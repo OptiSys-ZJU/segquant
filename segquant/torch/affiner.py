@@ -9,16 +9,17 @@ def process_affiner(config, dataset, model_real, model_quant, latents=None, shuf
         np.random.shuffle(indices)
         dataset = SubsetWrapper(dataset, indices)
     
-    affiner = BlockwiseAffiner(max_timestep=config['stepper']['max_timestep'],
-                               blocksize=config['solver']['blocksize'],
-                               sample_size=config['stepper']['sample_size'],
-                               solver_type=config['solver']['type'],
-                               solver_config=config['solver'],
-                               latents=latents,
-                               recurrent=config['stepper']['recurrent'],
-                               noise_target=config['stepper']['noise_target'],
-                               enable_latent_affine=config['stepper']['enable_latent_affine'],
-                               enable_timesteps=config['stepper']['enable_timesteps'])
+    if config['stepper']['type'] == 'blockwise':
+        affiner = BlockwiseAffiner(max_timestep=config['stepper']['max_timestep'],
+                                blocksize=config['solver']['blocksize'],
+                                sample_size=config['stepper']['sample_size'],
+                                solver_type=config['solver']['type'],
+                                solver_config=config['solver'],
+                                latents=latents,
+                                recurrent=config['stepper']['recurrent'],
+                                noise_target=config['stepper']['noise_target'],
+                                enable_latent_affine=config['stepper']['enable_latent_affine'],
+                                enable_timesteps=config['stepper']['enable_timesteps'])
 
     if config['stepper']['recurrent']:
         for _ in range(config['stepper']['max_timestep']):
@@ -49,11 +50,11 @@ if __name__ == '__main__':
     config = {
         "solver": {
             "type": 'mserel',
-            "blocksize": 128,
+            "blocksize": 8,
             "alpha": 0.5,
             "lambda1": 0.1,
             "lambda2": 0.1,
-            "sample_mode": 'block',
+            "sample_mode": 'interpolate',
             "percentile": 100,
             "greater": True,
             "scale": 1,
@@ -61,8 +62,9 @@ if __name__ == '__main__':
         },
 
         "stepper": {
+            'type': 'blockwise',
             'max_timestep': 30,
-            'sample_size': 16,
+            'sample_size': 1,
             'recurrent': True,
             'noise_target': 'uncond',
             'enable_latent_affine': False,
@@ -75,11 +77,11 @@ if __name__ == '__main__':
         }
     }
 
-    affiner = process_affiner(config, dataset, model_real, model_quant, latents=latents, shuffle=True)
+    affiner = process_affiner(config, dataset, model_real, model_quant, latents=latents, shuffle=False)
 
     #############################################
     from benchmark import trace_pic
-    max_num = 8
+    max_num = 1
     model_quant = model_quant.to('cuda')
     trace_pic(model_quant, f'affine_pics/blockaffine', dataset.get_dataloader(), latents, steper=affiner, max_num=max_num, num_inference_steps=config['stepper']['max_timestep'], **config['extra_args'])
     trace_pic(model_quant, f'affine_pics/quant', dataset.get_dataloader(), latents, max_num=max_num, num_inference_steps=config['stepper']['max_timestep'], **config['extra_args'])

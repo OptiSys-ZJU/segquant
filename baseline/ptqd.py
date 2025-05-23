@@ -1,64 +1,22 @@
 import torch
-import scipy.stats as stats
-from dataset.affine.noise_dataset import NoiseDataset
+from scipy import stats
+from segquant.solver.recurrent_steper import RecurrentSteper
+from segquant.solver.solver import BaseSolver
 
-class PTQD:
-    def __init__(self, lambda1=0.5, max_timestep=30):
-        self.solutions = {}
-        self.cumulative = {}
-        self.lambda1 = lambda1
-        self.max_timestep = max_timestep
-        self.learning = True
+class PTQDSolver(BaseSolver):
+    def __init__(self, config):
+        super().__init__()
 
-    def loss(self, quantized, real):
-        return 0
+        self.record = None
+        self.solution = None
     
-    def error(self, quantized, real):
-        quantized = quantized.to(torch.float32)
-        real = real.to(torch.float32)
-
-        epsilon_tilde = quantized / (1 + K)
-        noise = torch.randn_like(epsilon_tilde) * std_q + mean_q
-        epsilon_tilde -= noise
-
-        mse_loss = torch.mean((epsilon_tilde - real) ** 2)
-        numerator = torch.sum((epsilon_tilde - real) ** 2)
-        denominator = torch.sum(real ** 2) + 1e-8
-        qnsr_loss = numerator / denominator
-        loss = (1 - self.lambda1) * mse_loss + self.lambda1 * qnsr_loss
-        return loss
-    
-    def get_solution(self, timestep):
-        return self.solutions[timestep]
-    
-    def step(self, noise_pred, timestep):
-        device = noise_pred.device
-        pre_type = noise_pred.dtype
-        B, C, H, W = noise_pred.shape
-
-        k, bias, std_q = self.solutions[timestep]
-        
-        noise_pred = noise_pred.to(dtype=torch.float32)
-        k = k.to(device=device, dtype=torch.float32)
-        bias = bias.view(1, C, 1, 1).expand(B, C, H, W)
-        bias = bias.to(device=device, dtype=torch.float32)
-        noise_pred = noise_pred - bias
-        noise_pred = noise_pred / (1 + k)
-
-        return noise_pred.to(dtype=pre_type)
-    
-    def finish_learning(self):
-        self.learning = False
-
-    def step_learning(self, timestep, quantized, real):
-        quantized = quantized.to(torch.float32)
+    def learn(self, real, quant):
+        quantized = quant.to(torch.float32)
         real = real.to(torch.float32)
         error = quantized-real
 
         B, C, H, W = real.shape
         N = C * H * W
-
-        eps = 1e-7
 
         mean_q = torch.mean(error, dim=(0, 2, 3))
 
@@ -72,84 +30,53 @@ class PTQD:
 
         std_q = flatten_uncorr.std(unbiased=False)
 
-        ######
-        if self.learning:
-            if timestep not in self.cumulative:
-                self.cumulative[timestep] = {
-                    'sum_K': slope,
-                    'sum_mean_q': mean_q,
-                    'sum_std_q': std_q,
-                    'count': 1
-                }
-            else:
-                self.cumulative[timestep]['sum_K'] += slope
-                self.cumulative[timestep]['sum_mean_q'] += mean_q
-                self.cumulative[timestep]['sum_std_q'] += std_q
-                self.cumulative[timestep]['count'] += 1
+        if self.record is None:
+            self.record = {
+                'sum_K': slope,
+                'sum_mean_q': mean_q,
+                'sum_std_q': std_q,
+                'count': 1
+            }
+        else:
+            self.record['sum_K'] += slope
+            self.record['sum_mean_q'] += mean_q
+            self.record['sum_std_q'] += std_q
+            self.record['count'] += 1
 
-            count = self.cumulative[timestep]['count']
-            mean_K = self.cumulative[timestep]['sum_K'] / count
-            mean_mean_q = self.cumulative[timestep]['sum_mean_q'] / count
-            mean_std_q = self.cumulative[timestep]['sum_std_q'] / count
-            self.solutions[timestep] = (mean_K, mean_mean_q, mean_std_q)
-        return slope, mean_q, std_q
+        count = self.record['count']
+        mean_K = self.record['sum_K'] / count
+        mean_mean_q = self.record['sum_mean_q'] / count
+        mean_std_q = self.record['sum_std_q'] / count
+        self.solution = (mean_K, mean_mean_q, mean_std_q)
+
+    def solve(self, quant):
+        device = quant.device
+        pre_type = quant.dtype
+        B, C, H, W = quant.shape
+
+        k, bias, std_q = self.solution
         
+        quant = quant.to(dtype=torch.float32)
+        k = k.to(device=device, dtype=torch.float32)
+        bias = bias.view(1, C, 1, 1).expand(B, C, H, W)
+        bias = bias.to(device=device, dtype=torch.float32)
+        quant = quant - bias
+        quant = quant / (1 + k)
 
+        return quant.to(dtype=pre_type)
 
+class PTQD(RecurrentSteper):
+    def __init__(self, max_timestep, sample_size=1, latents=None, noise_target='all', enable_timesteps=None, device='cuda:0'):
+        super().__init__(max_timestep, sample_size, PTQDSolver, None, latents, False, noise_target, False, enable_timesteps, device)
+        self.print_config()
 
-if __name__ == '__main__':
-    affiner = PTQD(max_timestep=60)
-    dataset = NoiseDataset('../dataset/affine_noise')
-
-    ###### learning
-    dataloader = dataset.get_dataloader(batch_size=1, shuffle=False)
-    learning_sample = 1
-    step = 0
-    for batch in dataloader:
-        assert isinstance(batch, list) and len(batch) == dataset.max_timestep
-        for data in batch:
-            timestep = int(data["timestep"][0].item())
-            quant = data["quant"]
-            real = data["real"]
-
-            K = torch.zeros_like(real)
-            mean_q = 0
-            std_q = 0
-            init = (affiner.loss(K, mean_q, std_q, quant, real), affiner.error(K, mean_q, std_q, quant, real))
-
-            K, mean_q, std_q = affiner.step_learning(timestep, quant, real)
-            affine = (affiner.loss(K, mean_q, std_q, quant, real), affiner.error(K, mean_q, std_q, quant, real))
-
-            print(f'[{timestep}] init: [{init[0]:5f}/{init[1]:5f}], ptqd: [{affine[0]:5f}/{affine[1]:5f}]')
-        
-        step += 1
-        if step >= learning_sample:
-            break
-    
-    ##### testing
-    dataloader = dataset.get_dataloader(batch_size=1, shuffle=True)
-    test_sample = 2
-    step = 0
-    for batch in dataloader:
-        assert isinstance(batch, list) and len(batch) == dataset.max_timestep
-        for data in batch:
-            timestep = int(data["timestep"][0].item())
-            quant = data["quant"]
-            real = data["real"]
-
-            K = 0
-            mean_q = 0
-            std_q = 0
-            init = (affiner.loss(K, mean_q, std_q, quant, real), affiner.error(K, mean_q, std_q, quant, real))
-
-            K, mean_q, std_q = affiner.get_solution(timestep)
-            affine = (affiner.loss(K, mean_q, std_q, quant, real), affiner.error(K, mean_q, std_q, quant, real))
-
-            K, mean_q, std_q = affiner.step_learning(timestep, quant, real)
-            opt = (affiner.loss(K, mean_q, std_q, quant, real), affiner.error(K, mean_q, std_q, quant, real))
-
-            print(f'[{timestep}] init: [{init[0]:5f}/{init[1]:5f}], ptqd: [{affine[0]:5f}/{affine[1]:5f}], opt: [{opt[0]:5f}/{opt[1]:5f}]')
-    
-        step += 1
-        if step >= test_sample:
-            break
+    def print_config(self):
+        print("PTQD Configuration:")
+        print(f"{'=' * 40}")
+        print(f"{'Max timestep:':20} {self.max_timestep}")
+        print(f"{'Sample size:':20} {self.sample_size}")
+        print(f"{'Noise target:':20} {self.noise_target}")
+        print(f"{'Enabled timesteps:':20} {self.enable_timesteps}")
+        print(f"{'Device:':20} {self.device}")
+        print(f"{'Noise preds buffer:':20} {len(self.noise_preds_real)} x deque")
+        print(f"{'=' * 40}")

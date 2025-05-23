@@ -34,6 +34,7 @@ from backend.torch.modules.transformer_flux import FluxTransformer2DModel
 from backend.torch.scheduler import FlowMatchEulerDiscreteScheduler
 from backend.torch.utils import PipelineImageInput, load_image, randn_tensor
 from backend.torch.utils.image_processor import VaeImageProcessor
+from segquant.solver.base_steper import BaseSteper
 
 
 # Copied from diffusers.pipelines.flux.pipeline_flux.calculate_shift
@@ -656,6 +657,9 @@ class FluxControlNetModel(nn.Module):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 512,
+        early_stop: int = None,
+        replay_timestep: int = None,
+        steper: BaseSteper = None,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -995,8 +999,20 @@ class FluxControlNetModel(nn.Module):
             )
 
         # 7. Denoising loop
+        if steper is not None:
+            steper.register_scheduler(self.scheduler)
         with tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
+                if replay_timestep is not None:
+                    if i < replay_timestep:
+                        if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                            progress_bar.update()
+                        continue
+
+                if early_stop is not None:
+                    if i == early_stop:
+                        break
+
                 if self.interrupt:
                     continue
 
@@ -1078,7 +1094,16 @@ class FluxControlNetModel(nn.Module):
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
-                latents = self.scheduler.step(noise_pred, t, latents)[0]
+                if steper is not None:
+                    latents = steper.step_forward(latents=latents,
+                                                  noise_pred=noise_pred,
+                                                  i=i,
+                                                  t=t,
+                                                  num_inference_steps=num_inference_steps,
+                                                  do_classifier_free_guidance=False,
+                                                  guidance_scale=0)
+                else:
+                    latents = self.scheduler.step(noise_pred, t, latents)[0]
 
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():

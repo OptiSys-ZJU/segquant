@@ -1,56 +1,26 @@
 import torch
+from segquant.solver.recurrent_steper import RecurrentSteper
+from segquant.solver.solver import BaseSolver, affine_with_threshold
 
-from dataset.affine.noise_dataset import NoiseDataset
-
-class TACDiffution:
-    def __init__(self, lambda1=0.5, lambda2=0.1, max_timestep=30):
-        self.solutions = {}
-        self.cumulative = {}
-        self.lambda1 = lambda1
-        self.lambda2 = lambda2
-        self.max_timestep = max_timestep
-        self.learning = True
-
-    def loss(self, K, b, quantized, real):
-        quantized = quantized.to(torch.float32)
-        real = real.to(torch.float32)
-
-        epsilon_tilde = K * quantized
-        mse_loss = torch.mean((epsilon_tilde - real) ** 2)
-        numerator = torch.sum((epsilon_tilde - real) ** 2)
-        denominator = torch.sum(real ** 2) + 1e-8
-        qnsr_loss = numerator / denominator
-        k_penalty = torch.mean((K - 1.0) ** 2)
-        loss = (1 - self.lambda1) * mse_loss + self.lambda1 * qnsr_loss + self.lambda2 * k_penalty
-        return loss
-    
-    def error(self, K, b, quantized, real):
-        quantized = quantized.to(torch.float32)
-        real = real.to(torch.float32)
-
-        epsilon_tilde = K * quantized
-        mse_loss = torch.mean((epsilon_tilde - real) ** 2)
-        numerator = torch.sum((epsilon_tilde - real) ** 2)
-        denominator = torch.sum(real ** 2) + 1e-8
-        qnsr_loss = numerator / denominator
-        loss = (1 - self.lambda1) * mse_loss + self.lambda1 * qnsr_loss
-        return loss
-
-    def get_solution(self, timestep, example=None):
-        if self.learning:
-            if timestep in self.solutions:
-                return (self.solutions[timestep], torch.zeros_like(self.solutions[timestep]))
-            else:
-                print(f'Warning: [{timestep}] get default solution')
-                return (torch.ones_like(example), torch.zeros_like(example))
+class TACSolver(BaseSolver):
+    def __init__(self, config):
+        super().__init__()
+        if config is None:
+            self.lambda1 = 0.5
+            self.lambda2 = 0.1
+            self.threshold = 1
+            self.verbose = True
         else:
-            return (self.solutions[timestep], torch.zeros_like(self.solutions[timestep]))
+            self.lambda1 = config['lambda1']
+            self.lambda2 = config['lambda2']
+            self.threshold = config['threshold']
+            self.verbose = config['verbose']
+        
+        self.record = None
+        self.solution = None
     
-    def finish_learning(self):
-        self.learning = False
-
-    def step_learning(self, timestep, quantized, real):
-        quantized = quantized.to(torch.float32)
+    def learn(self, real, quant):
+        quantized = quant.to(torch.float32)
         real = real.to(torch.float32)
 
         B, C, H, W = real.shape
@@ -68,74 +38,42 @@ class TACDiffution:
 
         K_mean = K_out.mean(dim=0, keepdim=True)
 
-        if self.learning:
-            if timestep not in self.cumulative:
-                self.cumulative[timestep] = {
-                    'sum_K': K_mean.clone(),
-                    'count': 1
-                }
-            else:
-                self.cumulative[timestep]['sum_K'] += K_mean
-                self.cumulative[timestep]['count'] += 1
+        if self.record is None:
+            self.record = {
+                'sum_K': K_mean.clone(),
+                'count': 1
+            }
+        else:
+            self.record['sum_K'] += K_mean
+            self.record['count'] += 1
 
-            count = self.cumulative[timestep]['count']
-            mean_K = self.cumulative[timestep]['sum_K'] / count
+        count = self.record['count']
+        mean_K = self.record['sum_K'] / count
 
-            self.solutions[timestep] = mean_K
-        return (K_mean, torch.zeros_like(K_mean))
+        self.solution = mean_K
 
+    def solve(self, quant):
+        K = self.solution
+        return affine_with_threshold(quant, K, threshold=self.threshold, verbose=self.verbose)
 
-if __name__ == '__main__':
-    affiner = TACDiffution(max_timestep=60)
-    dataset = NoiseDataset('../dataset/affine_noise')
-
-    ###### learning
-    dataloader = dataset.get_dataloader(batch_size=1, shuffle=False)
-    learning_sample = 8
-    step = 0
-    for batch in dataloader:
-        assert isinstance(batch, list) and len(batch) == dataset.max_timestep
-        for data in batch:
-            timestep = int(data["timestep"][0].item())
-            quant = data["quant"]
-            real = data["real"]
-
-            K = torch.ones_like(real)
-            init = (affiner.loss(K, quant, real), affiner.error(K, quant, real))
-
-            K = affiner.step_learning(timestep, quant, real)
-            affine = (affiner.loss(K, quant, real), affiner.error(K, quant, real))
-
-            print(f'[{timestep}] init: [{init[0]:5f}/{init[1]:5f}], tac: [{affine[0]:5f}/{affine[1]:5f}]')
-        
-        step += 1
-        if step >= learning_sample:
-            break
+class TACDiffution(RecurrentSteper):
+    def __init__(self, max_timestep, sample_size=1, solver_type='tac', solver_config=None, latents=None, recurrent=True, noise_target='all', enable_latent_affine=False, enable_timesteps=None, device='cuda:0'):
+        assert solver_type == 'tac', 'only tac solver worked'
+        if solver_type == 'tac':
+            super().__init__(max_timestep, sample_size, TACSolver, solver_config, latents, recurrent, noise_target, enable_latent_affine, enable_timesteps, device)
+        else:
+            raise ValueError()
+        self.print_config()
     
-    affiner.finish_learning()
-
-    ##### testing
-    dataloader = dataset.get_dataloader(batch_size=1, shuffle=True)
-    test_sample = 2
-    step = 0
-    for batch in dataloader:
-        assert isinstance(batch, list) and len(batch) == dataset.max_timestep
-        for data in batch:
-            timestep = int(data["timestep"][0].item())
-            quant = data["quant"]
-            real = data["real"]
-
-            K = torch.ones_like(real)
-            init = (affiner.loss(K, quant, real), affiner.error(K, quant, real))
-
-            K = affiner.get_solution(timestep)
-            affine = (affiner.loss(K, quant, real), affiner.error(K, quant, real))
-
-            K = affiner.step_learning(timestep, quant, real)
-            opt = (affiner.loss(K, quant, real), affiner.error(K, quant, real))
-
-            print(f'[{timestep}] init: [{init[0]:5f}/{init[1]:5f}], tac: [{affine[0]:5f}/{affine[1]:5f}], opt: [{opt[0]:5f}/{opt[1]:5f}]')
-    
-        step += 1
-        if step >= test_sample:
-            break
+    def print_config(self):
+        print("TACDiffution Configuration:")
+        print(f"{'=' * 40}")
+        print(f"{'Max timestep:':20} {self.max_timestep}")
+        print(f"{'Sample size:':20} {self.sample_size}")
+        print(f"{'Noise target:':20} {self.noise_target}")
+        print(f"{'Recurrent:':20} {self.recurrent}")
+        print(f"{'Enable latent affine:':20} {self.enable_latent_affine}")
+        print(f"{'Enabled timesteps:':20} {self.enable_timesteps}")
+        print(f"{'Device:':20} {self.device}")
+        print(f"{'Noise preds buffer:':20} {len(self.noise_preds_real)} x deque")
+        print(f"{'=' * 40}")

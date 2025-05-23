@@ -32,6 +32,24 @@ def affine_with_percentile_scale(quant, K, b=None, percentile=100, greater=True,
             print(f"[Affine Replace] Threshold={threshold.item():.4f}, Replace Ratio={replaced_ratio*100:.2f}%")
         return out.to(dtype=pre_type)
 
+def affine_with_threshold(quant, K, b=None, threshold=1, verbose=False):
+    with torch.no_grad():
+        device = quant.device
+        pre_type = quant.dtype
+
+        noise_pred_float = quant.to(dtype=torch.float32)
+        K = K.to(device=device, dtype=torch.float32)
+        if b is None:
+            b = torch.zeros_like(K)
+        b = b.to(device=device, dtype=torch.float32)
+        mask = noise_pred_float > threshold * noise_pred_float.abs().mean()
+        affine_pred = K * noise_pred_float + b
+        out = torch.where(mask, affine_pred, noise_pred_float)
+        replaced_ratio = mask.sum().item() / mask.numel()
+        if verbose:
+            print(f"[Affine Replace] Threshold={threshold.item():.4f}, Replace Ratio={replaced_ratio*100:.2f}%")
+        return out.to(dtype=pre_type)
+
 class BaseSolver:
     def __init__(self):
         pass
