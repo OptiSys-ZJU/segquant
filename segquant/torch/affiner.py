@@ -17,11 +17,11 @@ def process_affiner(config, dataset, model_real, model_quant, latents=None, shuf
                                latents=latents,
                                recurrent=config['stepper']['recurrent'],
                                noise_target=config['stepper']['noise_target'],
-                               enable_latent=config['stepper']['enable_latent'],
+                               enable_latent_affine=config['stepper']['enable_latent_affine'],
                                enable_timesteps=config['stepper']['enable_timesteps'])
 
     if config['stepper']['recurrent']:
-        for _ in range(config['max_timestep']):
+        for _ in range(config['stepper']['max_timestep']):
             affiner.learning_real(model_real=model_real, data_loader=dataset.get_dataloader(), **config['extra_args'])
             affiner.learning_quant(model_quant=model_quant, data_loader=dataset.get_dataloader(), **config['extra_args'])
             affiner.replay_real(model_real=model_real, data_loader=dataset.get_dataloader(), **config['extra_args'])
@@ -49,7 +49,7 @@ if __name__ == '__main__':
     config = {
         "solver": {
             "type": 'mserel',
-            "blocksize": 1,
+            "blocksize": 128,
             "alpha": 0.5,
             "lambda1": 0.1,
             "lambda2": 0.1,
@@ -62,10 +62,10 @@ if __name__ == '__main__':
 
         "stepper": {
             'max_timestep': 30,
-            'sample_size': 1,
-            'recurrent': False,
-            'noise_target': 'all',
-            'enable_latent': False,
+            'sample_size': 16,
+            'recurrent': True,
+            'noise_target': 'uncond',
+            'enable_latent_affine': False,
             'enable_timesteps': None,
         },
 
@@ -75,11 +75,11 @@ if __name__ == '__main__':
         }
     }
 
-    affiner = process_affiner(config, dataset, model_real, model_quant, latents=latents, shuffle=False)
+    affiner = process_affiner(config, dataset, model_real, model_quant, latents=latents, shuffle=True)
 
     #############################################
     from benchmark import trace_pic
-    max_num = 1
+    max_num = 8
     model_quant = model_quant.to('cuda')
     trace_pic(model_quant, f'affine_pics/blockaffine', dataset.get_dataloader(), latents, steper=affiner, max_num=max_num, num_inference_steps=config['stepper']['max_timestep'], **config['extra_args'])
     trace_pic(model_quant, f'affine_pics/quant', dataset.get_dataloader(), latents, max_num=max_num, num_inference_steps=config['stepper']['max_timestep'], **config['extra_args'])

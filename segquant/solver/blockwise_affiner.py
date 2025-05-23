@@ -6,7 +6,7 @@ from segquant.solver.state import Stage, StateMachine, solver_trans
 from collections import deque
 
 class BlockwiseAffiner(BaseSteper):
-    def __init__(self, max_timestep, blocksize=1, sample_size=1, solver_type='mserel', solver_config=None, latents=None, recurrent=True, noise_target='all', enable_latent=False, enable_timesteps=None, device='cuda:0'):
+    def __init__(self, max_timestep, blocksize=1, sample_size=1, solver_type='mserel', solver_config=None, latents=None, recurrent=True, noise_target='all', enable_latent_affine=False, enable_timesteps=None, device='cuda:0'):
         super().__init__(max_timestep)
         self.blocksize = blocksize
 
@@ -25,7 +25,9 @@ class BlockwiseAffiner(BaseSteper):
         self.recurrent_latents = [(latents, latents) for _ in range(self.sample_size)]
         self.replay = False
 
-        self.enable_latent = enable_latent
+        self.enable_latent_affine = enable_latent_affine
+        assert not self.enable_latent_affine, 'enable_latent_affine not work now'
+        self.latent_record = [[], []] # real / quant
 
         if enable_timesteps is None:
             self.enable_timesteps = [i for i in range(max_timestep)]
@@ -33,7 +35,24 @@ class BlockwiseAffiner(BaseSteper):
             self.enable_timesteps = enable_timesteps
         
         self.device = device
+
+        self.print_config()
     
+    def print_config(self):
+        print("BlockwiseAffiner Configuration:")
+        print(f"{'=' * 40}")
+        print(f"{'Max timestep:':20} {self.max_timestep}")
+        print(f"{'Block size:':20} {self.blocksize}")
+        print(f"{'Sample size:':20} {self.sample_size}")
+        print(f"{'Solver type:':20} {'MSERelSolver' if isinstance(self.solver[0], MSERelSolver) else type(self.solver[0]).__name__}")
+        print(f"{'Noise target:':20} {self.noise_target}")
+        print(f"{'Recurrent:':20} {self.recurrent}")
+        print(f"{'Enable latent affine:':20} {self.enable_latent_affine}")
+        print(f"{'Enabled timesteps:':20} {self.enable_timesteps}")
+        print(f"{'Device:':20} {self.device}")
+        print(f"{'Noise preds buffer:':20} {len(self.noise_preds_real)} x deque")
+        print(f"{'=' * 40}")
+
     def learning(self, model, data_loader, **kwargs):
         model.to(torch.device(self.device))
         self.sample_count = 0
