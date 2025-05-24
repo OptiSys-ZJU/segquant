@@ -62,6 +62,49 @@ class TestModel(nn.Module):
         x = self.norm(x) * (1 + scale_msa[:, None]) + shift_msa[:, None]
         return x, gate_msa, shift_mlp, scale_mlp, gate_mlp
 
+def test_default_fp8():
+    test_model = TestModel()
+    ######################################
+    CFG = {
+        "quant_cfg": {
+            "*weight_quantizer": {"num_bits": (4, 3), "axis": None},
+            "*input_quantizer": {"num_bits": (4, 3), "axis": None},
+            # "linear.weight_quantizer": {
+            #     "num_bits": 8, 
+            #     "block_sizes": {0: 10}, 
+            #     "enable": True
+            # }
+        },
+        "algorithm": "max",
+    }
+    modelopt_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
+    mtq.print_quant_summary(modelopt_model)
+    ######################################
+    config = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.FP8E4M3,
+            "weight_dtype": DType.FP8E4M3,
+            "opt": Optimum.DEFAULT,
+            "seglinear": True,
+            'search_patterns': [],
+            "input_axis": None,
+            "weight_axis": None,
+        },
+    }
+    segquant_model = quantize(copy.deepcopy(test_model), seg_data_loader, config, True, example=(torch.rand(2, 10), torch.rand(2, 10)))
+    ######################################
+    x_generator = torch.Generator()
+    x_generator.manual_seed(1234)
+    x = torch.rand(2, 10, generator=x_generator)
+    emb = torch.rand(2, 10, generator=x_generator)
+    res = test_model.forward(x, emb)
+    print('origin:', res)
+    res = modelopt_model.forward(x, emb)
+    print('modelopt:', res)
+    res = segquant_model.forward(x, emb)
+    print('segquant:', res)
+
 def test_default_int8():
     test_model = TestModel()
     ######################################
@@ -69,11 +112,11 @@ def test_default_int8():
         "quant_cfg": {
             "*weight_quantizer": {"num_bits": 8, "axis": None},
             "*input_quantizer": {"num_bits": 8, "axis": None},
-            "linear.weight_quantizer": {
-                "num_bits": 8, 
-                "block_sizes": {0: 10}, 
-                "enable": True
-            }
+            # "linear.weight_quantizer": {
+            #     "num_bits": 8, 
+            #     "block_sizes": {0: 10}, 
+            #     "enable": True
+            # }
         },
         "algorithm": "max",
     }
@@ -87,12 +130,13 @@ def test_default_int8():
             "weight_dtype": DType.INT8,
             "opt": Optimum.DEFAULT,
             "seglinear": True,
-            'search_patterns': SegPattern.all(),
+            # 'search_patterns': SegPattern.all(),
+            'search_patterns': [],
             "input_axis": None,
             "weight_axis": None,
         },
     }
-    segquant_model = quantize(copy.deepcopy(test_model), seg_data_loader, (torch.rand(2, 10), torch.rand(2, 10)), config, True)
+    segquant_model = quantize(copy.deepcopy(test_model), seg_data_loader, config, True, example=(torch.rand(2, 10), torch.rand(2, 10)))
     ######################################
     x_generator = torch.Generator()
     x_generator.manual_seed(1234)
@@ -100,9 +144,9 @@ def test_default_int8():
     emb = torch.rand(2, 10, generator=x_generator)
     res = test_model.forward(x, emb)
     print('origin:', res)
-    res = modelopt_model.forward(x)
+    res = modelopt_model.forward(x, emb)
     print('modelopt:', res)
-    res = segquant_model.forward(x)
+    res = segquant_model.forward(x, emb)
     print('segquant:', res)
 
 def test_smooth_int8():
@@ -153,4 +197,4 @@ def test_smooth_int8():
     print('segquant:', res[0])
 
 if __name__ == '__main__':
-    test_smooth_int8()
+    test_default_fp8()

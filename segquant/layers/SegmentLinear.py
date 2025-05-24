@@ -5,7 +5,7 @@ import torch.nn as nn
 from segquant.calibrator.calibrator import DefaultCalibrator, SmoothQuantCalibrator
 from segquant.config import DType, Optimum
 from segquant.layers.splitter import BaseSplitter
-from segquant.quantizers.quantizer import FakeQuantizer, QuantizerRegistry
+from segquant.quantizers.quantizer import QuantizerRegistry
 
 class BaseSegmentLinear(nn.Module):
     def __init__(self, in_features, out_features, bias=True, 
@@ -167,8 +167,9 @@ class DefaultSegmentLinear(BaseSegmentLinear):
 
             output_chunks = []
             if False:
-                for weight_q, quantized_output_chunk in zip(self.weight_quantizers, quantized_output_chunks):
-                    output_chunks.append(FakeQuantizer.dequantize(quantized_output_chunk, self.input_quantizers[0], weight_q, None, None))
+                pass
+                # for weight_q, quantized_output_chunk in zip(self.weight_quantizers, quantized_output_chunks):
+                #     output_chunks.append(FakeQuantizer.dequantize(quantized_output_chunk, self.input_quantizers[0], weight_q, None, None))
             else:
                 output_chunks = quantized_output_chunks
 
@@ -183,7 +184,8 @@ class DefaultSegmentLinear(BaseSegmentLinear):
             res = torch.zeros_like(quantized_output_chunks[0])
             for input_q, quantized_output_chunk in zip(self.input_quantizers, quantized_output_chunks):
                 if False:
-                    res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, self.weight_quantizers[0], None, None)
+                    pass
+                    # res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, self.weight_quantizers[0], None, None)
                 else:
                     res += quantized_output_chunk
             return res + bias if bias is not None else res
@@ -302,8 +304,9 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
 
             output_chunks = []
             if False:
-                for input_q, weight_q, quantized_output_chunk in zip(self.input_quantizers, self.weight_quantizers, quantized_output_chunks):
-                    output_chunks.append(FakeQuantizer.dequantize(quantized_output_chunk, input_q, weight_q, None, None))
+                pass
+                # for input_q, weight_q, quantized_output_chunk in zip(self.input_quantizers, self.weight_quantizers, quantized_output_chunks):
+                #     output_chunks.append(FakeQuantizer.dequantize(quantized_output_chunk, input_q, weight_q, None, None))
             else:
                 output_chunks = quantized_output_chunks
 
@@ -320,7 +323,8 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
             res = torch.zeros_like(quantized_output_chunks[0], dtype=x.dtype, device=x.device)
             for input_q, weight_q, quantized_output_chunk in zip(self.input_quantizers, self.weight_quantizers, quantized_output_chunks):
                 if False:
-                    res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, weight_q, None, None)
+                    pass
+                    # res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, weight_q, None, None)
                 else:
                     res += quantized_output_chunk
             return res + bias if bias is not None else res

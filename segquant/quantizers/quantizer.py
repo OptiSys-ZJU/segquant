@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from segquant.utils.extension import load_fake_quant_fp8_ext
 import torch
 
 class BaseQuantizer(ABC):
@@ -8,28 +9,6 @@ class BaseQuantizer(ABC):
 
     def calibrate(self, x):
         pass
-
-class FakeQuantizer(BaseQuantizer):
-    def quantize(self, x):
-        pass
-
-    def calibrate(self, x):
-        pass
-
-    @staticmethod
-    def dequantize(y_quantized: torch.Tensor, input_quantizer, weight_quantizer, input, weight) -> torch.Tensor:
-        y_quantized = torch.clamp(y_quantized, min=input_quantizer.qmin, max=input_quantizer.qmax)
-
-        scale_x = input_quantizer.scale
-        zero_point_x = input_quantizer.zero_point
-        scale_w = weight_quantizer.scale
-        zero_point_w = weight_quantizer.zero_point
-
-        if zero_point_w == 0 and zero_point_x == 0:
-            y_dequant = y_quantized * scale_x * scale_w
-            return y_dequant
-        else:
-            raise ValueError('Not implemented')
 
 class QuantizerRegistry:
     _registry = {}
@@ -53,7 +32,7 @@ class QuantizerRegistry:
         return quantizer_cls(**kwargs)
 
 @QuantizerRegistry.register("int8")
-class IntQuantizer(FakeQuantizer):
+class IntQuantizer(BaseQuantizer):
     def __init__(self, num_bits=8, symmetric=True, axis=None, dual_scale=False):
         self.num_bits = num_bits
         self.symmetric = symmetric
@@ -119,6 +98,7 @@ class IntQuantizer(FakeQuantizer):
                     self.scale = self.qmax / self.amax.clamp(min=epsilon)
                     self.zero_point = 0
         else:
+            # todo: scale = q/a
             if self.axis is None:
                 min_val = x.min().item()
                 max_val = x.max().item()
@@ -197,56 +177,148 @@ class IntQuantizer(FakeQuantizer):
                     f"amin={self.amin:.4f}, amax={self.amax:.4f}, zero_point={self.zero_point:.4f})")
 
 @QuantizerRegistry.register("fpe4m3")
-class FloatQuantizer(FakeQuantizer):
-    def __init__(self, exp_bits=4, mant_bits=3, use_sign=True, clip_max=None):
+class FloatQuantizer:
+    def __init__(self, exp_bits=4, mant_bits=3, axis=None, dual_scale=False):
         self.exp_bits = exp_bits
         self.mant_bits = mant_bits
-        self.use_sign = use_sign
-        self.clip_max = clip_max
+        self.axis = axis
+        self.dual_scale = dual_scale
 
-        self.exp_max = 2 ** exp_bits - 1
-        self.mant_max = 2 ** mant_bits - 1
-        self.bias = (2 ** (exp_bits - 1)) - 1
-
-    def quantize(self, x):
-        x_fp = x.clone()
-
-        if self.clip_max is not None:
-            x_fp = torch.clamp(x_fp, -self.clip_max, self.clip_max)
-
-        if self.use_sign:
-            sign = (x_fp < 0).to(torch.int32)
-            x_fp = x_fp.abs()
+        if exp_bits == 4 and mant_bits == 3:
+            # nvidia's fpe4m3
+            self.fp_max = 448.0
+            self.fp_min = (2 ** (-6)) * (240 / 448.0)
         else:
-            sign = torch.zeros_like(x_fp, dtype=torch.int32)
+            self.fp_max = (2 ** (2 ** exp_bits - 2)) * (2 - 2 ** (-mant_bits))
+            self.fp_min = 2 ** (1 - (2 ** (exp_bits - 1)))
 
-        eps = 1e-6
-        exponent = torch.floor(torch.log2(x_fp + eps))
-        mantissa = x_fp / (2 ** exponent + eps) - 1
+        self.scale = None
+        self.zero_point = 0
 
-        exponent_q = torch.clamp((exponent + self.bias).round(), 0, self.exp_max).to(torch.int32)
-        mantissa_q = torch.clamp((mantissa * self.mant_max).round(), 0, self.mant_max).to(torch.int32)
+        self.neg_scale = None
+        self.pos_scale = None
 
-        return sign, exponent_q, mantissa_q
+        self.neg_amax = None
+        self.pos_amax = None
+        self.amax = None
 
-    def dequantize(self, sign, exponent_q, mantissa_q):
-        exponent = exponent_q - self.bias
-        x_recon = (1 + mantissa_q.float() / self.mant_max) * (2 ** exponent.float())
+    def calibrate(self, x: torch.Tensor):
+        epsilon = 1.0 / (1 << 24)
 
-        if self.use_sign:
-            sign_factor = 1 - 2 * sign
-            return sign_factor * x_recon
+        if self.dual_scale:
+            neg_x = x[x < 0].abs()
+            pos_x = x[x > 0].abs()
+
+            if self.axis is None:
+                neg_max = neg_x.max().item() if neg_x.numel() > 0 else 0.0
+                pos_max = pos_x.max().item() if pos_x.numel() > 0 else 0.0
+
+                self.neg_amax = max(self.neg_amax or 0.0, neg_max)
+                self.pos_amax = max(self.pos_amax or 0.0, pos_max)
+
+                self.neg_scale = self.fp_max / self.neg_amax if self.neg_amax > epsilon else 1.0
+                self.pos_scale = self.fp_max / self.pos_amax if self.pos_amax > epsilon else 1.0
+            else:
+                neg_max = neg_x.amax(dim=self.axis, keepdim=False) if neg_x.numel() > 0 else torch.zeros(x.size(self.axis), device=x.device)
+                pos_max = pos_x.amax(dim=self.axis, keepdim=False) if pos_x.numel() > 0 else torch.zeros(x.size(self.axis), device=x.device)
+
+                if self.neg_amax is None:
+                    self.neg_amax = neg_max
+                    self.pos_amax = pos_max
+                else:
+                    self.neg_amax = torch.maximum(self.neg_amax, neg_max)
+                    self.pos_amax = torch.maximum(self.pos_amax, pos_max)
+
+                self.neg_scale = self.fp_max / self.neg_amax.clamp(min=epsilon)
+                self.pos_scale = self.fp_max / self.pos_amax.clamp(min=epsilon)
         else:
-            return x_recon
+            if self.axis is None:
+                max_val = x.abs().max().item()
+                self.amax = max(self.amax or 0.0, max_val)
+                self.scale = self.fp_max / self.amax if self.amax > epsilon else 1.0
+                self.zero_point = 0
+            else:
+                max_val = x.abs().amax(dim=self.axis, keepdim=False)
+                self.amax = torch.maximum(self.amax, max_val) if self.amax is not None else max_val
+                self.scale = self.fp_max / self.amax.clamp(min=epsilon)
+                self.zero_point = 0
 
-    def __call__(self, x):
-        sign, exp, mant = self.quantize(x)
-        return self.dequantize(sign, exp, mant)
+    def _simulate_e4m3(self, x: torch.Tensor):
+        return load_fake_quant_fp8_ext().fake_e4m3fy(x)
+
+    def _simulate_fp(self, x: torch.Tensor, fp_min: float, fp_max: float, mant_bits: int) -> torch.Tensor:
+        x_abs = x.abs()
+        sign = x.sign()
+
+        x_clamped = torch.clamp(x_abs, min=0.0, max=fp_max)
+
+        # todo: Subnormal
+        x_clamped = torch.where(x_clamped < fp_min, torch.zeros_like(x_clamped), x_clamped)
+
+        exponent = torch.floor(torch.log2(torch.clamp(x_clamped, min=fp_min)))
+        mantissa = x_clamped / (2 ** exponent)
+        mantissa_rounded = torch.round((mantissa - 1) * (2 ** mant_bits)) / (2 ** mant_bits)
+        simulated = (1 + mantissa_rounded) * (2 ** exponent)
+
+        return simulated * sign
+
+    def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
+        zero_mask = x.abs() < 1.0 / (1 << 24)
+
+        if self.dual_scale:
+            if self.axis is not None:
+                shape = [1] * x.dim()
+                shape[self.axis] = -1
+                pos_scale = self.pos_scale.view(shape)
+                neg_scale = self.neg_scale.view(shape)
+            else:
+                pos_scale = self.pos_scale
+                neg_scale = self.neg_scale
+
+            x_scaled = torch.where(
+                x >= 0,
+                x * pos_scale,
+                x * neg_scale
+            )
+
+            if self.exp_bits == 4 and self.mant_bits == 3:
+                x_quant = self._simulate_e4m3(x_scaled)
+            else:
+                x_quant = self._simulate_fp(x_scaled, self.fp_min, self.fp_max, self.mant_bits)
+
+            x_dequant = torch.where(
+                x >= 0,
+                x_quant / pos_scale,
+                x_quant / neg_scale
+            )
+        else:
+            if self.axis is not None:
+                shape = [1] * x.dim()
+                shape[self.axis] = -1
+                scale = self.scale.view(shape)
+            else:
+                scale = self.scale
+
+            x_scaled = x * scale
+            if self.exp_bits == 4 and self.mant_bits == 3:
+                x_quant = self._simulate_e4m3(x_scaled)
+            else:
+                x_quant = self._simulate_fp(x_scaled, self.fp_min, self.fp_max, self.mant_bits)
+            x_dequant = x_quant / scale
+
+        x_dequant[zero_mask] = 0.0
+        return x_dequant.to(x.dtype)
+
+    def quantize(self, x: torch.Tensor) -> torch.Tensor:
+        return self.fake_quantize(x)
 
     def __repr__(self):
-        return (f"FloatQuantizer(exp_bits={self.exp_bits}, "
-                f"mant_bits={self.mant_bits}, use_sign={self.use_sign}, "
-                f"clip_max={self.clip_max})")
+        if self.dual_scale:
+            return (f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, axis={self.axis}, dual_scale=True, "
+                    f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})")
+        else:
+            return (f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, axis={self.axis}, dual_scale=False, "
+                    f"amax={self.amax:.4f})")
 
 @QuantizerRegistry.register("int16")
 def int6_factory():
