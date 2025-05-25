@@ -1,8 +1,6 @@
-import copy
 import os
-
 import torch
-from tqdm import tqdm
+import modelopt.torch.quantization as mtq
 from backend.torch.models.stable_diffusion_3_controlnet import (
     StableDiffusion3ControlNetModel,
 )
@@ -12,7 +10,6 @@ from segquant.sample.sampler import QDiffusionSampler, model_map
 from segquant.config import DType, Optimum, SegPattern
 from segquant.torch.calibrate_set import generate_calibrate_set
 from segquant.torch.quantization import quantize
-import modelopt.torch.quantization as mtq
 
 
 calib_args = {

@@ -1,13 +1,13 @@
-import torch
 import time
-from transformers import DPTFeatureExtractor, DPTForDepthEstimation
-import cv2
-import numpy as np
-from torch.utils.data import Dataset
-from PIL import Image
 from typing import OrderedDict
 import os
 import json
+from PIL import Image
+import numpy as np
+import cv2
+import torch
+from torch.utils.data import Dataset
+from transformers import DPTFeatureExtractor, DPTForDepthEstimation
 from backend.torch.utils import load_image
 
 

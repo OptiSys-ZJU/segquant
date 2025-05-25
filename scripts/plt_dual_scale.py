@@ -1,11 +1,10 @@
+import json
 import torch
 from segquant.sample.sampler import QDiffusionSampler
 from dataset.coco.coco_dataset import COCODataset
 from backend.torch.models.stable_diffusion_3_controlnet import (
     StableDiffusion3ControlNetModel,
 )
-
-import json
 
 
 def stat_channels(layers, model, dataset, output_file="channel_stats.json"):

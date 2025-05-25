@@ -1,10 +1,10 @@
-from backend.torch.models.stable_diffusion_3_controlnet import (
-    StableDiffusion3ControlNetModel,
-)
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import cairosvg
+from backend.torch.models.stable_diffusion_3_controlnet import (
+    StableDiffusion3ControlNetModel,
+)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = StableDiffusion3ControlNetModel.from_repo(
