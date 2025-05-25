@@ -242,4 +242,4 @@ def test_smooth_int8():
 
 
 if __name__ == "__main__":
-    test_default_fp8()
+    test_default_int8()

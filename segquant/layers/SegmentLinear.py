@@ -158,7 +158,7 @@ class DefaultSegmentLinear(BaseSegmentLinear):
                 f"  weight_quantizers=[\n    {weight_q}\n  ]\n"
                 f")"
             )
-        return base + f"  calib=False\n)"
+        return base + "  calib=False\n)"
 
     def calibrate(self, input_data):
         if self.seg_mode == "input":

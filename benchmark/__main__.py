@@ -254,7 +254,7 @@ def run_dual_scale_module():
             "weight_dtype": DType.INT8,
             "opt": Optimum.SMOOTH,
             "seglinear": True,
-            "search_patterns": [SegPattern.Activation2Linear],
+            "search_patterns": [SegPattern.ACTIVATION2LINEAR],
             "input_axis": None,
             "weight_axis": None,
             "alpha": 0.5,
