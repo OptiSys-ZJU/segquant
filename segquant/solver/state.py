@@ -1,10 +1,12 @@
 from enum import Enum, auto
 
+
 class Stage(Enum):
     INIT = auto()
     WAIT_REAL = auto()
     WAIT_QUANT = auto()
     FINAL = auto()
+
 
 class StateMachine:
     def __init__(self):
@@ -30,6 +32,7 @@ class StateMachine:
         }
         return new_state in valid[self._state]
 
+
 def solver_trans(from_stages, to_stage):
     if not isinstance(from_stages, (list, tuple)):
         from_stages = [from_stages]
@@ -37,8 +40,12 @@ def solver_trans(from_stages, to_stage):
     def decorator(func):
         def wrapper(self, *args, **kwargs):
             if self.fsm.state not in from_stages:
-                raise RuntimeError(f"Invalid call to {func.__name__}() in current state: {self.fsm.state.name}")
+                raise RuntimeError(
+                    f"Invalid call to {func.__name__}() in current state: {self.fsm.state.name}"
+                )
             self.fsm.transition_to(to_stage)
             return func(self, *args, **kwargs)
+
         return wrapper
+
     return decorator

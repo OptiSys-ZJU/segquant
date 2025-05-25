@@ -3,8 +3,14 @@ import torch
 import torch.nn as nn
 from backend.torch.layers.attention_processor import Attention
 from backend.torch.layers.activations import get_activation
-from backend.torch.layers.resnet import ResnetBlock2D, Upsample2D, Downsample2D, ResnetBlockCondNorm2D
+from backend.torch.layers.resnet import (
+    ResnetBlock2D,
+    Upsample2D,
+    Downsample2D,
+    ResnetBlockCondNorm2D,
+)
 from backend.torch.utils.deprecation_utils import deprecate
+
 
 class AutoencoderTinyBlock(nn.Module):
     """
@@ -41,6 +47,7 @@ class AutoencoderTinyBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.fuse(self.conv(x) + self.skip(x))
+
 
 class DownEncoderBlock2D(nn.Module):
     def __init__(
@@ -99,7 +106,11 @@ class DownEncoderBlock2D(nn.Module):
             self.downsamplers = nn.ModuleList(
                 [
                     Downsample2D(
-                        out_channels, use_conv=True, out_channels=out_channels, padding=downsample_padding, name="op"
+                        out_channels,
+                        use_conv=True,
+                        out_channels=out_channels,
+                        padding=downsample_padding,
+                        name="op",
                     )
                 ]
             )
@@ -119,6 +130,7 @@ class DownEncoderBlock2D(nn.Module):
                 hidden_states = downsampler(hidden_states)
 
         return hidden_states
+
 
 class UpDecoderBlock2D(nn.Module):
     def __init__(
@@ -176,13 +188,17 @@ class UpDecoderBlock2D(nn.Module):
         self.resnets = nn.ModuleList(resnets)
 
         if add_upsample:
-            self.upsamplers = nn.ModuleList([Upsample2D(out_channels, use_conv=True, out_channels=out_channels)])
+            self.upsamplers = nn.ModuleList(
+                [Upsample2D(out_channels, use_conv=True, out_channels=out_channels)]
+            )
         else:
             self.upsamplers = None
 
         self.resolution_idx = resolution_idx
 
-    def forward(self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         for resnet in self.resnets:
             hidden_states = resnet(hidden_states, temb=temb)
 
@@ -191,6 +207,7 @@ class UpDecoderBlock2D(nn.Module):
                 hidden_states = upsampler(hidden_states)
 
         return hidden_states
+
 
 class UNetMidBlock2D(nn.Module):
     """
@@ -240,11 +257,15 @@ class UNetMidBlock2D(nn.Module):
         output_scale_factor: float = 1.0,
     ):
         super().__init__()
-        resnet_groups = resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
+        resnet_groups = (
+            resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
+        )
         self.add_attention = add_attention
 
         if attn_groups is None:
-            attn_groups = resnet_groups if resnet_time_scale_shift == "default" else None
+            attn_groups = (
+                resnet_groups if resnet_time_scale_shift == "default" else None
+            )
 
         # there is always at least one resnet
         if resnet_time_scale_shift == "spatial":
@@ -294,7 +315,9 @@ class UNetMidBlock2D(nn.Module):
                         rescale_output_factor=output_scale_factor,
                         eps=resnet_eps,
                         norm_num_groups=attn_groups,
-                        spatial_norm_dim=temb_channels if resnet_time_scale_shift == "spatial" else None,
+                        spatial_norm_dim=temb_channels
+                        if resnet_time_scale_shift == "spatial"
+                        else None,
                         residual_connection=True,
                         bias=True,
                         upcast_softmax=True,
@@ -339,13 +362,17 @@ class UNetMidBlock2D(nn.Module):
 
         self.gradient_checkpointing = False
 
-    def forward(self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         hidden_states = self.resnets[0](hidden_states, temb)
         for attn, resnet in zip(self.attentions, self.resnets[1:]):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 if attn is not None:
                     hidden_states = attn(hidden_states, temb=temb)
-                hidden_states = self._gradient_checkpointing_func(resnet, hidden_states, temb)
+                hidden_states = self._gradient_checkpointing_func(
+                    resnet, hidden_states, temb
+                )
             else:
                 if attn is not None:
                     hidden_states = attn(hidden_states, temb=temb)
@@ -388,7 +415,11 @@ def get_down_block(
         )
         attention_head_dim = num_attention_heads
 
-    down_block_type = down_block_type[7:] if down_block_type.startswith("UNetRes") else down_block_type
+    down_block_type = (
+        down_block_type[7:]
+        if down_block_type.startswith("UNetRes")
+        else down_block_type
+    )
     if down_block_type == "DownEncoderBlock2D":
         return DownEncoderBlock2D(
             num_layers=num_layers,
@@ -403,6 +434,7 @@ def get_down_block(
             resnet_time_scale_shift=resnet_time_scale_shift,
         )
     raise ValueError(f"{down_block_type} does not exist.")
+
 
 def get_up_block(
     up_block_type: str,
@@ -439,7 +471,9 @@ def get_up_block(
         )
         attention_head_dim = num_attention_heads
 
-    up_block_type = up_block_type[7:] if up_block_type.startswith("UNetRes") else up_block_type
+    up_block_type = (
+        up_block_type[7:] if up_block_type.startswith("UNetRes") else up_block_type
+    )
     if up_block_type == "UpDecoderBlock2D":
         return UpDecoderBlock2D(
             num_layers=num_layers,

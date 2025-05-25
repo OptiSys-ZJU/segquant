@@ -7,6 +7,7 @@ from backend.torch.utils import is_scipy_available
 from types import SimpleNamespace
 import inspect
 
+
 class FlowMatchEulerDiscreteScheduler:
     """
     Euler scheduler.
@@ -52,8 +53,9 @@ class FlowMatchEulerDiscreteScheduler:
     def from_config(cls, config_path):
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-            obj = cls(num_train_timesteps=config['num_train_timesteps'],
-                        shift=config['shift'])
+            obj = cls(
+                num_train_timesteps=config["num_train_timesteps"], shift=config["shift"]
+            )
             return obj
 
     def __init__(
@@ -72,24 +74,38 @@ class FlowMatchEulerDiscreteScheduler:
         use_beta_sigmas: Optional[bool] = False,
         time_shift_type: str = "exponential",
     ):
-        
+
         self.config = SimpleNamespace()
         init_params = inspect.signature(self.__init__).parameters.keys()
         for key, value in locals().items():
             if key in init_params:
                 setattr(self.config, key, value)
 
-
         if self.config.use_beta_sigmas and not is_scipy_available():
-            raise ImportError("Make sure to install scipy if you want to use beta sigmas.")
-        if sum([self.config.use_beta_sigmas, self.config.use_exponential_sigmas, self.config.use_karras_sigmas]) > 1:
+            raise ImportError(
+                "Make sure to install scipy if you want to use beta sigmas."
+            )
+        if (
+            sum(
+                [
+                    self.config.use_beta_sigmas,
+                    self.config.use_exponential_sigmas,
+                    self.config.use_karras_sigmas,
+                ]
+            )
+            > 1
+        ):
             raise ValueError(
                 "Only one of `config.use_beta_sigmas`, `config.use_exponential_sigmas`, `config.use_karras_sigmas` can be used."
             )
         if time_shift_type not in {"exponential", "linear"}:
-            raise ValueError("`time_shift_type` must either be 'exponential' or 'linear'.")
+            raise ValueError(
+                "`time_shift_type` must either be 'exponential' or 'linear'."
+            )
 
-        timesteps = np.linspace(1, num_train_timesteps, num_train_timesteps, dtype=np.float32)[::-1].copy()
+        timesteps = np.linspace(
+            1, num_train_timesteps, num_train_timesteps, dtype=np.float32
+        )[::-1].copy()
         timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32)
 
         sigmas = timesteps / num_train_timesteps
@@ -175,7 +191,9 @@ class FlowMatchEulerDiscreteScheduler:
 
         # self.begin_index is None when scheduler is used for training, or pipeline does not implement set_begin_index
         if self.begin_index is None:
-            step_indices = [self.index_for_timestep(t, schedule_timesteps) for t in timestep]
+            step_indices = [
+                self.index_for_timestep(t, schedule_timesteps) for t in timestep
+            ]
         elif self.step_index is not None:
             # add_noise is called after first denoising step (for inpainting)
             step_indices = [self.step_index] * timestep.shape[0]
@@ -248,7 +266,9 @@ class FlowMatchEulerDiscreteScheduler:
                 automatically.
         """
         if self.config.use_dynamic_shifting and mu is None:
-            raise ValueError("`mu` must be passed when `use_dynamic_shifting` is set to be `True`")
+            raise ValueError(
+                "`mu` must be passed when `use_dynamic_shifting` is set to be `True`"
+            )
 
         if sigmas is not None and timesteps is not None:
             if len(sigmas) != len(timesteps):
@@ -275,7 +295,9 @@ class FlowMatchEulerDiscreteScheduler:
         if sigmas is None:
             if timesteps is None:
                 timesteps = np.linspace(
-                    self._sigma_to_t(self.sigma_max), self._sigma_to_t(self.sigma_min), num_inference_steps
+                    self._sigma_to_t(self.sigma_max),
+                    self._sigma_to_t(self.sigma_min),
+                    num_inference_steps,
                 )
             sigmas = timesteps / self.config.num_train_timesteps
         else:
@@ -295,18 +317,26 @@ class FlowMatchEulerDiscreteScheduler:
 
         # 4. If required, convert sigmas to one of karras, exponential, or beta sigma schedules
         if self.config.use_karras_sigmas:
-            sigmas = self._convert_to_karras(in_sigmas=sigmas, num_inference_steps=num_inference_steps)
+            sigmas = self._convert_to_karras(
+                in_sigmas=sigmas, num_inference_steps=num_inference_steps
+            )
         elif self.config.use_exponential_sigmas:
-            sigmas = self._convert_to_exponential(in_sigmas=sigmas, num_inference_steps=num_inference_steps)
+            sigmas = self._convert_to_exponential(
+                in_sigmas=sigmas, num_inference_steps=num_inference_steps
+            )
         elif self.config.use_beta_sigmas:
-            sigmas = self._convert_to_beta(in_sigmas=sigmas, num_inference_steps=num_inference_steps)
+            sigmas = self._convert_to_beta(
+                in_sigmas=sigmas, num_inference_steps=num_inference_steps
+            )
 
         # 5. Convert sigmas and timesteps to tensors and move to specified device
         sigmas = torch.from_numpy(sigmas).to(dtype=torch.float32, device=device)
         if not is_timesteps_provided:
             timesteps = sigmas * self.config.num_train_timesteps
         else:
-            timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32, device=device)
+            timesteps = torch.from_numpy(timesteps).to(
+                dtype=torch.float32, device=device
+            )
 
         # 6. Append the terminal sigma value.
         #    If a model requires inverted sigma schedule for denoising but timesteps without inversion, the
@@ -418,7 +448,9 @@ class FlowMatchEulerDiscreteScheduler:
         return (prev_sample,)
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler._convert_to_karras
-    def _convert_to_karras(self, in_sigmas: torch.Tensor, num_inference_steps) -> torch.Tensor:
+    def _convert_to_karras(
+        self, in_sigmas: torch.Tensor, num_inference_steps
+    ) -> torch.Tensor:
         """Constructs the noise schedule of Karras et al. (2022)."""
 
         # Hack to make sure that other schedulers which copy this function don't break
@@ -444,7 +476,9 @@ class FlowMatchEulerDiscreteScheduler:
         return sigmas
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler._convert_to_exponential
-    def _convert_to_exponential(self, in_sigmas: torch.Tensor, num_inference_steps: int) -> torch.Tensor:
+    def _convert_to_exponential(
+        self, in_sigmas: torch.Tensor, num_inference_steps: int
+    ) -> torch.Tensor:
         """Constructs an exponential noise schedule."""
 
         # Hack to make sure that other schedulers which copy this function don't break
@@ -462,12 +496,18 @@ class FlowMatchEulerDiscreteScheduler:
         sigma_min = sigma_min if sigma_min is not None else in_sigmas[-1].item()
         sigma_max = sigma_max if sigma_max is not None else in_sigmas[0].item()
 
-        sigmas = np.exp(np.linspace(math.log(sigma_max), math.log(sigma_min), num_inference_steps))
+        sigmas = np.exp(
+            np.linspace(math.log(sigma_max), math.log(sigma_min), num_inference_steps)
+        )
         return sigmas
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler._convert_to_beta
     def _convert_to_beta(
-        self, in_sigmas: torch.Tensor, num_inference_steps: int, alpha: float = 0.6, beta: float = 0.6
+        self,
+        in_sigmas: torch.Tensor,
+        num_inference_steps: int,
+        alpha: float = 0.6,
+        beta: float = 0.6,
     ) -> torch.Tensor:
         """From "Beta Sampling is All You Need" [arXiv:2407.12173] (Lee et. al, 2024)"""
 

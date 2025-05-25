@@ -12,6 +12,7 @@ from PIL import Image, ImageFilter, ImageOps
 from backend.torch.utils.deprecation_utils import deprecate
 from backend.torch.utils import PipelineImageInput, PIL_INTERPOLATION
 
+
 def is_valid_image(image) -> bool:
     r"""
     Checks if the input is a valid image.
@@ -28,7 +29,11 @@ def is_valid_image(image) -> bool:
         `bool`:
             `True` if the input is a valid image, `False` otherwise.
     """
-    return isinstance(image, PIL.Image.Image) or isinstance(image, (np.ndarray, torch.Tensor)) and image.ndim in (2, 3)
+    return (
+        isinstance(image, PIL.Image.Image)
+        or isinstance(image, (np.ndarray, torch.Tensor))
+        and image.ndim in (2, 3)
+    )
 
 
 def is_valid_image_imagelist(images):
@@ -57,6 +62,7 @@ def is_valid_image_imagelist(images):
     elif isinstance(images, list):
         return all(is_valid_image(image) for image in images)
     return False
+
 
 class VaeImageProcessor:
     """
@@ -124,14 +130,18 @@ class VaeImageProcessor:
         images = (images * 255).round().astype("uint8")
         if images.shape[-1] == 1:
             # special case for grayscale (single channel) images
-            pil_images = [Image.fromarray(image.squeeze(), mode="L") for image in images]
+            pil_images = [
+                Image.fromarray(image.squeeze(), mode="L") for image in images
+            ]
         else:
             pil_images = [Image.fromarray(image) for image in images]
 
         return pil_images
 
     @staticmethod
-    def pil_to_numpy(images: Union[List[PIL.Image.Image], PIL.Image.Image]) -> np.ndarray:
+    def pil_to_numpy(
+        images: Union[List[PIL.Image.Image], PIL.Image.Image]
+    ) -> np.ndarray:
         r"""
         Convert a PIL image or a list of PIL images to NumPy arrays.
 
@@ -186,7 +196,9 @@ class VaeImageProcessor:
         return images
 
     @staticmethod
-    def normalize(images: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.Tensor]:
+    def normalize(
+        images: Union[np.ndarray, torch.Tensor]
+    ) -> Union[np.ndarray, torch.Tensor]:
         r"""
         Normalize an image array to [-1,1].
 
@@ -201,7 +213,9 @@ class VaeImageProcessor:
         return 2.0 * images - 1.0
 
     @staticmethod
-    def denormalize(images: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.Tensor]:
+    def denormalize(
+        images: Union[np.ndarray, torch.Tensor]
+    ) -> Union[np.ndarray, torch.Tensor]:
         r"""
         Denormalize an image array to [0,1].
 
@@ -357,10 +371,7 @@ class VaeImageProcessor:
         return x1, y1, x2, y2
 
     def _resize_and_fill(
-        self,
-        image: PIL.Image.Image,
-        width: int,
-        height: int,
+        self, image: PIL.Image.Image, width: int, height: int,
     ) -> PIL.Image.Image:
         r"""
         Resize the image to fit within the specified width and height, maintaining the aspect ratio, and then center
@@ -392,27 +403,36 @@ class VaeImageProcessor:
         if ratio < src_ratio:
             fill_height = height // 2 - src_h // 2
             if fill_height > 0:
-                res.paste(resized.resize((width, fill_height), box=(0, 0, width, 0)), box=(0, 0))
                 res.paste(
-                    resized.resize((width, fill_height), box=(0, resized.height, width, resized.height)),
+                    resized.resize((width, fill_height), box=(0, 0, width, 0)),
+                    box=(0, 0),
+                )
+                res.paste(
+                    resized.resize(
+                        (width, fill_height),
+                        box=(0, resized.height, width, resized.height),
+                    ),
                     box=(0, fill_height + src_h),
                 )
         elif ratio > src_ratio:
             fill_width = width // 2 - src_w // 2
             if fill_width > 0:
-                res.paste(resized.resize((fill_width, height), box=(0, 0, 0, height)), box=(0, 0))
                 res.paste(
-                    resized.resize((fill_width, height), box=(resized.width, 0, resized.width, height)),
+                    resized.resize((fill_width, height), box=(0, 0, 0, height)),
+                    box=(0, 0),
+                )
+                res.paste(
+                    resized.resize(
+                        (fill_width, height),
+                        box=(resized.width, 0, resized.width, height),
+                    ),
                     box=(fill_width + src_w, 0),
                 )
 
         return res
 
     def _resize_and_crop(
-        self,
-        image: PIL.Image.Image,
-        width: int,
-        height: int,
+        self, image: PIL.Image.Image, width: int, height: int,
     ) -> PIL.Image.Image:
         r"""
         Resize the image to fit within the specified width and height, maintaining the aspect ratio, and then center
@@ -472,10 +492,14 @@ class VaeImageProcessor:
                 The resized image.
         """
         if resize_mode != "default" and not isinstance(image, PIL.Image.Image):
-            raise ValueError(f"Only PIL image input is supported for resize_mode {resize_mode}")
+            raise ValueError(
+                f"Only PIL image input is supported for resize_mode {resize_mode}"
+            )
         if isinstance(image, PIL.Image.Image):
             if resize_mode == "default":
-                image = image.resize((width, height), resample=PIL_INTERPOLATION[self.config.resample])
+                image = image.resize(
+                    (width, height), resample=PIL_INTERPOLATION[self.config.resample]
+                )
             elif resize_mode == "fill":
                 image = self._resize_and_fill(image, width, height)
             elif resize_mode == "crop":
@@ -484,16 +508,10 @@ class VaeImageProcessor:
                 raise ValueError(f"resize_mode {resize_mode} is not supported")
 
         elif isinstance(image, torch.Tensor):
-            image = torch.nn.functional.interpolate(
-                image,
-                size=(height, width),
-            )
+            image = torch.nn.functional.interpolate(image, size=(height, width),)
         elif isinstance(image, np.ndarray):
             image = self.numpy_to_pt(image)
-            image = torch.nn.functional.interpolate(
-                image,
-                size=(height, width),
-            )
+            image = torch.nn.functional.interpolate(image, size=(height, width),)
             image = self.pt_to_numpy(image)
         return image
 
@@ -531,7 +549,10 @@ class VaeImageProcessor:
             return self.denormalize(images) if self.config.do_normalize else images
 
         return torch.stack(
-            [self.denormalize(images[i]) if do_denormalize[i] else images[i] for i in range(images.shape[0])]
+            [
+                self.denormalize(images[i]) if do_denormalize[i] else images[i]
+                for i in range(images.shape[0])
+            ]
         )
 
     def get_default_height_width(
@@ -619,7 +640,11 @@ class VaeImageProcessor:
         supported_formats = (PIL.Image.Image, np.ndarray, torch.Tensor)
 
         # Expand the missing dimension for 3-dimensional pytorch tensor or numpy array that represents grayscale image
-        if self.config.do_convert_grayscale and isinstance(image, (torch.Tensor, np.ndarray)) and image.ndim == 3:
+        if (
+            self.config.do_convert_grayscale
+            and isinstance(image, (torch.Tensor, np.ndarray))
+            and image.ndim == 3
+        ):
             if isinstance(image, torch.Tensor):
                 # if image is a pytorch tensor could have 2 possible shapes:
                 #    1. batch x height x width: we should insert the channel dimension at position 1
@@ -636,14 +661,22 @@ class VaeImageProcessor:
                 else:
                     image = np.expand_dims(image, axis=-1)
 
-        if isinstance(image, list) and isinstance(image[0], np.ndarray) and image[0].ndim == 4:
+        if (
+            isinstance(image, list)
+            and isinstance(image[0], np.ndarray)
+            and image[0].ndim == 4
+        ):
             warnings.warn(
                 "Passing `image` as a list of 4d np.ndarray is deprecated."
                 "Please concatenate the list along the batch dimension and pass it as a single 4d np.ndarray",
                 FutureWarning,
             )
             image = np.concatenate(image, axis=0)
-        if isinstance(image, list) and isinstance(image[0], torch.Tensor) and image[0].ndim == 4:
+        if (
+            isinstance(image, list)
+            and isinstance(image[0], torch.Tensor)
+            and image[0].ndim == 4
+        ):
             warnings.warn(
                 "Passing `image` as a list of 4d torch.Tensor is deprecated."
                 "Please concatenate the list along the batch dimension and pass it as a single 4d torch.Tensor",
@@ -663,7 +696,10 @@ class VaeImageProcessor:
                 image = [i.crop(crops_coords) for i in image]
             if self.config.do_resize:
                 height, width = self.get_default_height_width(image[0], height, width)
-                image = [self.resize(i, height, width, resize_mode=resize_mode) for i in image]
+                image = [
+                    self.resize(i, height, width, resize_mode=resize_mode)
+                    for i in image
+                ]
             if self.config.do_convert_rgb:
                 image = [self.convert_to_rgb(i) for i in image]
             elif self.config.do_convert_grayscale:
@@ -672,7 +708,11 @@ class VaeImageProcessor:
             image = self.numpy_to_pt(image)  # to pt
 
         elif isinstance(image[0], np.ndarray):
-            image = np.concatenate(image, axis=0) if image[0].ndim == 4 else np.stack(image, axis=0)
+            image = (
+                np.concatenate(image, axis=0)
+                if image[0].ndim == 4
+                else np.stack(image, axis=0)
+            )
 
             image = self.numpy_to_pt(image)
 
@@ -681,7 +721,11 @@ class VaeImageProcessor:
                 image = self.resize(image, height, width)
 
         elif isinstance(image[0], torch.Tensor):
-            image = torch.cat(image, axis=0) if image[0].ndim == 4 else torch.stack(image, axis=0)
+            image = (
+                torch.cat(image, axis=0)
+                if image[0].ndim == 4
+                else torch.stack(image, axis=0)
+            )
 
             if self.config.do_convert_grayscale and image.ndim == 3:
                 image = image.unsqueeze(1)
@@ -743,7 +787,12 @@ class VaeImageProcessor:
                 f"the output_type {output_type} is outdated and has been set to `np`. Please make sure to set it to one of these instead: "
                 "`pil`, `np`, `pt`, `latent`"
             )
-            deprecate("Unsupported output_type", "1.0.0", deprecation_message, standard_warn=False)
+            deprecate(
+                "Unsupported output_type",
+                "1.0.0",
+                deprecation_message,
+                standard_warn=False,
+            )
             output_type = "np"
 
         if output_type == "latent":
@@ -790,7 +839,10 @@ class VaeImageProcessor:
         width, height = init_image.width, init_image.height
 
         init_image_masked = PIL.Image.new("RGBa", (width, height))
-        init_image_masked.paste(init_image.convert("RGBA").convert("RGBa"), mask=ImageOps.invert(mask.convert("L")))
+        init_image_masked.paste(
+            init_image.convert("RGBA").convert("RGBa"),
+            mask=ImageOps.invert(mask.convert("L")),
+        )
 
         init_image_masked = init_image_masked.convert("RGBA")
 

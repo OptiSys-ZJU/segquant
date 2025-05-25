@@ -4,11 +4,9 @@ from typing import Optional
 
 _loaded_extensions = {}
 
+
 def load_extension(
-    name: str,
-    sources: list,
-    verbose: bool = False,
-    required: bool = False
+    name: str, sources: list, verbose: bool = False, required: bool = False
 ):
     if name in _loaded_extensions:
         if verbose:
@@ -20,11 +18,7 @@ def load_extension(
             print(f"[INFO] Attempting to load extension: {name}")
             print(f"[INFO] Sources: {sources}")
 
-        extension = load(
-            name=name,
-            sources=sources,
-            verbose=verbose
-        )
+        extension = load(name=name, sources=sources, verbose=verbose)
 
         if verbose:
             print(f"[INFO] Successfully loaded extension: {name}")
@@ -41,13 +35,14 @@ def load_extension(
         else:
             return None
 
+
 def load_fake_quant_fp8_ext(verbose=False, required=False):
     return load_extension(
         name="segquant_fake_quant_fp8",
         sources=[
             "segquant/src/fake_quant/quantizer_fp8.cpp",
-            "segquant/src/fake_quant/quantizer_fp8.cu"
+            "segquant/src/fake_quant/quantizer_fp8.cu",
         ],
         verbose=verbose,
-        required=required
+        required=required,
     )

@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from segquant.utils.extension import load_fake_quant_fp8_ext
 import torch
 
+
 class BaseQuantizer(ABC):
     @abstractmethod
     def quantize(self, x):
@@ -9,6 +10,7 @@ class BaseQuantizer(ABC):
 
     def calibrate(self, x):
         pass
+
 
 class QuantizerRegistry:
     _registry = {}
@@ -18,6 +20,7 @@ class QuantizerRegistry:
         def wrapper(quantizer_cls):
             cls._registry[name] = quantizer_cls
             return quantizer_cls
+
         return wrapper
 
     @classmethod
@@ -31,6 +34,7 @@ class QuantizerRegistry:
             raise ValueError(f"Quantizer '{name}' not found in registry.")
         return quantizer_cls(**kwargs)
 
+
 @QuantizerRegistry.register("int8")
 class IntQuantizer(BaseQuantizer):
     def __init__(self, num_bits=8, symmetric=True, axis=None, dual_scale=False):
@@ -39,7 +43,7 @@ class IntQuantizer(BaseQuantizer):
         self.axis = axis
         self.dual_scale = dual_scale
 
-        self.qmin = -2 ** (num_bits - 1)
+        self.qmin = -(2 ** (num_bits - 1))
         self.qmax = 2 ** (num_bits - 1) - 1
 
         # init
@@ -68,12 +72,24 @@ class IntQuantizer(BaseQuantizer):
                     self.neg_amax = max(self.neg_amax or 0.0, neg_max)
                     self.pos_amax = max(self.pos_amax or 0.0, pos_max)
 
-                    self.neg_scale = self.qmin / (-self.neg_amax) if self.neg_amax > epsilon else 1.0
-                    self.pos_scale = self.qmax / self.pos_amax if self.pos_amax > epsilon else 1.0
+                    self.neg_scale = (
+                        self.qmin / (-self.neg_amax) if self.neg_amax > epsilon else 1.0
+                    )
+                    self.pos_scale = (
+                        self.qmax / self.pos_amax if self.pos_amax > epsilon else 1.0
+                    )
                     self.zero_point = 0
                 else:
-                    neg_max = neg_x.amax(dim=self.axis, keepdim=False) if neg_x.numel() > 0 else torch.zeros(x.size(self.axis), device=x.device)
-                    pos_max = pos_x.amax(dim=self.axis, keepdim=False) if pos_x.numel() > 0 else torch.zeros(x.size(self.axis), device=x.device)
+                    neg_max = (
+                        neg_x.amax(dim=self.axis, keepdim=False)
+                        if neg_x.numel() > 0
+                        else torch.zeros(x.size(self.axis), device=x.device)
+                    )
+                    pos_max = (
+                        pos_x.amax(dim=self.axis, keepdim=False)
+                        if pos_x.numel() > 0
+                        else torch.zeros(x.size(self.axis), device=x.device)
+                    )
 
                     if self.neg_amax is None:
                         self.neg_amax = neg_max
@@ -94,7 +110,11 @@ class IntQuantizer(BaseQuantizer):
                     self.zero_point = 0
                 else:
                     max_val = x.abs().amax(dim=self.axis, keepdim=False)
-                    self.amax = torch.maximum(self.amax, max_val) if self.amax is not None else max_val
+                    self.amax = (
+                        torch.maximum(self.amax, max_val)
+                        if self.amax is not None
+                        else max_val
+                    )
                     self.scale = self.qmax / self.amax.clamp(min=epsilon)
                     self.zero_point = 0
         else:
@@ -102,18 +122,32 @@ class IntQuantizer(BaseQuantizer):
             if self.axis is None:
                 min_val = x.min().item()
                 max_val = x.max().item()
-                self.amin = min(self.amin if self.amin is not None else min_val, min_val)
-                self.amax = max(self.amax if self.amax is not None else max_val, max_val)
+                self.amin = min(
+                    self.amin if self.amin is not None else min_val, min_val
+                )
+                self.amax = max(
+                    self.amax if self.amax is not None else max_val, max_val
+                )
                 self.scale = (self.amax - self.amin) / (self.qmax - self.qmin)
                 self.zero_point = int(round(self.qmin - self.amin / self.scale))
             else:
                 min_val = x.amin(dim=self.axis, keepdim=False)
                 max_val = x.amax(dim=self.axis, keepdim=False)
-                self.amin = torch.minimum(self.amin, min_val) if self.amin is not None else min_val
-                self.amax = torch.maximum(self.amax, max_val) if self.amax is not None else max_val
+                self.amin = (
+                    torch.minimum(self.amin, min_val)
+                    if self.amin is not None
+                    else min_val
+                )
+                self.amax = (
+                    torch.maximum(self.amax, max_val)
+                    if self.amax is not None
+                    else max_val
+                )
                 self.scale = (self.amax - self.amin) / (self.qmax - self.qmin)
-                self.zero_point = (self.qmin - self.amin / self.scale).round().to(torch.int)
-    
+                self.zero_point = (
+                    (self.qmin - self.amin / self.scale).round().to(torch.int)
+                )
+
     def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
         if self.symmetric and self.dual_scale:
             if self.axis is not None:
@@ -128,13 +162,9 @@ class IntQuantizer(BaseQuantizer):
             x_quant = torch.where(
                 x >= 0,
                 torch.clamp(torch.round(x * pos_scale), 0, self.qmax),
-                torch.clamp(torch.round(x * neg_scale), self.qmin, 0)
+                torch.clamp(torch.round(x * neg_scale), self.qmin, 0),
             )
-            x_dequant = torch.where(
-                x >= 0,
-                x_quant / pos_scale,
-                x_quant / neg_scale
-            )
+            x_dequant = torch.where(x >= 0, x_quant / pos_scale, x_quant / neg_scale)
             return x_dequant.to(x.dtype)
 
         else:
@@ -142,12 +172,16 @@ class IntQuantizer(BaseQuantizer):
                 shape = [1] * x.dim()
                 shape[self.axis] = -1
                 scale = self.scale.view(shape)
-                zero_point = self.zero_point.view(shape) if isinstance(self.zero_point, torch.Tensor) else self.zero_point
+                zero_point = (
+                    self.zero_point.view(shape)
+                    if isinstance(self.zero_point, torch.Tensor)
+                    else self.zero_point
+                )
                 scale = scale.T
             else:
                 scale = self.scale
                 zero_point = self.zero_point
-            
+
             x_int = torch.round(x * scale) + zero_point
             x_int = torch.clamp(x_int, self.qmin, self.qmax)
             x_dequant = (x_int - zero_point) / scale
@@ -159,22 +193,31 @@ class IntQuantizer(BaseQuantizer):
     def __repr__(self):
         if self.symmetric:
             if self.dual_scale:
-                return (f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, dual_scale=True, axis={self.axis}, "
-                        f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})")
+                return (
+                    f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, dual_scale=True, axis={self.axis}, "
+                    f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})"
+                )
             else:
                 if isinstance(self.amax, torch.Tensor):
                     amin = self.amax.min().item()
                     amax = self.amax.max().item()
                     amax_str = f"[{amin:.4f}, {amax:.4f}]"
                     # amax_str = ', '.join([f"{x:.4f}" for x in self.amax.tolist()])
-                    return (f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, dual_scale=False, axis={self.axis}, "
-                            f"amax=[{amax_str}])")
+                    return (
+                        f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, dual_scale=False, axis={self.axis}, "
+                        f"amax=[{amax_str}])"
+                    )
                 else:
-                    return (f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, dual_scale=False, axis={self.axis}, "
-                            f"amax={self.amax:.4f})")
+                    return (
+                        f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, dual_scale=False, axis={self.axis}, "
+                        f"amax={self.amax:.4f})"
+                    )
         else:
-            return (f"IntQuantizer(num_bits={self.num_bits}, symmetric=False, axis={self.axis}, "
-                    f"amin={self.amin:.4f}, amax={self.amax:.4f}, zero_point={self.zero_point:.4f})")
+            return (
+                f"IntQuantizer(num_bits={self.num_bits}, symmetric=False, axis={self.axis}, "
+                f"amin={self.amin:.4f}, amax={self.amax:.4f}, zero_point={self.zero_point:.4f})"
+            )
+
 
 @QuantizerRegistry.register("fpe4m3")
 class FloatQuantizer:
@@ -216,11 +259,23 @@ class FloatQuantizer:
                 self.neg_amax = max(self.neg_amax or 0.0, neg_max)
                 self.pos_amax = max(self.pos_amax or 0.0, pos_max)
 
-                self.neg_scale = self.fp_max / self.neg_amax if self.neg_amax > epsilon else 1.0
-                self.pos_scale = self.fp_max / self.pos_amax if self.pos_amax > epsilon else 1.0
+                self.neg_scale = (
+                    self.fp_max / self.neg_amax if self.neg_amax > epsilon else 1.0
+                )
+                self.pos_scale = (
+                    self.fp_max / self.pos_amax if self.pos_amax > epsilon else 1.0
+                )
             else:
-                neg_max = neg_x.amax(dim=self.axis, keepdim=False) if neg_x.numel() > 0 else torch.zeros(x.size(self.axis), device=x.device)
-                pos_max = pos_x.amax(dim=self.axis, keepdim=False) if pos_x.numel() > 0 else torch.zeros(x.size(self.axis), device=x.device)
+                neg_max = (
+                    neg_x.amax(dim=self.axis, keepdim=False)
+                    if neg_x.numel() > 0
+                    else torch.zeros(x.size(self.axis), device=x.device)
+                )
+                pos_max = (
+                    pos_x.amax(dim=self.axis, keepdim=False)
+                    if pos_x.numel() > 0
+                    else torch.zeros(x.size(self.axis), device=x.device)
+                )
 
                 if self.neg_amax is None:
                     self.neg_amax = neg_max
@@ -239,29 +294,41 @@ class FloatQuantizer:
                 self.zero_point = 0
             else:
                 max_val = x.abs().amax(dim=self.axis, keepdim=False)
-                self.amax = torch.maximum(self.amax, max_val) if self.amax is not None else max_val
+                self.amax = (
+                    torch.maximum(self.amax, max_val)
+                    if self.amax is not None
+                    else max_val
+                )
                 self.scale = self.fp_max / self.amax.clamp(min=epsilon)
                 self.zero_point = 0
 
-    def _simulate_e4m3(self, x: torch.Tensor, fp_min: float, fp_max: float, mant_bits: int):
+    def _simulate_e4m3(
+        self, x: torch.Tensor, fp_min: float, fp_max: float, mant_bits: int
+    ):
         ext = load_fake_quant_fp8_ext(required=False)
         if ext is not None:
             return ext.fake_e4m3fy(x)
         else:
             return self._simulate_fp(x, fp_min, fp_max, mant_bits)
 
-    def _simulate_fp(self, x: torch.Tensor, fp_min: float, fp_max: float, mant_bits: int) -> torch.Tensor:
+    def _simulate_fp(
+        self, x: torch.Tensor, fp_min: float, fp_max: float, mant_bits: int
+    ) -> torch.Tensor:
         x_abs = x.abs()
         sign = x.sign()
 
         x_clamped = torch.clamp(x_abs, min=0.0, max=fp_max)
 
         # todo: Subnormal
-        x_clamped = torch.where(x_clamped < fp_min, torch.zeros_like(x_clamped), x_clamped)
+        x_clamped = torch.where(
+            x_clamped < fp_min, torch.zeros_like(x_clamped), x_clamped
+        )
 
         exponent = torch.floor(torch.log2(torch.clamp(x_clamped, min=fp_min)))
         mantissa = x_clamped / (2 ** exponent)
-        mantissa_rounded = torch.round((mantissa - 1) * (2 ** mant_bits)) / (2 ** mant_bits)
+        mantissa_rounded = torch.round((mantissa - 1) * (2 ** mant_bits)) / (
+            2 ** mant_bits
+        )
         simulated = (1 + mantissa_rounded) * (2 ** exponent)
 
         return simulated * sign
@@ -279,22 +346,18 @@ class FloatQuantizer:
                 pos_scale = self.pos_scale
                 neg_scale = self.neg_scale
 
-            x_scaled = torch.where(
-                x >= 0,
-                x * pos_scale,
-                x * neg_scale
-            )
+            x_scaled = torch.where(x >= 0, x * pos_scale, x * neg_scale)
 
             if self.exp_bits == 4 and self.mant_bits == 3:
-                x_quant = self._simulate_e4m3(x_scaled, self.fp_min, self.fp_max, self.mant_bits)
+                x_quant = self._simulate_e4m3(
+                    x_scaled, self.fp_min, self.fp_max, self.mant_bits
+                )
             else:
-                x_quant = self._simulate_fp(x_scaled, self.fp_min, self.fp_max, self.mant_bits)
+                x_quant = self._simulate_fp(
+                    x_scaled, self.fp_min, self.fp_max, self.mant_bits
+                )
 
-            x_dequant = torch.where(
-                x >= 0,
-                x_quant / pos_scale,
-                x_quant / neg_scale
-            )
+            x_dequant = torch.where(x >= 0, x_quant / pos_scale, x_quant / neg_scale)
         else:
             if self.axis is not None:
                 shape = [1] * x.dim()
@@ -305,9 +368,13 @@ class FloatQuantizer:
 
             x_scaled = x * scale
             if self.exp_bits == 4 and self.mant_bits == 3:
-                x_quant = self._simulate_e4m3(x_scaled, self.fp_min, self.fp_max, self.mant_bits)
+                x_quant = self._simulate_e4m3(
+                    x_scaled, self.fp_min, self.fp_max, self.mant_bits
+                )
             else:
-                x_quant = self._simulate_fp(x_scaled, self.fp_min, self.fp_max, self.mant_bits)
+                x_quant = self._simulate_fp(
+                    x_scaled, self.fp_min, self.fp_max, self.mant_bits
+                )
             x_dequant = x_quant / scale
 
         x_dequant[zero_mask] = 0.0
@@ -318,23 +385,31 @@ class FloatQuantizer:
 
     def __repr__(self):
         if self.dual_scale:
-            return (f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, axis={self.axis}, dual_scale=True, "
-                    f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})")
+            return (
+                f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, axis={self.axis}, dual_scale=True, "
+                f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})"
+            )
         else:
-            return (f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, axis={self.axis}, dual_scale=False, "
-                    f"amax={self.amax:.4f})")
+            return (
+                f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, axis={self.axis}, dual_scale=False, "
+                f"amax={self.amax:.4f})"
+            )
+
 
 @QuantizerRegistry.register("int16")
 def int6_factory():
     return IntQuantizer(num_bits=16)
 
+
 @QuantizerRegistry.register("int6")
 def int6_factory():
     return IntQuantizer(num_bits=6)
 
+
 @QuantizerRegistry.register("int4")
 def int4_factory():
     return IntQuantizer(num_bits=4)
+
 
 @QuantizerRegistry.register("fpe5m2")
 def fp8e5m2_factory():

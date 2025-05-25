@@ -5,22 +5,23 @@ import torch.nn as nn
 
 model_map = {
     "dit": lambda x: x.transformer,
-    "controlnet": lambda x:x.controlnet,
+    "controlnet": lambda x: x.controlnet,
 }
+
 
 class BaseSampler:
     hook_map = {
-        'input': '_hook_input',
-        'output': '_hook_output',
-        'inoutput': '_hook_inoutput',
+        "input": "_hook_input",
+        "output": "_hook_output",
+        "inoutput": "_hook_inoutput",
     }
 
     def __init__(self):
         self.cur_t = 0
-        self.device = 'cpu'
+        self.device = "cpu"
         self.sample_line = []
         self.sample_timesteps = []
-    
+
     def _process_tensor_tree(self, obj):
         if isinstance(obj, torch.Tensor):
             return obj.detach().clone().to(self.device)
@@ -30,7 +31,7 @@ class BaseSampler:
             return {k: self._process_tensor_tree(v) for k, v in obj.items()}
         else:
             return obj
-    
+
     def _valid_timestep(self):
         return self.cur_t in self.sample_timesteps
 
@@ -39,59 +40,93 @@ class BaseSampler:
 
     def _hook_input(self, model, args, kwargs, output):
         if self._valid_timestep():
-            self.sample_line.append({
-                "timestep": self.cur_t,
-                "input": {
-                    'args': self._process_tensor_tree(args),
-                    'kwargs': self._process_tensor_tree(kwargs),
-                },
-            })
-        
+            self.sample_line.append(
+                {
+                    "timestep": self.cur_t,
+                    "input": {
+                        "args": self._process_tensor_tree(args),
+                        "kwargs": self._process_tensor_tree(kwargs),
+                    },
+                }
+            )
+
         self._trigger_timestep()
-    
+
     def _hook_output(self, model, args, kwargs, output):
         if self._valid_timestep():
-            self.sample_line.append({
-                "timestep": self.cur_t,
-                "output": self._process_tensor_tree(output[0]),
-            })
-        
+            self.sample_line.append(
+                {
+                    "timestep": self.cur_t,
+                    "output": self._process_tensor_tree(output[0]),
+                }
+            )
+
         self._trigger_timestep()
-    
+
     def _hook_inoutput(self, model, args, kwargs, output):
         if self._valid_timestep():
-            self.sample_line.append({
-                "timestep": self.cur_t,
-                "input": {
-                    'args': self._process_tensor_tree(args),
-                    'kwargs': self._process_tensor_tree(kwargs),
-                },
-                "output": self._process_tensor_tree(output[0]),
-            })
-        
+            self.sample_line.append(
+                {
+                    "timestep": self.cur_t,
+                    "input": {
+                        "args": self._process_tensor_tree(args),
+                        "kwargs": self._process_tensor_tree(kwargs),
+                    },
+                    "output": self._process_tensor_tree(output[0]),
+                }
+            )
+
         self._trigger_timestep()
 
     def _sample_timesteps(self, max_timestep, nums) -> List[int]:
         pass
 
-    def _step_sample(self, model: nn.Module, target_layer: nn.Module, input, num_inference_steps: int, timestep_per_sample: int, sample_mode: str, **kwargs):
+    def _step_sample(
+        self,
+        model: nn.Module,
+        target_layer: nn.Module,
+        input,
+        num_inference_steps: int,
+        timestep_per_sample: int,
+        sample_mode: str,
+        **kwargs
+    ):
         self.cur_t = num_inference_steps - 1
-        self.sample_timesteps = self._sample_timesteps(num_inference_steps - 1, timestep_per_sample)
+        self.sample_timesteps = self._sample_timesteps(
+            num_inference_steps - 1, timestep_per_sample
+        )
 
         hook_function = getattr(self, self.hook_map[sample_mode])
         handle = target_layer.register_forward_hook(hook_function, with_kwargs=True)
         with torch.no_grad():
             prompt, _, control = input
-            model(prompt=prompt, control_image=control, num_inference_steps=num_inference_steps, **kwargs)
+            model(
+                prompt=prompt,
+                control_image=control,
+                num_inference_steps=num_inference_steps,
+                **kwargs
+            )
         handle.remove()
         self.cur_t = 0
 
         yield self.sample_line
         self.sample_line = []
 
-    def sample(self, model: nn.Module, data_loader: torch.utils.data.DataLoader, target_layer=None, sample_layer: Literal['dit', 'controlnet'] = 'dit', max_timestep=30, sample_size=1, timestep_per_sample=5, sample_mode: Literal['input', 'output', 'inoutput'] = 'input', device='cpu', **kwargs):
+    def sample(
+        self,
+        model: nn.Module,
+        data_loader: torch.utils.data.DataLoader,
+        target_layer=None,
+        sample_layer: Literal["dit", "controlnet"] = "dit",
+        max_timestep=30,
+        sample_size=1,
+        timestep_per_sample=5,
+        sample_mode: Literal["input", "output", "inoutput"] = "input",
+        device="cpu",
+        **kwargs
+    ):
         self.device = device
-        
+
         if target_layer is None:
             target_layer = model_map[sample_layer](model)
         sample_count = 0
@@ -100,22 +135,31 @@ class BaseSampler:
             for i in range(batch_size):
                 if sample_count >= sample_size:
                     return
-                yield from self._step_sample(model, target_layer, batch[i], max_timestep, timestep_per_sample, sample_mode, **kwargs)
+                yield from self._step_sample(
+                    model,
+                    target_layer,
+                    batch[i],
+                    max_timestep,
+                    timestep_per_sample,
+                    sample_mode,
+                    **kwargs
+                )
                 sample_count += 1
 
 
 class UniformSampler(BaseSampler):
     def __init__(self):
         super().__init__()
-    
+
     def _sample_timesteps(self, max_timestep, nums) -> List[int]:
         return list(np.linspace(max_timestep, 0, nums, dtype=int))
+
 
 class NormalSampler(BaseSampler):
     def __init__(self, mean):
         super().__init__()
         self.mean = mean
-    
+
     def _sample_timesteps(self, max_timestep: int, nums: int) -> List[int]:
         std = max_timestep / 2
         samples = torch.normal(mean=self.mean, std=std, size=(nums,))
@@ -124,37 +168,48 @@ class NormalSampler(BaseSampler):
         unique_sorted = sorted(set(rounded))
         return unique_sorted
 
+
 DNTCSampler = NormalSampler
 
 Q_DiffusionSampler = UniformSampler
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     from dataset.coco.coco_dataset import COCODataset
-    from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
+    from backend.torch.models.stable_diffusion_3_controlnet import (
+        StableDiffusion3ControlNetModel,
+    )
     from backend.torch.models.flux_controlnet import FluxControlNetModel
     from scipy.stats import skew
     import matplotlib.pyplot as plt
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # model = FluxControlNetModel.from_repo(('../FLUX.1-dev', '../FLUX.1-dev-Controlnet-Canny'), device)
-    model = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), device)
+    model = StableDiffusion3ControlNetModel.from_repo(
+        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), device
+    )
 
-    dataset = COCODataset(path='../dataset/controlnet_datasets/controlnet_canny_dataset', cache_size=16)
+    dataset = COCODataset(
+        path="../dataset/controlnet_datasets/controlnet_canny_dataset", cache_size=16
+    )
 
     sampler = Q_DiffusionSampler()
-    for sample_data in sampler.sample(model, 
-                                      dataset.get_dataloader(), 
-                                      target_layer=model.controlnet.transformer_blocks[0].norm1.linear,
-                                      sample_layer='dit', 
-                                      max_timestep=30, 
-                                      sample_size=1, 
-                                      timestep_per_sample=10, 
-                                      sample_mode='inoutput',
-                                      controlnet_conditioning_scale=0.7,
-                                      guidance_scale=3.5):
-        
-        for d in sample_data:
-            t = d['timestep']
+    for sample_data in sampler.sample(
+        model,
+        dataset.get_dataloader(),
+        target_layer=model.controlnet.transformer_blocks[0].norm1.linear,
+        sample_layer="dit",
+        max_timestep=30,
+        sample_size=1,
+        timestep_per_sample=10,
+        sample_mode="inoutput",
+        controlnet_conditioning_scale=0.7,
+        guidance_scale=3.5,
+    ):
 
-            input = d['input']['args'][0][0]
-            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = d['output'].chunk(6, dim=1)
+        for d in sample_data:
+            t = d["timestep"]
+
+            input = d["input"]["args"][0][0]
+            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = d[
+                "output"
+            ].chunk(6, dim=1)
