@@ -243,8 +243,12 @@ class FloatQuantizer:
                 self.scale = self.fp_max / self.amax.clamp(min=epsilon)
                 self.zero_point = 0
 
-    def _simulate_e4m3(self, x: torch.Tensor):
-        return load_fake_quant_fp8_ext().fake_e4m3fy(x)
+    def _simulate_e4m3(self, x: torch.Tensor, fp_min: float, fp_max: float, mant_bits: int):
+        ext = load_fake_quant_fp8_ext(required=False)
+        if ext is not None:
+            return ext.fake_e4m3fy(x)
+        else:
+            return self._simulate_fp(x, fp_min, fp_max, mant_bits)
 
     def _simulate_fp(self, x: torch.Tensor, fp_min: float, fp_max: float, mant_bits: int) -> torch.Tensor:
         x_abs = x.abs()
@@ -282,7 +286,7 @@ class FloatQuantizer:
             )
 
             if self.exp_bits == 4 and self.mant_bits == 3:
-                x_quant = self._simulate_e4m3(x_scaled)
+                x_quant = self._simulate_e4m3(x_scaled, self.fp_min, self.fp_max, self.mant_bits)
             else:
                 x_quant = self._simulate_fp(x_scaled, self.fp_min, self.fp_max, self.mant_bits)
 
@@ -301,7 +305,7 @@ class FloatQuantizer:
 
             x_scaled = x * scale
             if self.exp_bits == 4 and self.mant_bits == 3:
-                x_quant = self._simulate_e4m3(x_scaled)
+                x_quant = self._simulate_e4m3(x_scaled, self.fp_min, self.fp_max, self.mant_bits)
             else:
                 x_quant = self._simulate_fp(x_scaled, self.fp_min, self.fp_max, self.mant_bits)
             x_dequant = x_quant / scale
