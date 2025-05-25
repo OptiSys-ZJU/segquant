@@ -24,7 +24,7 @@ class TACSolver(BaseSolver):
         quantized = quant.to(torch.float32)
         real = real.to(torch.float32)
 
-        B, C, H, W = real.shape
+        _, C, H, W = real.shape
         N = C * H * W
 
         eps = 1e-7

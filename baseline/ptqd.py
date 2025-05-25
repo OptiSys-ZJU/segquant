@@ -5,7 +5,7 @@ from segquant.solver.solver import BaseSolver
 
 
 class PTQDSolver(BaseSolver):
-    def __init__(self, config):
+    def __init__(self, _config):
         super().__init__()
 
         self.record = None
@@ -16,15 +16,12 @@ class PTQDSolver(BaseSolver):
         real = real.to(torch.float32)
         error = quantized - real
 
-        B, C, H, W = real.shape
-        N = C * H * W
-
         mean_q = torch.mean(error, dim=(0, 2, 3))
 
         flatten_data = real.flatten()
         flatten_error = error.flatten()
 
-        slope, intercept, r_value, p_value, std_err = stats.linregress(
+        slope, _intercept, _r_value, _p_value, _std_err = stats.linregress(
             flatten_data, flatten_error
         )
         slope = torch.tensor(slope).to(quantized.device)
@@ -57,7 +54,7 @@ class PTQDSolver(BaseSolver):
         pre_type = quant.dtype
         B, C, H, W = quant.shape
 
-        k, bias, std_q = self.solution
+        k, bias, _std_q = self.solution
 
         quant = quant.to(dtype=torch.float32)
         k = k.to(device=device, dtype=torch.float32)

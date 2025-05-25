@@ -1,10 +1,17 @@
-import torch
-from benchmark import trace_pic
-import torch.nn as nn
-from segquant.config import DType, Optimum
 import os
-
+import torch
+from torch import nn
+from benchmark import trace_pic
+from segquant.config import DType, Optimum, SegPattern
 from segquant.torch.affiner import process_affiner
+from segquant.sample.sampler import QDiffusionSampler, model_map
+from segquant.torch.calibrate_set import generate_calibrate_set
+from segquant.torch.quantization import quantize
+from dataset.coco.coco_dataset import COCODataset
+from backend.torch.models.stable_diffusion_3_controlnet import (
+    StableDiffusion3ControlNetModel,
+)
+from backend.torch.utils import randn_tensor
 
 calib_args = {
     "max_timestep": 50,
@@ -31,24 +38,20 @@ quant_config = {
 
 
 def quant_model(
-    model_real: nn.Module, quant_layer: str, config, dataset, calib_args: dict
+    model_real: nn.Module, quant_layer: str, config, dataset, calibargs: dict
 ) -> nn.Module:
-    from segquant.sample.sampler import QDiffusionSampler, model_map
-    from segquant.torch.calibrate_set import generate_calibrate_set
-    from segquant.torch.quantization import quantize
-
     calib_key = (
-        f"maxT{calib_args['max_timestep']}_"
-        f"sz{calib_args['sample_size']}_"
-        f"tps{calib_args['timestep_per_sample']}_"
-        f"cond{calib_args['controlnet_conditioning_scale']}_"
-        f"gs{calib_args['guidance_scale']}_"
-        f"{'shuffle' if calib_args['shuffle'] else 'noshuffle'}"
+        f"maxT{calibargs['max_timestep']}_"
+        f"sz{calibargs['sample_size']}_"
+        f"tps{calibargs['timestep_per_sample']}_"
+        f"cond{calibargs['controlnet_conditioning_scale']}_"
+        f"gs{calibargs['guidance_scale']}_"
+        f"{'shuffle' if calibargs['shuffle'] else 'noshuffle'}"
     )
     calibset_path = os.path.join("calibset_record", quant_layer, calib_key)
     sampler = QDiffusionSampler()
     sample_dataloader = dataset.get_dataloader(
-        batch_size=1, shuffle=calib_args["shuffle"]
+        batch_size=1, shuffle=calibargs["shuffle"]
     )
     calibset = generate_calibrate_set(
         model_real,
@@ -56,11 +59,11 @@ def quant_model(
         sample_dataloader,
         quant_layer,
         calibset_path,
-        max_timestep=calib_args["max_timestep"],
-        sample_size=calib_args["sample_size"],
-        timestep_per_sample=calib_args["timestep_per_sample"],
-        controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
-        guidance_scale=calib_args["guidance_scale"],
+        max_timestep=calibargs["max_timestep"],
+        sample_size=calibargs["sample_size"],
+        timestep_per_sample=calibargs["timestep_per_sample"],
+        controlnet_conditioning_scale=calibargs["controlnet_conditioning_scale"],
+        guidance_scale=calibargs["guidance_scale"],
     )
 
     calib_loader = calibset.get_dataloader(batch_size=1)
@@ -76,12 +79,6 @@ def quant_model(
 
 
 def run_seg_module():
-    from dataset.coco.coco_dataset import COCODataset
-    from backend.torch.models.stable_diffusion_3_controlnet import (
-        StableDiffusion3ControlNetModel,
-    )
-    from segquant.config import SegPattern
-
     root_dir = "benchmark_record/run_seg_module"
     os.makedirs(root_dir, exist_ok=True)
 
@@ -191,12 +188,6 @@ def run_seg_module():
 
 
 def run_dual_scale_module():
-    from dataset.coco.coco_dataset import COCODataset
-    from backend.torch.models.stable_diffusion_3_controlnet import (
-        StableDiffusion3ControlNetModel,
-    )
-    from segquant.config import SegPattern
-
     root_dir = "benchmark_record/run_dual_scale_module"
     os.makedirs(root_dir, exist_ok=True)
 
@@ -292,11 +283,6 @@ def run_dual_scale_module():
 
 
 def run_affiner_module():
-    from backend.torch.utils import randn_tensor
-    from dataset.coco.coco_dataset import COCODataset
-    from backend.torch.models.stable_diffusion_3_controlnet import (
-        StableDiffusion3ControlNetModel,
-    )
 
     latents = randn_tensor(
         (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
@@ -346,13 +332,11 @@ def run_affiner_module():
     )
 
     #############################################
-    from benchmark import trace_pic
-
     max_num = 1
     model_quant = model_quant.to("cuda")
     trace_pic(
         model_quant,
-        f"affine_pics/blockaffine",
+        "affine_pics/blockaffine",
         dataset.get_dataloader(),
         latents,
         steper=affiner,
@@ -362,7 +346,7 @@ def run_affiner_module():
     )
     trace_pic(
         model_quant,
-        f"affine_pics/quant",
+        "affine_pics/quant",
         dataset.get_dataloader(),
         latents,
         max_num=max_num,
@@ -373,7 +357,7 @@ def run_affiner_module():
     model_real = model_real.to("cuda")
     trace_pic(
         model_real,
-        f"affine_pics/real",
+        "affine_pics/real",
         dataset.get_dataloader(),
         latents,
         max_num=max_num,
