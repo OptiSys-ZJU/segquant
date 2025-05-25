@@ -1,12 +1,50 @@
-import torch
-import torch.nn as nn
-import torch.fx as fx
+"""
+This module provides functionality for detecting specific patterns
+in PyTorch models' computation graphs.
+It includes the `SegQuantPatternDetector` class,
+which uses symbolic tracing to analyze models and identify
+patterns such as linear layers followed by
+chunking, splitting, concatenation, stacking, and activation functions.
+
+Classes:
+    SegQuantPatternDetector: A class for detecting computation graph patterns in PyTorch models.
+
+Usage:
+    The `SegQuantPatternDetector` class can be instantiated with a PyTorch model and example inputs.
+    It supports searching for various patterns in the computation graph, such as:
+        - Linear layers followed by chunking or splitting.
+        - Concatenation or stacking of tensors followed by linear layers.
+        - Activation functions followed by linear layers.
+
+Example:
+    ```
+    model=MyModel()
+    detector = SegQuantPatternDetector(
+        model,
+        example_inputs=(torch.randn(2, 10),),
+        search_patterns_lst=[
+            "linear_to_chunk",
+            "linear_to_split",
+            "concat_to_linear",
+            "stack_to_linear",
+            "activation_to_linear",
+        ],
+    )
+    # Find all patterns in the model
+    results = detector.find_all_patterns()
+    print(results)
+    ```
+"""
 import inspect
+import warnings
 from collections import namedtuple
+import torch
+from torch import nn
+from torch import fx
 from torch.fx.passes.shape_prop import ShapeProp
 from torch._subclasses.fake_tensor import FakeTensorMode
 import torch.nn.functional as F
-import warnings
+
 
 LinearInfo = namedtuple("LinearInfo", ["found", "name", "in_features", "out_features"])
 ChunkInfo = namedtuple("ChunkInfo", ["found", "chunks"])
@@ -17,21 +55,27 @@ ActInfo = namedtuple("ActInfo", ["found", "name"])
 
 
 class SegQuantPatternDetector:
+    """
+    A class to detect specific patterns in a PyTorch model's computation graph.
+    This class uses symbolic tracing to analyze the model and identify patterns
+    such as linear layers followed by chunking, splitting, concatenation, stacking,
+    and activation functions.
+    """
     def __init__(
         self,
         model: nn.Module,
         example_inputs: tuple,
-        search_patterns=None,
-        acts=[nn.SiLU, nn.GELU],
-        act_funcs=[F.silu, F.gelu],
+        search_patterns_lst=None,
+        acts=None,
+        act_funcs=None,
     ):
         self.model = model
-        self.acts = acts
-        self.act_funcs = act_funcs
+        self.acts = acts if acts is not None else [nn.SiLU, nn.GELU]
+        self.act_funcs = act_funcs if act_funcs is not None else [F.silu, F.gelu]
 
         sig = inspect.signature(self.model.forward)
         param_names = list(sig.parameters.keys())
-        concrete = {name: val for name, val in zip(param_names, example_inputs)}
+        concrete = dict(zip(param_names, example_inputs))
         expand_keys = [
             "block_controlnet_hidden_states",
             "controlnet_block_samples",
@@ -51,15 +95,16 @@ class SegQuantPatternDetector:
             self.traced = fx.symbolic_trace(model, concrete_args=concrete)
             self.module_map = dict(self.traced.named_modules())
 
-            if search_patterns is None:
+            if search_patterns_lst is None:
                 self.search_patterns = [
                     "linear_to_chunk",
                     "concat_to_linear",
                     "linear_to_split",
                     "stack_to_linear",
+                    "activation_to_linear",
                 ]
             else:
-                self.search_patterns = search_patterns
+                self.search_patterns = search_patterns_lst
 
             fake_mode = FakeTensorMode(allow_non_fake_inputs=True)
             ShapeProp(self.traced, fake_mode).propagate(*example_inputs)
@@ -83,7 +128,8 @@ class SegQuantPatternDetector:
                 )
         return LinearInfo(False, None, None, None)
 
-    def _is_chunk(self, node):
+    @staticmethod
+    def _is_chunk(node):
         if (node.op == "call_method" and node.target == "chunk") or (
             node.op == "call_function" and node.target is torch.chunk
         ):
@@ -93,7 +139,8 @@ class SegQuantPatternDetector:
                 return ChunkInfo(True, chunks)
         return ChunkInfo(False, None)
 
-    def _is_split(self, node):
+    @staticmethod
+    def _is_split(node):
         if (node.op == "call_method" and node.target == "split") or (
             node.op == "call_function" and node.target is torch.split
         ):
@@ -105,7 +152,8 @@ class SegQuantPatternDetector:
                 return SplitInfo(True, split_size_or_sections)
         return SplitInfo(False, None)
 
-    def _is_concat(self, node):
+    @staticmethod
+    def _is_concat(node):
         if node.op == "call_function" and node.target is torch.cat:
             tensor_list = node.args[0]
             dim = node.kwargs.get("dim", 0)
@@ -118,7 +166,8 @@ class SegQuantPatternDetector:
                     return ConcatInfo(True, chunksizes)
         return ConcatInfo(False, None)
 
-    def _is_stack(self, node):
+    @staticmethod
+    def _is_stack(node):
         # only work for 1d-shape tensors to stack with dim = 1
         if node.op == "call_function" and node.target is torch.stack:
             tensor_list = node.args[0]
@@ -247,6 +296,12 @@ class SegQuantPatternDetector:
         return None
 
     def find_all_patterns(self):
+        """
+        Find all patterns in the traced graph based on the specified search patterns.
+        Returns:
+            dict: A dictionary where keys are pattern names
+            and values are lists of matched patterns.
+        """
         patterns = {pattern: [] for pattern in self.search_patterns}
 
         for node in self.traced.graph.nodes:
@@ -321,7 +376,7 @@ if __name__ == "__main__":
     detector = SegQuantPatternDetector(
         MyModel2(dim=10),
         example_inputs=(torch.randn(2, 10),),
-        search_patterns=search_patterns,
+        search_patterns_lst=search_patterns,
     )
     results = detector.find_all_patterns()
 

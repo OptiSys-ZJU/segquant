@@ -1,13 +1,23 @@
+"""
+This module provides functionality for creating and managing calibration datasets
+used in model quantization. It includes a base dataset class and a function to
+generate calibration datasets from a model and sampler.
+"""
+
 import io
 import json
 import os
-import zstandard as zstd
+from collections import OrderedDict
 import torch
 from torch.utils.data import Dataset
-from collections import OrderedDict
+import zstandard as zstd
 
 
 class BaseCalibSet(Dataset):
+    """Base class for calibration dataset.
+    This class can handle both in-memory data and data stored in files.
+    It supports chunked loading of data from files, with optional compression.
+    """
     def __init__(self, data=None, folder=None, compress=False, max_cache_size=1):
         super().__init__()
         self.compress = compress
@@ -31,7 +41,7 @@ class BaseCalibSet(Dataset):
 
             meta_path = os.path.join(folder, "meta.json")
             if os.path.exists(meta_path):
-                with open(meta_path, "r") as f:
+                with open(meta_path, "r", encoding="utf-8") as f:
                     meta = json.load(f)
                 self.chunk_lens = meta["chunk_lens"]
             else:
@@ -77,9 +87,11 @@ class BaseCalibSet(Dataset):
 
     @staticmethod
     def collate_fn(batch):
+        """Collate function for batching data."""
         return [b for b in batch]
 
     def get_dataloader(self, batch_size=1, shuffle=False, **kwargs):
+        """Get a DataLoader for this dataset."""
         return torch.utils.data.DataLoader(
             self,
             batch_size=batch_size,
@@ -99,6 +111,23 @@ def generate_calibrate_set(
     compress=True,
     **kwargs,
 ):
+    """Generate a calibration dataset for the given model and sampler.
+    This function samples data from the model using the provided sampler and
+    saves the sampled data to a specified directory in chunks.
+    If `dump_path` is not provided, the data will be returned in memory.
+    Args:
+        model: The model to sample from.
+        sampler: The sampler to use for sampling data.
+        sample_dataloader: DataLoader for sampling data.
+        calib_layer: The layer to sample from.
+        dump_path (str, optional): Path to save the calibration dataset. 
+            If None, data will be returned in memory.
+        chunk_size (int, optional): Number of samples per chunk. Default is 400.
+        compress (bool, optional): Whether to compress the saved chunks. Default is True.
+        **kwargs: Additional arguments for the sampler.
+    Returns:
+        BaseCalibSet: An instance of BaseCalibSet containing the sampled data.
+    """
     dump = True
     if dump_path is None:
         print("[Warning] Disable dump, memory may be overflow")
@@ -169,7 +198,7 @@ def generate_calibrate_set(
 
     if dump:
         meta_path = os.path.join(dump_path, "meta.json")
-        with open(meta_path, "w") as f:
+        with open(meta_path, "w", encoding="utf-8") as f:
             json.dump({"chunk_lens": chunk_lens, "compress": compress}, f)
         print(
             f"[INFO] Calibration data saved to {dump_path}, total {total_samples} samples."
@@ -178,41 +207,3 @@ def generate_calibrate_set(
     else:
         print(f"[INFO] Calibration data completed, total {total_samples} samples.")
         return BaseCalibSet(data=buffer)
-
-
-if __name__ == "__main__":
-    from dataset.coco.coco_dataset import COCODataset
-    from segquant.sample.sampler import Q_DiffusionSampler
-    from backend.torch.models.stable_diffusion_3_controlnet import (
-        StableDiffusion3ControlNetModel,
-    )
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = StableDiffusion3ControlNetModel.from_repo(
-        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), device
-    )
-    dataset = COCODataset(
-        path="../dataset/controlnet_datasets/controlnet_canny_dataset", cache_size=16
-    )
-    sampler = Q_DiffusionSampler()
-    sample_dataloader = dataset.get_dataloader()
-
-    calibset = generate_calibrate_set(
-        model,
-        sampler,
-        sample_dataloader,
-        sample_layer="dit",
-        max_timestep=30,
-        sample_size=1,
-        timestep_per_sample=1,
-        controlnet_conditioning_scale=0.7,
-        guidance_scale=3.5,
-    )
-
-    calib_loader = calibset.get_dataloader(batch_size=1, shuffle=True)
-    for i, batch in enumerate(calib_loader):
-        print("i", i)
-        print(len(batch[0]))
-        print(batch)
-
-    calibset.dump("ca.pt")

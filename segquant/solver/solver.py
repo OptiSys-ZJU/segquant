@@ -5,6 +5,22 @@ import torch.nn.functional as F
 def affine_with_percentile_scale(
     quant, K, b=None, percentile=100, greater=True, scale=1, verbose=False
 ):
+    """
+    Apply affine transformation to the quantized tensor based on a percentile threshold.
+
+    Args:
+        quant (torch.Tensor): The quantized tensor to be transformed.
+        K (torch.Tensor): The scaling factor tensor.
+        b (torch.Tensor, optional): The bias tensor.
+            If None, a zero tensor of the same shape as K is used.
+        percentile (float): The percentile threshold for selecting elements to transform.
+        greater (bool): If True, elements greater than the threshold are transformed;
+            if False, elements less than the threshold are transformed.
+        scale (float): The scale factor for blending the original and affine transformed tensors.
+        verbose (bool): If True, prints the threshold and replaced ratio.
+    Returns:
+        torch.Tensor: The transformed tensor after applying the affine transformation.
+    """
     with torch.no_grad():
         device = quant.device
         pre_type = quant.dtype
@@ -33,12 +49,25 @@ def affine_with_percentile_scale(
 
         if verbose:
             print(
-                f"[Affine Replace] Threshold={threshold.item():.4f}, Replace Ratio={replaced_ratio*100:.2f}%"
+                f"[Affine Replace] Threshold={threshold.item():.4f}, "
+                f"Replace Ratio={replaced_ratio*100:.2f}%"
             )
         return out.to(dtype=pre_type)
 
 
 def affine_with_threshold(quant, K, b=None, threshold=1, verbose=False):
+    """
+    Apply affine transformation to the quantized tensor based on a threshold.
+    Args:
+        quant (torch.Tensor): The quantized tensor to be transformed.
+        K (torch.Tensor): The scaling factor tensor.
+        b (torch.Tensor, optional): The bias tensor.
+            If None, a zero tensor of the same shape as K is used.
+        threshold (float): The threshold for selecting elements to transform.
+        verbose (bool): If True, prints the threshold and replaced ratio.
+    Returns:
+        torch.Tensor: The transformed tensor after applying the affine transformation.
+    """
     with torch.no_grad():
         device = quant.device
         pre_type = quant.dtype
@@ -54,23 +83,43 @@ def affine_with_threshold(quant, K, b=None, threshold=1, verbose=False):
         replaced_ratio = mask.sum().item() / mask.numel()
         if verbose:
             print(
-                f"[Affine Replace] Threshold={threshold.item():.4f}, Replace Ratio={replaced_ratio*100:.2f}%"
+                f"[Affine Replace] Threshold={threshold.item():.4f}, "
+                f"Replace Ratio={replaced_ratio*100:.2f}%"
             )
         return out.to(dtype=pre_type)
 
 
 class BaseSolver:
+    """
+    Base class for solvers.
+    This class defines the interface for learning and solving quantization problems.
+    """
     def __init__(self):
         pass
 
     def learn(self, real, quant):
-        pass
+        """
+        Learn the parameters from the real and quantized tensors.
+        Args:
+            real (torch.Tensor): The real tensor.
+            quant (torch.Tensor): The quantized tensor.
+        """
 
     def solve(self, quant):
-        pass
+        """
+        Solve the quantization problem using the learned parameters.
+        Args:
+            quant (torch.Tensor): The quantized tensor to be transformed.
+        Returns:
+            torch.Tensor: The transformed tensor after applying the learned parameters.
+        """
 
 
 class MSERelSolver(BaseSolver):
+    """
+    A solver that uses the Mean Squared Error (MSE) and relative method for quantization.
+    This solver learns the parameters K and b based on the quantized and real tensors.
+    """
     def __init__(self, config):
         super().__init__()
 
@@ -209,7 +258,7 @@ class MSERelSolver(BaseSolver):
         return (K_out, b_out)
 
     def _sample_interpolate(self, quantized, real):
-        B, C, H, W = quantized.shape
+        _, _, H, W = quantized.shape
         assert (
             H % self.blocksize == 0 and W % self.blocksize == 0
         ), "H and W must be divisible by block size"
@@ -235,6 +284,8 @@ class MSERelSolver(BaseSolver):
             K_out, b_out = self._sample_block(quant, real)
         elif self.sample_mode == "interpolate":
             K_out, b_out = self._sample_interpolate(quant, real)
+        else:
+            raise ValueError(f"Unknown sample mode: {self.sample_mode}")
 
         K_mean = K_out.mean(dim=0, keepdim=True)
         b_mean = b_out.mean(dim=0, keepdim=True)

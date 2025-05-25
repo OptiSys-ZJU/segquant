@@ -52,6 +52,9 @@ class BaseSegmentLinear(nn.Module):
     def __repr__(self):
         return f"BaseSegmentLinear(in={self.in_features}, out={self.out_features}, seg_mode={self.seg_mode}, chunks={self.chunks}, chunksize={self.chunksizes})"
 
+    def forward(self, _x):
+        raise NotImplementedError("Forward method should be implemented in subclasses")
+
     @staticmethod
     def split_linear(linear, chunksizes, dim=1):
         weight = linear.weight
@@ -150,14 +153,12 @@ class DefaultSegmentLinear(BaseSegmentLinear):
                     f"  weight_quantizer=({weight_q})\n"
                     f")"
                 )
-            else:
-                return (
-                    base + f"  input_quantizers=[\n    {input_q}\n  ],\n"
-                    f"  weight_quantizers=[\n    {weight_q}\n  ]\n"
-                    f")"
-                )
-        else:
-            return base + f"  calib=False\n)"
+            return (
+                base + f"  input_quantizers=[\n    {input_q}\n  ],\n"
+                f"  weight_quantizers=[\n    {weight_q}\n  ]\n"
+                f")"
+            )
+        return base + f"  calib=False\n)"
 
     def calibrate(self, input_data):
         if self.seg_mode == "input":
@@ -214,7 +215,7 @@ class DefaultSegmentLinear(BaseSegmentLinear):
                 else self.splitter.concat_output(output_chunks)
             )
 
-        elif self.seg_mode == "input":
+        if self.seg_mode == "input":
             quantized_output_chunks = []
             for quantized_input_chunk, layer in zip(quantized_input, layers):
                 quantized_output_chunk = layer(quantized_input_chunk)
@@ -304,14 +305,12 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
                     f"  weight_quantizer=({weight_q})\n"
                     f")"
                 )
-            else:
-                return (
-                    base + f"  input_quantizers=[\n    {input_q}\n  ],\n"
-                    f"  weight_quantizers=[\n    {weight_q}\n  ]\n"
-                    f")"
-                )
-        else:
-            return base + f"  calib=False\n)"
+            return (
+                base + f"  input_quantizers=[\n    {input_q}\n  ],\n"
+                f"  weight_quantizers=[\n    {weight_q}\n  ]\n"
+                f")"
+            )
+        return base + f"  calib=False\n)"
 
     def trace(self, input_data):
         if self.seg_mode == "input":
@@ -383,7 +382,7 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
 
             return c + bias if bias is not None else c
 
-        elif self.seg_mode == "input":
+        if self.seg_mode == "input":
             quantized_output_chunks = []
             for quantized_input_chunk, layer in zip(quantized_input, layers):
                 quantized_output_chunk = layer(quantized_input_chunk)

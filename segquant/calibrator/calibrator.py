@@ -1,9 +1,36 @@
-from segquant.quantizers.quantizer import BaseQuantizer
+"""
+This module provides classes for calibrating and quantizing tensors for neural network models.
+The module includes:
+- `BaseCalibrator`: A base class for implementing custom calibration strategies.
+- `DefaultCalibrator`: A default implementation for calibrating input and weight quantizers.
+- `SmoothQuantCalibrator`: An advanced calibrator that uses a smoothing factor.
+These classes are designed to work with quantizers to 
+optimize the representation of input and weight tensors
+for efficient computation, particularly in scenarios like model compression 
+or deployment on resource-constrained devices.
+Classes:
+    - BaseCalibrator: Abstract base class for calibrators.
+    - DefaultCalibrator: Implements a default calibration strategy.
+    - SmoothQuantCalibrator: Implements a smoothing-based calibration strategy.
+Dependencies:
+    - torch: PyTorch library for tensor operations.
+    - BaseQuantizer: A base class for quantizers, imported from `segquant.quantizers.quantizer`.
+Usage:
+    These calibrators are intended to be used in conjunction with 
+    quantizers to process input and weight tensors for neural network models. 
+    They provide methods for tracing, calibrating, and quantizing tensors.
+"""
+
 from typing import List
 import torch
-
+from segquant.quantizers.quantizer import BaseQuantizer
 
 class BaseCalibrator:
+    """
+    Base class for calibrators.
+    This class is used to calibrate quantizers for input and weight tensors.
+    It is designed to be subclassed for specific calibration strategies.
+    """
     def __init__(
         self,
         input_quantizers: List[BaseQuantizer],
@@ -14,6 +41,15 @@ class BaseCalibrator:
 
 
 class DefaultCalibrator(BaseCalibrator):
+    """
+    Default calibrator that calibrates input and weight quantizers.
+    It supports two modes: input_t-segment and weight-segment.
+    In input_t-segment mode, it calibrates input quantizers with input tensors
+    and weight quantizers with weight tensors.
+    In weight-segment mode, it calibrates input quantizers with weight tensors
+    and weight quantizers with input tensors.
+    The class assumes that either input_quantizers or weight_quantizers has only one quantizer.
+    """
     def __init__(
         self,
         input_quantizers: List[BaseQuantizer],
@@ -39,24 +75,24 @@ class DefaultCalibrator(BaseCalibrator):
 
         return quantized_weights
 
-    def _calibrate_input(self, input: List[torch.Tensor]):
-        assert len(input) == len(self.input_quantizers)
+    def _calibrate_input(self, input_t: List[torch.Tensor]):
+        assert len(input_t) == len(self.input_quantizers)
 
-        for q, input_chunk in zip(self.input_quantizers, input):
+        for q, input_chunk in zip(self.input_quantizers, input_t):
             q.calibrate(input_chunk)
 
-    def calibrate(self, input: List[torch.Tensor], weight: List[torch.Tensor]):
+    def calibrate(self, input_t: List[torch.Tensor], weight: List[torch.Tensor]):
         """
-        input segment: 
-            input: [tensor(batch_size * split_size1), tensor(batch_size * split_size2), ...]
+        input_t segment: 
+            input_t: [tensor(batch_size * split_size1), tensor(batch_size * split_size2), ...]
             weight: [tensor(out_features, in_features)]
         
         weight segment:
-            input: [tensor(batch_size * in_features)]
+            input_t: [tensor(batch_size * in_features)]
             weight: [tensor(out_features, split_size1), tensor(out_features, split_size2), ...]
         """
 
-        self._calibrate_input(input)
+        self._calibrate_input(input_t)
         if self.quantized_weight is None:
             self.quantized_weight = self._calibrate_weight(weight)
 
@@ -64,7 +100,7 @@ class DefaultCalibrator(BaseCalibrator):
         """
         Returns:
             Union[list[Tensor]], list[Tensor]]]: 
-                when input-segment:
+                when input_t-segment:
                     - [Tensor(out_features, in_features)]
 
                 when weight-segment:
@@ -72,28 +108,35 @@ class DefaultCalibrator(BaseCalibrator):
         """
         return self.quantized_weight
 
-    def quantize(self, input: List[torch.Tensor]):
+    def quantize(self, input_t: List[torch.Tensor]):
         """
         Args:
-            input(when input-segment): [tensor(batch_size * split_size1), tensor(batch_size * split_size2), ...]
-            input(when weight-segment): [tensor(batch_size * in_features)]
+            input_t(when input_t-segment): [tensor(batch_size * split_size1), 
+                                            tensor(batch_size * split_size2), ...]
+            input_t(when weight-segment): [tensor(batch_size * in_features)]
         
         Returns:
             Union[Tuple[list[Tensor], list[Tensor]], Tuple[list[Tensor], list[Tensor]]]: 
-                when input-segment:
+                when input_t-segment:
                     - [Tensor(batch_size * split_size) * n]
 
                 when weight-segment:
                     - [Tensor(batch_size * in_features)]
         """
         quantized_input = []
-        for q, input_chunk in zip(self.input_quantizers, input):
+        for q, input_chunk in zip(self.input_quantizers, input_t):
             quantized_input.append(q.quantize(input_chunk))
 
         return quantized_input
 
 
 class SmoothQuantCalibrator(BaseCalibrator):
+    """
+    SmoothQuant calibrator that calibrates input and weight quantizers
+    using a smoothing factor (alpha) and supports dual scaling (dual_s).
+
+    Pipeline: Trace -> Smooth -> Calibrate -> Quantize
+    """
     def __init__(self, input_quantizers, weight_quantizers, alpha=0.5, dual_s=False):
         super().__init__(input_quantizers, weight_quantizers)
 
@@ -111,7 +154,7 @@ class SmoothQuantCalibrator(BaseCalibrator):
 
     def _trace_max_w(self, weight: List[torch.Tensor]):
         if len(self.max_w) < self.chunks:
-            for i, weight_chunk in enumerate(weight):
+            for _, weight_chunk in enumerate(weight):
                 weight_chunk_max = (
                     weight_chunk.abs()
                     .amax(dim=tuple(range(weight_chunk.ndim - 1)), keepdim=True)
@@ -119,8 +162,8 @@ class SmoothQuantCalibrator(BaseCalibrator):
                 )
                 self.max_w.append(weight_chunk_max)
 
-    def _trace_max_x(self, input: List[torch.Tensor]):
-        for i, input_chunk in enumerate(input):
+    def _trace_max_x(self, input_t: List[torch.Tensor]):
+        for i, input_chunk in enumerate(input_t):
             if self.dual_s:
                 neg_mask = input_chunk < 0
                 pos_mask = input_chunk > 0
@@ -191,20 +234,46 @@ class SmoothQuantCalibrator(BaseCalibrator):
 
         return quantized_weights
 
-    def _calibrate_input(self, input: List[torch.Tensor]):
-        input_broadcast = self._broadcast_list(input)
+    def _calibrate_input(self, input_t: List[torch.Tensor]):
+        input_broadcast = self._broadcast_list(input_t)
         for q, input_chunk, s in zip(self.input_quantizers, input_broadcast, self.s):
             if self.dual_s:
                 assert False
             else:
                 q.calibrate(input_chunk / s)
 
-    def trace(self, input: List[torch.Tensor], weight: List[torch.Tensor]):
-        input_broadcast = self._broadcast_list(input)
+    def trace(self, input_t: List[torch.Tensor], weight: List[torch.Tensor]):
+        """
+        Trace the maximum values of input and weight tensors for calibration.
+        This method computes the maximum values of the input tensors and weight tensors
+        and stores them for later use in the smoothing and quantization process.
+        It assumes that the input tensors are split into chunks and that the weight tensors
+        are also split into chunks.
+        Args:
+            input_t: [tensor(batch_size * split_size1), tensor(batch_size * split_size2), ...]
+            weight: [tensor(out_features, in_features)]
+        """
+        input_broadcast = self._broadcast_list(input_t)
         self._trace_max_x(input_broadcast)
         self._trace_max_w(weight)
 
     def smooth(self):
+        """
+        Smooth the input tensors based on the traced max values.
+
+        This method computes the scaling factors (s) for each input tensor chunk
+        based on the maximum values of the input and weight tensors.
+
+        It uses the formula:
+
+            s = (max_x ** alpha) / (max_w ** (1 - alpha))
+        where max_x is the maximum value of the input tensor chunk and max_w is
+        the maximum value of the corresponding weight tensor chunk.
+
+        If dual_s is True (not implemented now), it computes separate 
+        scaling factors for negative and positive
+        input values.
+        """
         max_x, max_w = self._broadcast_lists(self.max_x, self.max_w)
         for i in range(self.chunks):
             epsilon = 1.0 / (1 << 31)
@@ -223,8 +292,17 @@ class SmoothQuantCalibrator(BaseCalibrator):
                 s = torch.where(s <= epsilon, torch.ones_like(s), s)
                 self.s[i] = torch.clamp(s.to(dtype=torch.float32), min=1e-4, max=1e4)
 
-    def calibrate(self, input: List[torch.Tensor], weight: List[torch.Tensor]):
-        self._calibrate_input(input)
+    def calibrate(self, input_t: List[torch.Tensor], weight: List[torch.Tensor]):
+        """
+        Calibrate the input and weight quantizers using the provided input and weight tensors.
+        This method first traces the maximum values of the input and weight tensors,
+        then smooths the input tensors based on the traced values, and finally calibrates
+        the input and weight quantizers.
+        Args:
+            input_t: [tensor(batch_size * split_size1), tensor(batch_size * split_size2), ...]
+            weight: [tensor(out_features, in_features)]
+        """
+        self._calibrate_input(input_t)
         if self.quantized_weights is None:
             self.quantized_weights = self._calibrate_weight(weight)
 
@@ -236,15 +314,16 @@ class SmoothQuantCalibrator(BaseCalibrator):
         """
         return self.quantized_weights
 
-    def quantize(self, input: List[torch.Tensor]):
+    def quantize(self, input_t: List[torch.Tensor]):
         """
         Args:
-            input(when input-segment): [tensor(batch_size * split_size1), tensor(batch_size * split_size2), ...]
-            input(when weight-segment): [tensor(batch_size * in_features)]
+            input_t(when input_t-segment): [tensor(batch_size * split_size1), 
+                                            tensor(batch_size * split_size2), ...]
+            input_t(when weight-segment): [tensor(batch_size * in_features)]
         
         Returns:
             Union[Tuple[list[Tensor], list[Tensor]], Tuple[list[Tensor], list[Tensor]]]: 
-                when input-segment:
+                when input_t-segment:
                     - [Tensor(batch_size * split_size) * n]
                     - [Tensor(out_features, split_size) * n]
 
@@ -254,7 +333,7 @@ class SmoothQuantCalibrator(BaseCalibrator):
         """
 
         quantized_input = []
-        input_broadcast = self._broadcast_list(input)
+        input_broadcast = self._broadcast_list(input_t)
         for q, input_chunk, s in zip(self.input_quantizers, input_broadcast, self.s):
             if self.dual_s:
                 input_smooth = torch.where(

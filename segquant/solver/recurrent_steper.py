@@ -1,3 +1,10 @@
+"""
+This module implements the RecurrentSteper class, which is designed for blockwise affine solvers.
+It supports recurrent learning, noise prediction, and latent affine transformations for both real
+and quantized models. The class integrates with a finite state machine to manage learning and replay
+steps effectively.
+"""
+
 from collections import deque
 
 import torch
@@ -7,6 +14,23 @@ from segquant.solver.state import Stage, StateMachine, solver_trans
 
 
 class RecurrentSteper(BaseSteper):
+    """Recurrent Steper for Blockwise Affiner.
+    This steper is designed to work with a blockwise affine solver, allowing
+    for learning and replaying steps in a recurrent manner.
+    It supports both real and quantized models, and can handle noise prediction
+    and latent affine transformations.
+    Args:
+        max_timestep (int): Maximum number of timesteps for the solver.
+        sample_size (int): Number of samples to process in each learning step.
+        solver_type (BaseSolver): Type of solver to use for learning.
+        solver_config (dict): Configuration for the solver.
+        latents (torch.Tensor): Initial latents for the model.
+        recurrent (bool): Whether to use recurrent learning.
+        noise_target (str): Target for noise prediction ('all', 'uncond', 'text').
+        enable_latent_affine (bool): Whether to enable latent affine transformations.
+        enable_timesteps (list): List of timesteps to enable learning.
+        device (str): Device to run the model on (e.g., 'cuda:0').
+    """
     def __init__(
         self,
         max_timestep,
@@ -42,13 +66,16 @@ class RecurrentSteper(BaseSteper):
         self.latent_diff = [(None, 0) for _ in range(max_timestep)]
 
         if enable_timesteps is None:
-            self.enable_timesteps = [i for i in range(max_timestep)]
+            self.enable_timesteps = list(range(max_timestep))
         else:
             self.enable_timesteps = enable_timesteps
 
         self.device = device
 
+        self.sample_count = 0
+
     def learning(self, model, data_loader, **kwargs):
+        """Learning step for the model with the provided data loader."""
         model.to(torch.device(self.device))
         self.sample_count = 0
 
@@ -88,10 +115,12 @@ class RecurrentSteper(BaseSteper):
 
     @solver_trans([Stage.INIT, Stage.WAIT_QUANT], Stage.WAIT_REAL)
     def learning_real(self, model_real, data_loader, **kwargs):
+        """Learning step for the real model with the provided data loader."""
         self.learning(model_real, data_loader, **kwargs)
 
     @solver_trans([Stage.WAIT_REAL], Stage.WAIT_QUANT)
     def learning_quant(self, model_quant, data_loader, **kwargs):
+        """Learning step for the quantized model with the provided data loader."""
         self.learning(model_quant, data_loader, **kwargs)
 
     def _replay(self, model, data_loader, **kwargs):
@@ -129,21 +158,25 @@ class RecurrentSteper(BaseSteper):
 
     @solver_trans([Stage.WAIT_QUANT], Stage.WAIT_REAL)
     def replay_real(self, model_real, data_loader, **kwargs):
+        """Replay step for the real model with the provided data loader."""
         self.replay = True
         self._replay(model_real, data_loader, **kwargs)
 
     @solver_trans([Stage.WAIT_REAL], Stage.WAIT_QUANT)
     def replay_quant(self, model_quant, data_loader, **kwargs):
+        """Replay step for the quantized model with the provided data loader."""
         self._replay(model_quant, data_loader, **kwargs)
         self.replay = False
         self.recurrent_index += 1
 
     @solver_trans([Stage.WAIT_QUANT], Stage.FINAL)
     def finish_learning(self):
+        """Finish the learning process."""
         print("[INFO] BlockwiseAffiner: Finish learning")
 
+    @staticmethod
     def _get_noise(
-        self, noise_pred, noise_target, do_classifier_free_guidance, guidance_scale
+        noise_pred, noise_target, do_classifier_free_guidance, guidance_scale
     ):
         if do_classifier_free_guidance:
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
@@ -151,17 +184,15 @@ class RecurrentSteper(BaseSteper):
                 return noise_pred_uncond + guidance_scale * (
                     noise_pred_text - noise_pred_uncond
                 )
-            elif noise_target == "uncond":
+            if noise_target == "uncond":
                 return noise_pred_uncond
-            elif noise_target == "text":
+            if noise_target == "text":
                 return noise_pred_text
-            else:
-                raise ValueError(f"[Error] _get_noise({noise_target})")
-        else:
-            if noise_target == "all":
-                return noise_pred
-            else:
-                raise ValueError(f"[Error] _get_noise({noise_target})")
+            raise ValueError(f"[Error] _get_noise({noise_target})")
+        # if do_classifier_free_guidance is False
+        if noise_target == "all":
+            return noise_pred
+        raise ValueError(f"[Error] _get_noise({noise_target})")
 
     def _reconstruct_noise(
         self, i, noise_pred, noise_target, do_classifier_free_guidance, guidance_scale
@@ -173,25 +204,23 @@ class RecurrentSteper(BaseSteper):
                     noise_pred_text - noise_pred_uncond
                 )
                 return self.solver[i].solve(noise_pred)
-            elif noise_target == "uncond":
+            if noise_target == "uncond":
                 noise_pred_uncond = self.solver[i].solve(noise_pred_uncond)
                 noise_pred = noise_pred_uncond + guidance_scale * (
                     noise_pred_text - noise_pred_uncond
                 )
                 return noise_pred
-            elif noise_target == "text":
+            if noise_target == "text":
                 noise_pred_text = self.solver[i].solve(noise_pred_text)
                 noise_pred = noise_pred_uncond + guidance_scale * (
                     noise_pred_text - noise_pred_uncond
                 )
                 return noise_pred
-            else:
-                raise ValueError(f"[Error] _reconstruct_noise({noise_target})")
-        else:
-            if noise_target == "all":
-                return self.solver[i].solve(noise_pred)
-            else:
-                raise ValueError(f"[Error] _reconstruct_noise({noise_target})")
+            raise ValueError(f"[Error] _reconstruct_noise({noise_target})")
+        # if do_classifier_free_guidance is False
+        if noise_target == "all":
+            return self.solver[i].solve(noise_pred)
+        raise ValueError(f"[Error] _reconstruct_noise({noise_target})")
 
     def step_forward(
         self,
@@ -208,7 +237,8 @@ class RecurrentSteper(BaseSteper):
 
         if self.max_timestep != num_inference_steps:
             print(
-                f"[Warning] BlockwiseAffiner: max_timestep[{self.max_timestep}] != num_inference_steps[{num_inference_steps}]"
+                f"[Warning] BlockwiseAffiner: max_timestep[{self.max_timestep}] != "
+                f"num_inference_steps[{num_inference_steps}]"
             )
 
         recon = False

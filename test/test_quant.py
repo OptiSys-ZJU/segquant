@@ -5,7 +5,7 @@ from segquant.torch.quantization import quantize
 
 def cali(quant_layer):
     from dataset.coco.coco_dataset import COCODataset
-    from segquant.sample.sampler import Q_DiffusionSampler
+    from segquant.sample.sampler import QDiffusionSampler
     from segquant.torch.calibrate_set import generate_calibrate_set
     from backend.torch.models.stable_diffusion_3_controlnet import (
         StableDiffusion3ControlNetModel,
@@ -20,7 +20,7 @@ def cali(quant_layer):
     )
     calibset = generate_calibrate_set(
         model,
-        Q_DiffusionSampler(),
+        QDiffusionSampler(),
         dataset.get_dataloader(batch_size=1),
         quant_layer,
         max_timestep=30,
@@ -34,7 +34,7 @@ def cali(quant_layer):
 
 def sample_noise_output(config, calibset, latents, quant_layer):
     from dataset.coco.coco_dataset import COCODataset
-    from segquant.sample.sampler import Q_DiffusionSampler
+    from segquant.sample.sampler import QDiffusionSampler
     from backend.torch.models.stable_diffusion_3_controlnet import (
         StableDiffusion3ControlNetModel,
     )
@@ -63,7 +63,7 @@ def sample_noise_output(config, calibset, latents, quant_layer):
     dataset = COCODataset(
         path="../dataset/controlnet_datasets/controlnet_canny_dataset", cache_size=16
     )
-    for sample_data in Q_DiffusionSampler().sample(
+    for sample_data in QDiffusionSampler().sample(
         model,
         dataset.get_dataloader(),
         target_layer=model.transformer,
@@ -87,7 +87,7 @@ def sample_noise_output(config, calibset, latents, quant_layer):
 
 def sample_noise_dis(config, calibset, latents, quant_layer):
     from dataset.coco.coco_dataset import COCODataset
-    from segquant.sample.sampler import Q_DiffusionSampler
+    from segquant.sample.sampler import QDiffusionSampler
     from backend.torch.models.stable_diffusion_3_controlnet import (
         StableDiffusion3ControlNetModel,
     )
@@ -116,7 +116,7 @@ def sample_noise_dis(config, calibset, latents, quant_layer):
     dataset = COCODataset(
         path="../dataset/controlnet_datasets/controlnet_canny_dataset", cache_size=16
     )
-    for sample_data in Q_DiffusionSampler().sample(
+    for sample_data in QDiffusionSampler().sample(
         model,
         dataset.get_dataloader(),
         target_layer=model.transformer,

@@ -4,6 +4,8 @@ import torch.nn as nn
 from segquant.config import DType, Optimum
 import os
 
+from segquant.torch.affiner import process_affiner
+
 calib_args = {
     "max_timestep": 50,
     "sample_size": 256,
@@ -31,7 +33,7 @@ quant_config = {
 def quant_model(
     model_real: nn.Module, quant_layer: str, config, dataset, calib_args: dict
 ) -> nn.Module:
-    from segquant.sample.sampler import Q_DiffusionSampler, model_map
+    from segquant.sample.sampler import QDiffusionSampler, model_map
     from segquant.torch.calibrate_set import generate_calibrate_set
     from segquant.torch.quantization import quantize
 
@@ -44,7 +46,7 @@ def quant_model(
         f"{'shuffle' if calib_args['shuffle'] else 'noshuffle'}"
     )
     calibset_path = os.path.join("calibset_record", quant_layer, calib_key)
-    sampler = Q_DiffusionSampler()
+    sampler = QDiffusionSampler()
     sample_dataloader = dataset.get_dataloader(
         batch_size=1, shuffle=calib_args["shuffle"]
     )
@@ -287,6 +289,97 @@ def run_dual_scale_module():
     )
     del model_quant_dual_scale
     print("model_quant_dual_scale completed")
+
+
+def run_affiner_module():
+    from backend.torch.utils import randn_tensor
+    from dataset.coco.coco_dataset import COCODataset
+    from backend.torch.models.stable_diffusion_3_controlnet import (
+        StableDiffusion3ControlNetModel,
+    )
+
+    latents = randn_tensor(
+        (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
+    )
+    dataset = COCODataset(
+        path="../dataset/controlnet_datasets/coco_canny", cache_size=16
+    )
+
+    model_quant = StableDiffusion3ControlNetModel.from_repo(
+        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
+    )
+    model_quant.transformer = torch.load(
+        "benchmark_record/run_seg_module/model/dit/model_quant_seg.pt",
+        weights_only=False,
+    )
+    model_real = StableDiffusion3ControlNetModel.from_repo(
+        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
+    )
+
+    config = {
+        "solver": {
+            "type": "mserel",
+            "blocksize": 8,
+            "alpha": 0.5,
+            "lambda1": 0.1,
+            "lambda2": 0.1,
+            "sample_mode": "interpolate",
+            "percentile": 100,
+            "greater": True,
+            "scale": 1,
+            "verbose": True,
+        },
+        "stepper": {
+            "type": "blockwise",
+            "max_timestep": 30,
+            "sample_size": 1,
+            "recurrent": True,
+            "noise_target": "uncond",
+            "enable_latent_affine": False,
+            "enable_timesteps": None,
+        },
+        "extra_args": {"controlnet_conditioning_scale": 0, "guidance_scale": 7,},
+    }
+
+    affiner = process_affiner(
+        config, dataset, model_real, model_quant, latents=latents, shuffle=False
+    )
+
+    #############################################
+    from benchmark import trace_pic
+
+    max_num = 1
+    model_quant = model_quant.to("cuda")
+    trace_pic(
+        model_quant,
+        f"affine_pics/blockaffine",
+        dataset.get_dataloader(),
+        latents,
+        steper=affiner,
+        max_num=max_num,
+        num_inference_steps=config["stepper"]["max_timestep"],
+        **config["extra_args"],
+    )
+    trace_pic(
+        model_quant,
+        f"affine_pics/quant",
+        dataset.get_dataloader(),
+        latents,
+        max_num=max_num,
+        num_inference_steps=config["stepper"]["max_timestep"],
+        **config["extra_args"],
+    )
+    del model_quant
+    model_real = model_real.to("cuda")
+    trace_pic(
+        model_real,
+        f"affine_pics/real",
+        dataset.get_dataloader(),
+        latents,
+        max_num=max_num,
+        num_inference_steps=config["stepper"]["max_timestep"],
+        **config["extra_args"],
+    )
 
 
 if __name__ == "__main__":

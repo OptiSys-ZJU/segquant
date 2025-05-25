@@ -1,22 +1,46 @@
+"""
+This module defines quantizers for tensor quantization.
+
+It includes base classes and implementations for integer and floating-point quantizers,
+as well as a registry for dynamically registering and retrieving quantizer classes.
+"""
+
 from abc import ABC, abstractmethod
-from segquant.utils.extension import load_fake_quant_fp8_ext
 import torch
+from segquant.utils.extension import load_fake_quant_fp8_ext
 
 
 class BaseQuantizer(ABC):
+    """Base class for quantizers.
+    This class defines the interface for quantizers,
+    including methods for calibration and quantization.
+    Subclasses should implement the `quantize` method.
+    """
     @abstractmethod
     def quantize(self, x):
-        pass
+        """Quantize the input tensor `x`."""
 
     def calibrate(self, x):
-        pass
+        """Calibrate the quantizer using the input tensor `x`.
+        This method can be used to compute scale and zero-point values based on the input data.
+        """
 
 
 class QuantizerRegistry:
+    """Registry for quantizers.
+    This class allows for dynamic registration and retrieval of quantizer classes.
+    Quantizers can be registered with a name and later retrieved or instantiated.
+    """
     _registry = {}
 
     @classmethod
     def register(cls, name):
+        """Decorator to register a quantizer class with a name.
+        Args:
+            name (str): The name to register the quantizer class under.
+        Returns:
+            function: A decorator that registers the quantizer class.
+        """
         def wrapper(quantizer_cls):
             cls._registry[name] = quantizer_cls
             return quantizer_cls
@@ -25,10 +49,25 @@ class QuantizerRegistry:
 
     @classmethod
     def get(cls, name):
+        """Retrieve a quantizer class by name.
+        Args:
+            name (str): The name of the quantizer class to retrieve.
+        Returns:
+            type: The quantizer class registered under the given name, or None if not found.
+        """
         return cls._registry.get(name)
 
     @classmethod
     def create(cls, name, **kwargs):
+        """Create an instance of a quantizer class by name.
+        Args:
+            name (str): The name of the quantizer class to create.
+            **kwargs: Additional keyword arguments to pass to the quantizer class constructor.
+        Returns:
+            BaseQuantizer: An instance of the quantizer class registered under the given name.
+        Raises:
+            ValueError: If the quantizer class with the given name is not found in the registry.
+        """
         quantizer_cls = cls.get(name)
         if quantizer_cls is None:
             raise ValueError(f"Quantizer '{name}' not found in registry.")
@@ -37,6 +76,16 @@ class QuantizerRegistry:
 
 @QuantizerRegistry.register("int8")
 class IntQuantizer(BaseQuantizer):
+    """Integer quantizer class for quantizing tensors to int8 or other integer formats.
+    This class supports symmetric and asymmetric quantization, as well as dual-scale quantization.
+    It can be used to quantize tensors to a specified number of bits,
+    with options for axis and dual-scale.
+    Args:
+        num_bits (int): Number of bits for quantization (default: 8).
+        symmetric (bool): Whether to use symmetric quantization (default: True).
+        axis (int or None): Axis along which to compute the scale and zero-point (default: None).
+        dual_scale (bool): Whether to use dual-scale quantization (default: False).
+    """
     def __init__(self, num_bits=8, symmetric=True, axis=None, dual_scale=False):
         self.num_bits = num_bits
         self.symmetric = symmetric
@@ -56,6 +105,8 @@ class IntQuantizer(BaseQuantizer):
         self.pos_amax = None
         self.neg_scale = None
         self.pos_scale = None
+
+        self.scale = 1.0
 
     def calibrate(self, x: torch.Tensor):
         epsilon = 1.0 / (1 << 24)
@@ -118,7 +169,6 @@ class IntQuantizer(BaseQuantizer):
                     self.scale = self.qmax / self.amax.clamp(min=epsilon)
                     self.zero_point = 0
         else:
-            # todo: scale = q/a
             if self.axis is None:
                 min_val = x.min().item()
                 max_val = x.max().item()
@@ -128,8 +178,8 @@ class IntQuantizer(BaseQuantizer):
                 self.amax = max(
                     self.amax if self.amax is not None else max_val, max_val
                 )
-                self.scale = (self.amax - self.amin) / (self.qmax - self.qmin)
-                self.zero_point = int(round(self.qmin - self.amin / self.scale))
+                self.scale = (self.qmax - self.qmin) / (self.amax - self.amin)
+                self.zero_point = int(round(self.qmin - self.amin * self.scale))
             else:
                 min_val = x.amin(dim=self.axis, keepdim=False)
                 max_val = x.amax(dim=self.axis, keepdim=False)
@@ -143,12 +193,12 @@ class IntQuantizer(BaseQuantizer):
                     if self.amax is not None
                     else max_val
                 )
-                self.scale = (self.amax - self.amin) / (self.qmax - self.qmin)
+                self.scale = (self.qmax - self.qmin) / (self.amax - self.amin)
                 self.zero_point = (
-                    (self.qmin - self.amin / self.scale).round().to(torch.int)
+                    (self.qmin - self.amin * self.scale).round().to(torch.int)
                 )
 
-    def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
+    def _fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
         if self.symmetric and self.dual_scale:
             if self.axis is not None:
                 shape = [1] * x.dim()
@@ -167,60 +217,69 @@ class IntQuantizer(BaseQuantizer):
             x_dequant = torch.where(x >= 0, x_quant / pos_scale, x_quant / neg_scale)
             return x_dequant.to(x.dtype)
 
+        if self.axis is not None:
+            shape = [1] * x.dim()
+            shape[self.axis] = -1
+            scale = self.scale.view(shape)
+            zero_point = (
+                self.zero_point.view(shape)
+                if isinstance(self.zero_point, torch.Tensor)
+                else self.zero_point
+            )
+            scale = scale.T
         else:
-            if self.axis is not None:
-                shape = [1] * x.dim()
-                shape[self.axis] = -1
-                scale = self.scale.view(shape)
-                zero_point = (
-                    self.zero_point.view(shape)
-                    if isinstance(self.zero_point, torch.Tensor)
-                    else self.zero_point
-                )
-                scale = scale.T
-            else:
-                scale = self.scale
-                zero_point = self.zero_point
+            scale = self.scale
+            zero_point = self.zero_point
 
-            x_int = torch.round(x * scale) + zero_point
-            x_int = torch.clamp(x_int, self.qmin, self.qmax)
-            x_dequant = (x_int - zero_point) / scale
-            return x_dequant.to(x.dtype)
+        x_int = torch.round(x * scale) + zero_point
+        x_int = torch.clamp(x_int, self.qmin, self.qmax)
+        x_dequant = (x_int - zero_point) / scale
+        return x_dequant.to(x.dtype)
 
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fake_quantize(x)
+        return self._fake_quantize(x)
 
     def __repr__(self):
         if self.symmetric:
             if self.dual_scale:
                 return (
-                    f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, dual_scale=True, axis={self.axis}, "
+                    f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
+                    f"dual_scale=True, axis={self.axis}, "
                     f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})"
                 )
-            else:
-                if isinstance(self.amax, torch.Tensor):
-                    amin = self.amax.min().item()
-                    amax = self.amax.max().item()
-                    amax_str = f"[{amin:.4f}, {amax:.4f}]"
-                    # amax_str = ', '.join([f"{x:.4f}" for x in self.amax.tolist()])
-                    return (
-                        f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, dual_scale=False, axis={self.axis}, "
-                        f"amax=[{amax_str}])"
-                    )
-                else:
-                    return (
-                        f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, dual_scale=False, axis={self.axis}, "
-                        f"amax={self.amax:.4f})"
-                    )
-        else:
+            if isinstance(self.amax, torch.Tensor):
+                amin = self.amax.min().item()
+                amax = self.amax.max().item()
+                amax_str = f"[{amin:.4f}, {amax:.4f}]"
+                return (
+                    f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
+                    f"dual_scale=False, axis={self.axis}, "
+                    f"amax=[{amax_str}])"
+                )
             return (
-                f"IntQuantizer(num_bits={self.num_bits}, symmetric=False, axis={self.axis}, "
-                f"amin={self.amin:.4f}, amax={self.amax:.4f}, zero_point={self.zero_point:.4f})"
+                f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
+                f"dual_scale=False, axis={self.axis}, "
+                f"amax={self.amax:.4f})"
             )
+        return (
+            f"IntQuantizer(num_bits={self.num_bits}, symmetric=False, axis={self.axis}, "
+            f"amin={self.amin:.4f}, amax={self.amax:.4f}, zero_point={self.zero_point:.4f})"
+        )
 
 
 @QuantizerRegistry.register("fpe4m3")
-class FloatQuantizer:
+class FloatQuantizer(BaseQuantizer):
+    """
+    Float quantizer class for quantizing tensors to NVIDIA's fpe4m3 format
+    or other floating-point formats.
+    This class supports dual-scale quantization and can be configured
+    with different exponent and mantissa bits.
+    Args:
+        exp_bits (int): Number of exponent bits (default: 4).
+        mant_bits (int): Number of mantissa bits (default: 3).
+        axis (int or None): Axis along which to compute the scale and zero-point (default: None).
+        dual_scale (bool): Whether to use dual-scale quantization (default: False).
+    """
     def __init__(self, exp_bits=4, mant_bits=3, axis=None, dual_scale=False):
         self.exp_bits = exp_bits
         self.mant_bits = mant_bits
@@ -308,18 +367,17 @@ class FloatQuantizer:
         ext = load_fake_quant_fp8_ext(required=False)
         if ext is not None:
             return ext.fake_e4m3fy(x)
-        else:
-            return self._simulate_fp(x, fp_min, fp_max, mant_bits)
+        return self._simulate_fp(x, fp_min, fp_max, mant_bits)
 
+    @staticmethod
     def _simulate_fp(
-        self, x: torch.Tensor, fp_min: float, fp_max: float, mant_bits: int
+        x: torch.Tensor, fp_min: float, fp_max: float, mant_bits: int
     ) -> torch.Tensor:
         x_abs = x.abs()
         sign = x.sign()
 
         x_clamped = torch.clamp(x_abs, min=0.0, max=fp_max)
 
-        # todo: Subnormal
         x_clamped = torch.where(
             x_clamped < fp_min, torch.zeros_like(x_clamped), x_clamped
         )
@@ -333,7 +391,7 @@ class FloatQuantizer:
 
         return simulated * sign
 
-    def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
+    def _fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
         zero_mask = x.abs() < 1.0 / (1 << 24)
 
         if self.dual_scale:
@@ -381,36 +439,41 @@ class FloatQuantizer:
         return x_dequant.to(x.dtype)
 
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fake_quantize(x)
+        return self._fake_quantize(x)
 
     def __repr__(self):
         if self.dual_scale:
             return (
-                f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, axis={self.axis}, dual_scale=True, "
+                f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
+                f"axis={self.axis}, dual_scale=True, "
                 f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})"
             )
-        else:
-            return (
-                f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, axis={self.axis}, dual_scale=False, "
-                f"amax={self.amax:.4f})"
-            )
+        return (
+            f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
+            f"axis={self.axis}, dual_scale=False, "
+            f"amax={self.amax:.4f})"
+        )
 
 
 @QuantizerRegistry.register("int16")
-def int6_factory():
+def int16_factory():
+    """Factory function for creating an IntQuantizer with 16 bits."""
     return IntQuantizer(num_bits=16)
 
 
 @QuantizerRegistry.register("int6")
 def int6_factory():
+    """Factory function for creating an IntQuantizer with 6 bits."""
     return IntQuantizer(num_bits=6)
 
 
 @QuantizerRegistry.register("int4")
 def int4_factory():
+    """Factory function for creating an IntQuantizer with 4 bits."""
     return IntQuantizer(num_bits=4)
 
 
 @QuantizerRegistry.register("fpe5m2")
 def fp8e5m2_factory():
+    """Factory function for creating a FloatQuantizer with 5 exponent bits and 2 mantissa bits."""
     return FloatQuantizer(exp_bits=5, mant_bits=2)

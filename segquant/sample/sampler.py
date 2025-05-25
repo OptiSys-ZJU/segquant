@@ -1,7 +1,13 @@
+"""
+This module provides various samplers for extracting data from models at specified timesteps.
+It includes a base sampler and specialized samplers such as UniformSampler and NormalSampler.
+These samplers are designed to work with PyTorch models and datasets.
+"""
+
 from typing import List, Literal
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 
 model_map = {
     "dit": lambda x: x.transformer,
@@ -10,6 +16,7 @@ model_map = {
 
 
 class BaseSampler:
+    """Base class for samplers that sample data from a model at specified timesteps."""
     hook_map = {
         "input": "_hook_input",
         "output": "_hook_output",
@@ -25,12 +32,11 @@ class BaseSampler:
     def _process_tensor_tree(self, obj):
         if isinstance(obj, torch.Tensor):
             return obj.detach().clone().to(self.device)
-        elif isinstance(obj, (list, tuple)):
+        if isinstance(obj, (list, tuple)):
             return [self._process_tensor_tree(x) for x in obj]
-        elif isinstance(obj, dict):
+        if isinstance(obj, dict):
             return {k: self._process_tensor_tree(v) for k, v in obj.items()}
-        else:
-            return obj
+        return obj
 
     def _valid_timestep(self):
         return self.cur_t in self.sample_timesteps
@@ -38,7 +44,7 @@ class BaseSampler:
     def _trigger_timestep(self):
         self.cur_t -= 1
 
-    def _hook_input(self, model, args, kwargs, output):
+    def _hook_input(self, _model, args, kwargs, _output):
         if self._valid_timestep():
             self.sample_line.append(
                 {
@@ -52,7 +58,7 @@ class BaseSampler:
 
         self._trigger_timestep()
 
-    def _hook_output(self, model, args, kwargs, output):
+    def _hook_output(self, _model, _args, _kwargs, output):
         if self._valid_timestep():
             self.sample_line.append(
                 {
@@ -63,7 +69,7 @@ class BaseSampler:
 
         self._trigger_timestep()
 
-    def _hook_inoutput(self, model, args, kwargs, output):
+    def _hook_inoutput(self, _model, args, kwargs, output):
         if self._valid_timestep():
             self.sample_line.append(
                 {
@@ -79,13 +85,14 @@ class BaseSampler:
         self._trigger_timestep()
 
     def _sample_timesteps(self, max_timestep, nums) -> List[int]:
-        pass
+        # Default implementation for BaseSampler
+        return list(range(max_timestep, max_timestep - nums, -1))
 
     def _step_sample(
         self,
         model: nn.Module,
         target_layer: nn.Module,
-        input,
+        input_data: tuple,
         num_inference_steps: int,
         timestep_per_sample: int,
         sample_mode: str,
@@ -99,7 +106,7 @@ class BaseSampler:
         hook_function = getattr(self, self.hook_map[sample_mode])
         handle = target_layer.register_forward_hook(hook_function, with_kwargs=True)
         with torch.no_grad():
-            prompt, _, control = input
+            prompt, _, control = input_data
             model(
                 prompt=prompt,
                 control_image=control,
@@ -125,6 +132,22 @@ class BaseSampler:
         device="cpu",
         **kwargs
     ):
+        """
+        Sample data from the model at specified timesteps.
+        Args:
+            model (nn.Module): The model to sample from.
+            data_loader (DataLoader): DataLoader providing the input data.
+            target_layer (nn.Module, optional): The layer to hook for sampling.
+            sample_layer (str, optional): The type of layer to sample from ("dit" or "controlnet").
+            max_timestep (int, optional): Maximum timestep for sampling.
+            sample_size (int, optional): Number of samples to collect.
+            timestep_per_sample (int, optional): Number of timesteps per sample.
+            sample_mode (str, optional): Mode of sampling ("input", "output", "inoutput").
+            device (str, optional): Device to run the model on.
+            **kwargs: Additional arguments for the model's forward method.
+        Yields:
+            List[dict]: Sampled data containing timesteps, inputs, and outputs.
+        """
         self.device = device
 
         if target_layer is None:
@@ -148,14 +171,13 @@ class BaseSampler:
 
 
 class UniformSampler(BaseSampler):
-    def __init__(self):
-        super().__init__()
-
+    """Sampler that samples uniformly across timesteps."""
     def _sample_timesteps(self, max_timestep, nums) -> List[int]:
         return list(np.linspace(max_timestep, 0, nums, dtype=int))
 
 
 class NormalSampler(BaseSampler):
+    """Sampler that samples timesteps based on a normal distribution."""
     def __init__(self, mean):
         super().__init__()
         self.mean = mean
@@ -171,32 +193,28 @@ class NormalSampler(BaseSampler):
 
 DNTCSampler = NormalSampler
 
-Q_DiffusionSampler = UniformSampler
+QDiffusionSampler = UniformSampler
 
 if __name__ == "__main__":
     from dataset.coco.coco_dataset import COCODataset
     from backend.torch.models.stable_diffusion_3_controlnet import (
         StableDiffusion3ControlNetModel,
     )
-    from backend.torch.models.flux_controlnet import FluxControlNetModel
-    from scipy.stats import skew
-    import matplotlib.pyplot as plt
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # model = FluxControlNetModel.from_repo(('../FLUX.1-dev', '../FLUX.1-dev-Controlnet-Canny'), device)
-    model = StableDiffusion3ControlNetModel.from_repo(
-        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), device
+    sd3 = StableDiffusion3ControlNetModel.from_repo(
+        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
+        torch.device("cuda" if torch.cuda.is_available() else "cpu")
     )
 
     dataset = COCODataset(
         path="../dataset/controlnet_datasets/controlnet_canny_dataset", cache_size=16
     )
 
-    sampler = Q_DiffusionSampler()
+    sampler = QDiffusionSampler()
     for sample_data in sampler.sample(
-        model,
+        sd3,
         dataset.get_dataloader(),
-        target_layer=model.controlnet.transformer_blocks[0].norm1.linear,
+        target_layer=sd3.controlnet.transformer_blocks[0].norm1.linear,
         sample_layer="dit",
         max_timestep=30,
         sample_size=1,
@@ -209,7 +227,7 @@ if __name__ == "__main__":
         for d in sample_data:
             t = d["timestep"]
 
-            input = d["input"]["args"][0][0]
+            input_ = d["input"]["args"][0][0]
             shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = d[
                 "output"
             ].chunk(6, dim=1)

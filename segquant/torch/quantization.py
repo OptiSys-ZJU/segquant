@@ -1,26 +1,29 @@
+"""
+This module provides functionality for quantizing PyTorch models, including
+linear layer replacement, calibration, and smoothing. It supports segment
+linear layers and pattern detection for advanced quantization techniques.
+"""
+
+import fnmatch
 import torch
-import torch.nn as nn
-import fnmatch
-
+from torch import nn
 from tqdm import tqdm
-import fnmatch
-
-from segquant.config import DType, Optimum, SegPattern, default_quantize_config
+from segquant.config import default_quantize_config
 from segquant.layers.SegmentLinear import create_segment_linear
 from segquant.pattern_detector import SegQuantPatternDetector
 
 
-def move_to_device(batch, device):
+def _move_to_device(batch, device):
     if isinstance(batch, torch.Tensor):
         return batch.to(device)
-    elif isinstance(batch, (tuple, list)):
-        return tuple(move_to_device(x, device) for x in batch)
-    elif isinstance(batch, dict):
-        return {k: move_to_device(v, device) for k, v in batch.items()}
+    if isinstance(batch, (tuple, list)):
+        return tuple(_move_to_device(x, device) for x in batch)
+    if isinstance(batch, dict):
+        return {k: _move_to_device(v, device) for k, v in batch.items()}
     return batch
 
 
-def get_quantization_config(
+def _get_quantization_config(
     final_config,
     name,
     input_dtype=None,
@@ -48,7 +51,7 @@ def get_quantization_config(
     return input_dtype, weight_dtype, opt, input_axis, weight_axis, alpha
 
 
-def create_linear(
+def _create_linear(
     layer,
     layer_name,
     seg_linear_config,
@@ -61,6 +64,23 @@ def create_linear(
     weight_axis=None,
     alpha=None,
 ):
+    """
+    Create a new segment linear layer based on the provided configuration.
+    Args:
+        layer: The original linear layer to be replaced.
+        layer_name: The name of the layer.
+        seg_linear_config: The configuration for the segment linear layer.
+        final_config: The final quantization configuration.
+        input_dtype: Optional; the input data type.
+        weight_dtype: Optional; the weight data type.
+        opt: Optional; the optimization type.
+        dual_scale: Whether to use dual scale quantization.
+        input_axis: Optional; the input axis for quantization.
+        weight_axis: Optional; the weight axis for quantization.
+        alpha: Optional; the scaling factor for quantization.
+    Returns:
+        A new segment linear layer with the specified configuration.
+    """
     old_linear = layer
     device = old_linear.weight.device
     old_dtype = old_linear.weight.dtype
@@ -73,7 +93,7 @@ def create_linear(
         input_axis,
         weight_axis,
         alpha,
-    ) = get_quantization_config(
+    ) = _get_quantization_config(
         final_config,
         layer_name,
         input_dtype,
@@ -108,7 +128,7 @@ def create_linear(
     return new_linear
 
 
-def replace_linears(model, to_replace_linears: dict):
+def _replace_linears(model, to_replace_linears: dict):
     for layer_name, new_linear in to_replace_linears.items():
         parts = layer_name.split(".")
         module = model
@@ -117,7 +137,7 @@ def replace_linears(model, to_replace_linears: dict):
         setattr(module, parts[-1], new_linear)
 
 
-def get_all_linears(model: nn.Module):
+def _get_all_linears(model: nn.Module):
     linears = {}
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear):
@@ -125,7 +145,7 @@ def get_all_linears(model: nn.Module):
     return linears
 
 
-def smooth_linears(
+def _smooth_linears(
     model: nn.Module,
     to_calib_linears: dict,
     calib_data_loader: torch.utils.data.DataLoader,
@@ -136,7 +156,7 @@ def smooth_linears(
         if isinstance(module, nn.Linear) and name in to_calib_linears:
 
             def get_hook(n):
-                def hook_fn(mod, inp, out, n=n):
+                def hook_fn(_mod, inp, _out, n=n):
                     if hasattr(to_calib_linears[n], "trace"):
                         to_calib_linears[n].trace(inp[0])
 
@@ -149,8 +169,8 @@ def smooth_linears(
         for batch in tqdm(
             calib_data_loader, desc="[Smooth Linears] Running model on calibration data"
         ):
-            this_input_tuple = move_to_device(batch[0], device)
-            model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(
+            this_input_tuple = _move_to_device(batch[0], device)
+            _ = model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(
                 **this_input_tuple
             )
     for h in hooks:
@@ -161,7 +181,7 @@ def smooth_linears(
             l.smooth()
 
 
-def calib_linears(
+def _calib_linears(
     model: nn.Module,
     to_calib_linears: dict,
     calib_data_loader: torch.utils.data.DataLoader,
@@ -172,7 +192,7 @@ def calib_linears(
         if isinstance(module, nn.Linear) and name in to_calib_linears:
 
             def get_hook(n):
-                def hook_fn(mod, inp, out, n=n):
+                def hook_fn(_mod, inp, _out, n=n):
                     to_calib_linears[n].calibrate(inp[0])
 
                 return hook_fn
@@ -184,8 +204,8 @@ def calib_linears(
         for batch in tqdm(
             calib_data_loader, desc="[Calib Linears] Running model on calibration data"
         ):
-            this_input_tuple = move_to_device(batch[0], device)
-            model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(
+            this_input_tuple = _move_to_device(batch[0], device)
+            _ = model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(
                 **this_input_tuple
             )
     for h in hooks:
@@ -195,7 +215,7 @@ def calib_linears(
         l.finish_calibrate()
 
 
-def filter_disabled(linears, config):
+def _filter_disabled(linears, config):
     disable_patterns = [
         k for k, v in config.items() if k != "default" and v.get("enable") is False
     ]
@@ -216,6 +236,17 @@ def quantize(
     verbose=False,
     example=None,
 ):
+    """
+    Quantize the model using the provided calibration data loader and configuration.
+    Args:
+        model: The PyTorch model to be quantized.
+        calib_data_loader: DataLoader for calibration data.
+        config: Optional; configuration for quantization.
+        verbose: Whether to print verbose output.
+        example: Optional; an example input for pattern detection.
+    Returns:
+        The quantized model.
+    """
     device = next(model.parameters()).device
     final_config = config or default_quantize_config
     final_config["default"] = final_config.get(
@@ -225,8 +256,8 @@ def quantize(
     if not final_config["default"]["enable"]:
         return model
 
-    linears = get_all_linears(model)
-    filter_disabled(linears, final_config)
+    linears = _get_all_linears(model)
+    _filter_disabled(linears, final_config)
     to_calib_linears = {}
 
     if verbose:
@@ -236,12 +267,12 @@ def quantize(
     enable_seg = any(cfg.get("seglinear") for cfg in final_config.values())
     if enable_seg:
         example = example if example is not None else calib_data_loader.dataset[0]
-        example = move_to_device(example, device)
+        example = _move_to_device(example, device)
 
         seg_detector = SegQuantPatternDetector(
             model,
             example_inputs=example,
-            search_patterns=[
+            search_patterns_lst=[
                 p.value for p in final_config["default"]["search_patterns"]
             ],
         )
@@ -260,13 +291,14 @@ def quantize(
                         if fnmatch.fnmatch(name, pattern):
                             if not final_config[pattern].get("seglinear", True):
                                 print(
-                                    f"[INFO] Detect but disabled [{name}] (matched pattern: {pattern})"
+                                    f"[INFO] Detect but disabled [{name}] "
+                                    f"(matched pattern: {pattern})"
                                 )
                                 disabled = True
                             break
                     if disabled:
                         continue
-                    to_calib_linears[name] = create_linear(
+                    to_calib_linears[name] = _create_linear(
                         linears[name],
                         name,
                         seg_linear_config,
@@ -276,9 +308,9 @@ def quantize(
                     print(f"[INFO] Detected [{name}]")
                     del linears[name]
 
-    for name in linears:
-        to_calib_linears[name] = create_linear(
-            linears[name],
+    for name, linear in linears.items():
+        to_calib_linears[name] = _create_linear(
+            linear,
             name,
             {"chunks": 1, "seg_mode": "weight"},
             final_config,
@@ -287,87 +319,15 @@ def quantize(
 
     if verbose:
         print("start smooth ...")
-    smooth_linears(model, to_calib_linears, calib_data_loader, device)
+    _smooth_linears(model, to_calib_linears, calib_data_loader, device)
     if verbose:
         print("start calibrate ...")
-    calib_linears(model, to_calib_linears, calib_data_loader, device)
+    _calib_linears(model, to_calib_linears, calib_data_loader, device)
     if verbose:
         print("start replace ...")
-    replace_linears(model, to_calib_linears)
+    _replace_linears(model, to_calib_linears)
 
     if verbose:
         print(model)
 
     return model
-
-
-if __name__ == "__main__":
-    config = {
-        "default": {
-            "enable": True,
-            "input_dtype": DType.INT8,
-            "weight_dtype": DType.INT8,
-            "opt": Optimum.SMOOTH,
-            "seglinear": True,
-            "search_patterns": SegPattern.all(),
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 1.0,
-        },
-    }
-
-    from dataset.coco.coco_dataset import COCODataset
-    from segquant.sample.sampler import Q_DiffusionSampler
-    from segquant.torch.calibrate_set import generate_calibrate_set
-    from backend.torch.models.stable_diffusion_3_controlnet import (
-        StableDiffusion3ControlNetModel,
-    )
-    from backend.torch.models.flux_controlnet import FluxControlNetModel
-    from sample.sampler import model_map
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = StableDiffusion3ControlNetModel.from_repo(
-        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), device
-    )
-    # model = FluxControlNetModel.from_repo(('../FLUX.1-dev', '../FLUX.1-dev-Controlnet-Canny'), device)
-
-    quant_layer = "controlnet"
-
-    dataset = COCODataset(
-        path="../dataset/controlnet_datasets/controlnet_canny_dataset", cache_size=16
-    )
-    sampler = Q_DiffusionSampler()
-    sample_dataloader = dataset.get_dataloader(batch_size=1)
-    calibset = generate_calibrate_set(
-        model,
-        sampler,
-        sample_dataloader,
-        quant_layer,
-        max_timestep=30,
-        sample_size=1,
-        timestep_per_sample=30,
-        controlnet_conditioning_scale=0.7,
-        guidance_scale=3.5,
-    )
-
-    calib_loader = calibset.get_dataloader(batch_size=1)
-
-    model.controlnet = quantize(
-        model_map[quant_layer](model), calib_loader, config, verbose=True
-    )
-
-    ## test
-    # latents = torch.load('../latents.pt')
-    for batch in dataset.get_dataloader(batch_size=1, shuffle=True):
-        prompt, image, control = batch[0]
-        print(prompt)
-        image = model.forward(
-            prompt=prompt,
-            control_image=control,
-            controlnet_conditioning_scale=0.7,
-            num_inference_steps=28,
-            guidance_scale=3.5,
-            # latents=latents,
-        )[0]
-        image[0].save(f"pic.jpg")
-        break

@@ -6,3 +6,4 @@ __pycache__/
 *.png
 *.log
 affine_pics/
+.pylintrc

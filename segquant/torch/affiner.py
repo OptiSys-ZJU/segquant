@@ -1,12 +1,30 @@
+"""
+This module provides functionality for processing and training an affiner
+based on a given configuration, dataset, and models. It supports both
+blockwise and third-party affiner types.
+"""
+
 import numpy as np
-import torch
 from segquant.solver.blockwise_affiner import BlockwiseAffiner
 from segquant.subset_wrapper import SubsetWrapper
 
 
 def process_affiner(
-    config, dataset, model_real, model_quant, latents=None, shuffle=True
+    config, dataset, model_real, model_quant, latents=None, shuffle=True, thirdparty_affiner=None,
 ):
+    """
+    Process the affiner based on the provided configuration and dataset.
+    Args:
+        config (dict): Configuration dictionary containing stepper and solver settings.
+        dataset (Dataset): The dataset to be used for training.
+        model_real (Model): The real model to be trained.
+        model_quant (Model): The quantized model to be trained.
+        latents (optional): Latent variables for the affiner, if applicable.
+        shuffle (bool): Whether to shuffle the dataset indices.
+        thirdparty_affiner (optional): An external affiner instance, if provided.
+    Returns:
+        affiner (Tuple(BlockwiseAffiner|thirdparty_affiner)): The trained affiner instance.
+    """
     indices = np.arange(len(dataset))
     if shuffle:
         np.random.shuffle(indices)
@@ -25,6 +43,11 @@ def process_affiner(
             enable_latent_affine=config["stepper"]["enable_latent_affine"],
             enable_timesteps=config["stepper"]["enable_timesteps"],
         )
+    else:
+        if thirdparty_affiner is not None:
+            affiner = thirdparty_affiner
+        else:
+            raise ValueError(f"Unknown stepper type: {config['stepper']['type']}")
 
     if config["stepper"]["recurrent"]:
         for _ in range(config["stepper"]["max_timestep"]):
@@ -63,94 +86,3 @@ def process_affiner(
     affiner.finish_learning()
 
     return affiner
-
-
-if __name__ == "__main__":
-    from backend.torch.utils import randn_tensor
-    from dataset.coco.coco_dataset import COCODataset
-    from backend.torch.models.stable_diffusion_3_controlnet import (
-        StableDiffusion3ControlNetModel,
-    )
-
-    latents = randn_tensor(
-        (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
-    )
-    dataset = COCODataset(
-        path="../dataset/controlnet_datasets/coco_canny", cache_size=16
-    )
-
-    model_quant = StableDiffusion3ControlNetModel.from_repo(
-        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
-    )
-    model_quant.transformer = torch.load(
-        "benchmark_record/run_seg_module/model/dit/model_quant_seg.pt",
-        weights_only=False,
-    )
-    model_real = StableDiffusion3ControlNetModel.from_repo(
-        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
-    )
-
-    config = {
-        "solver": {
-            "type": "mserel",
-            "blocksize": 8,
-            "alpha": 0.5,
-            "lambda1": 0.1,
-            "lambda2": 0.1,
-            "sample_mode": "interpolate",
-            "percentile": 100,
-            "greater": True,
-            "scale": 1,
-            "verbose": True,
-        },
-        "stepper": {
-            "type": "blockwise",
-            "max_timestep": 30,
-            "sample_size": 1,
-            "recurrent": True,
-            "noise_target": "uncond",
-            "enable_latent_affine": False,
-            "enable_timesteps": None,
-        },
-        "extra_args": {"controlnet_conditioning_scale": 0, "guidance_scale": 7,},
-    }
-
-    affiner = process_affiner(
-        config, dataset, model_real, model_quant, latents=latents, shuffle=False
-    )
-
-    #############################################
-    from benchmark import trace_pic
-
-    max_num = 1
-    model_quant = model_quant.to("cuda")
-    trace_pic(
-        model_quant,
-        f"affine_pics/blockaffine",
-        dataset.get_dataloader(),
-        latents,
-        steper=affiner,
-        max_num=max_num,
-        num_inference_steps=config["stepper"]["max_timestep"],
-        **config["extra_args"],
-    )
-    trace_pic(
-        model_quant,
-        f"affine_pics/quant",
-        dataset.get_dataloader(),
-        latents,
-        max_num=max_num,
-        num_inference_steps=config["stepper"]["max_timestep"],
-        **config["extra_args"],
-    )
-    del model_quant
-    model_real = model_real.to("cuda")
-    trace_pic(
-        model_real,
-        f"affine_pics/real",
-        dataset.get_dataloader(),
-        latents,
-        max_num=max_num,
-        num_inference_steps=config["stepper"]["max_timestep"],
-        **config["extra_args"],
-    )

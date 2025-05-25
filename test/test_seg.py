@@ -8,7 +8,7 @@ from backend.torch.models.stable_diffusion_3_controlnet import (
 )
 from benchmark import trace_pic
 from dataset.coco.coco_dataset import COCODataset
-from segquant.sample.sampler import Q_DiffusionSampler, model_map
+from segquant.sample.sampler import QDiffusionSampler, model_map
 from segquant.config import DType, Optimum, SegPattern
 from segquant.torch.calibrate_set import generate_calibrate_set
 from segquant.torch.quantization import quantize
@@ -28,7 +28,7 @@ dataset = COCODataset(path="../dataset/controlnet_datasets/coco_canny", cache_si
 model_real = StableDiffusion3ControlNetModel.from_repo(
     ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cuda"
 )
-sampler = Q_DiffusionSampler()
+sampler = QDiffusionSampler()
 sample_dataloader = dataset.get_dataloader(batch_size=1, shuffle=calib_args["shuffle"])
 calibset = generate_calibrate_set(
     model_real,
