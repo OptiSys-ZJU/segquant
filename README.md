@@ -5,16 +5,80 @@ A Semantics-Aware and Generalizable Quantization Framework for Diffusion Models
 Our project has been tested with Python 3.10 (specifically version 3.10.12) and CUDA 12.5. We highly recommend using a virtual environment, such as Anaconda3, to manage and install the required dependencies.
 
 ## Install
+Before installation, make sure all required Python dependencies are available. You can install them using:
+```bash
+pip install -r requirements.txt
+```
+Then, install the `segquant` package using editable mode (recommended for development):
+```bash
+pip install -e .
+```
+This installs the package in-place, so changes to the source code will be reflected immediately without reinstallation.
+
+Alternatively, you can build and install the package as a standard Python package:
+```bash
+python -m build
+pip install dist/segquant-*.whl
+```
+> Note: This project is organized using pyproject.toml, and requires Python ≥ 3.10. You should also ensure build tools such as setuptools, wheel, and build are installed.
 
 ## Usage
 ### Quantization
 
+To quantize a diffusion model, follow these steps:
+
+1. **Generate a calibration dataset**  
+Use `generate_calibrate_set` to sample data from the model. This dataset will be used to calibrate and optimize the quantized model.
+```python
+generate_calibrate_set(
+    model,               # The original model to sample from
+    sampler,             # A data sampler (e.g., NormalSampler, UniformSampler)
+    sample_dataloader,   # Dataloader for the calibration images or text prompts
+    calib_layer,         # The target layer to extract calibration features
+    dump_path="calib_data", # Optional: where to store calibration data
+)
+```
+This function supports chunked saving and optional compression, making it scalable for large datasets. If no `dump_path` is specified, the data is returned in memory.
+
+2. **Quantize the model**  
+Once calibration data is prepared, call `quantize()`:
+```python
+quantized_model = quantize(
+    model,                  # The original full-precision model
+    calib_data_loader,      # The loader of calibration features
+    config=quant_config,    # Optional config dict for quantization parameters
+    verbose=True,           # Print debug info if needed
+    example=input_sample    # Optional example input for operator tracing
+)
+```
+The result is a quantized model that can be evaluated or deployed.
+
 ### Affiner for Diffusion Model
+To further improve the quality of quantized diffusion models, an affiner can be trained to compensate for errors introduced by quantization.
+
+Use `process_affiner()` as follows:
+```python
+affiner = process_affiner(
+    config=affiner_cfg,       # Dict containing optimizer & solver settings
+    dataset=calib_dataset,    # Dataset used to compute affine corrections
+    model_real=fp_model,      # Ground-truth full-precision model
+    model_quant=quant_model,  # Already quantized model
+    latents=optional_latents, # Optional: precomputed latents
+    shuffle=True              # Whether to shuffle training data
+)
+```
+This step is optional but highly recommended for high-fidelity tasks such as image generation. You can also plug in a third-party affiner module via the `thirdparty_affiner` argument.
+
+Note: In our implementation of the diffusion model's `forward` function, we support a `stepper` argument. You can pass the trained `affiner` to this argument to seamlessly perform error reconstruction during the generation process.
+
+For detailed usage and parameter descriptions of these APIs, please refer to the [full documentation](segquant/torch/README.md).
 
 ## Features
-### Automated Pattern searching
+### Automated Pattern Searching
+During quantization, our framework constructs semantic structures from the model to automatically select appropriate quantization configurations for linear layers. These include patterns suitable for techniques like `Chunk-Linear` in segmentation and `Activation` structures for `DualScale` quantization. We also support graph-based semantic pattern detection, enabling integration with other optimization strategies.
 
 ### Easy Integration with Other Frameworks
+We provide CUDA kernels that implement key optimization strategies. These kernels are designed to be easily reused in other quantization or model inference frameworks. For integration examples, please refer to [this](segquant/src/README.md).
 
 ## Contributing
 ### Model

@@ -239,11 +239,11 @@ def quantize(
     """
     Quantize the model using the provided calibration data loader and configuration.
     Args:
-        model: The PyTorch model to be quantized.
-        calib_data_loader: DataLoader for calibration data.
-        config: Optional; configuration for quantization.
-        verbose: Whether to print verbose output.
-        example: Optional; an example input for pattern detection.
+        model (nn.Module): The PyTorch model to be quantized.
+        calib_data_loader (dataloader): DataLoader for calibration data.
+        config (dict): Optional; configuration for quantization.
+        verbose (bool): Whether to print verbose output.
+        example (any): Optional; an example input for pattern detection.
     Returns:
         The quantized model.
     """

@@ -116,10 +116,10 @@ def generate_calibrate_set(
     saves the sampled data to a specified directory in chunks.
     If `dump_path` is not provided, the data will be returned in memory.
     Args:
-        model: The model to sample from.
-        sampler: The sampler to use for sampling data.
-        sample_dataloader: DataLoader for sampling data.
-        calib_layer: The layer to sample from.
+        model (nn.Module): The model to sample from.
+        sampler (Sampler): The sampler to use for sampling data.
+        sample_dataloader (dataloader): DataLoader for sampling data.
+        calib_layer (nn.Module): The layer to sample from.
         dump_path (str, optional): Path to save the calibration dataset. 
             If None, data will be returned in memory.
         chunk_size (int, optional): Number of samples per chunk. Default is 400.
