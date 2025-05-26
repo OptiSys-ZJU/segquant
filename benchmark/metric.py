@@ -9,39 +9,45 @@ from pytorch_fid import fid_score
 from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import structural_similarity as ssim
 
-lpips_model = lpips.LPIPS(net='alex')
+lpips_model = lpips.LPIPS(net="alex")
+
 
 def calculate_fid(real_dir, fake_dir, batch_size=50, device=None):
     if device is None:
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
-    fid_value = fid_score.calculate_fid_given_paths([real_dir, fake_dir], 
-                                                    batch_size=batch_size, 
-                                                    device=device, 
-                                                    dims=2048)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    fid_value = fid_score.calculate_fid_given_paths(
+        [real_dir, fake_dir], batch_size=batch_size, device=device, dims=2048
+    )
     return fid_value
 
+
 def calculate_lpips(img1, img2):
-    transform = transforms.Compose([transforms.Resize((256, 256)), transforms.ToTensor()])
-    
+    transform = transforms.Compose(
+        [transforms.Resize((256, 256)), transforms.ToTensor()]
+    )
+
     img1 = transform(img1).unsqueeze(0) * 2 - 1
     img2 = transform(img2).unsqueeze(0) * 2 - 1
-    
+
     lpips_score = lpips_model(img1, img2)
     return lpips_score.item()
+
 
 def calculate_psnr(img1, img2):
     transform = transforms.ToTensor()
     img1 = transform(img1).numpy()
     img2 = transform(img2).numpy()
-    
+
     return psnr(img1, img2, data_range=img1.max() - img1.min())
 
+
 def calculate_ssim(img1, img2):
-    img1 = np.array(img1.convert('L'))
-    img2 = np.array(img2.convert('L'))
-    
+    img1 = np.array(img1.convert("L"))
+    img2 = np.array(img2.convert("L"))
+
     return ssim(img1, img2, data_range=img1.max() - img1.min())
+
 
 def generate_metric(path1, path2):
     print(path1, path2)
@@ -55,8 +61,8 @@ def generate_metric(path1, path2):
         img2_path = os.path.join(path2, name)
 
         try:
-            img1 = Image.open(img1_path).convert('RGB')
-            img2 = Image.open(img2_path).convert('RGB')
+            img1 = Image.open(img1_path).convert("RGB")
+            img2 = Image.open(img2_path).convert("RGB")
         except Exception as e:
             print(f"Skipping {name} due to error: {e}")
             continue
@@ -73,6 +79,10 @@ def generate_metric(path1, path2):
 
     return result
 
-if __name__ == '__main__':
-    print(generate_metric('benchmark_record/run_dual_scale_module/pics/real', 'benchmark_record/run_dual_scale_module/pics/quant'))
-    print(generate_metric('benchmark_record/run_dual_scale_module/pics/real', 'benchmark_record/run_dual_scale_module/pics/quant_dual_scale'))
+
+if __name__ == "__main__":
+    for i in range(4, 28, 1):
+        print(generate_metric(f"affine_pics/1/{i}/real", f"affine_pics/1/{i}/quant"))
+        print(
+            generate_metric(f"affine_pics/1/{i}/real", f"affine_pics/1/{i}/blockaffine")
+        )

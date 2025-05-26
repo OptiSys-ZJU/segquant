@@ -1,12 +1,50 @@
-import torch
-import torch.nn as nn
-import torch.fx as fx
+"""
+This module provides functionality for detecting specific patterns
+in PyTorch models' computation graphs.
+It includes the `SegQuantPatternDetector` class,
+which uses symbolic tracing to analyze models and identify
+patterns such as linear layers followed by
+chunking, splitting, concatenation, stacking, and activation functions.
+
+Classes:
+    SegQuantPatternDetector: A class for detecting computation graph patterns in PyTorch models.
+
+Usage:
+    The `SegQuantPatternDetector` class can be instantiated with a PyTorch model and example inputs.
+    It supports searching for various patterns in the computation graph, such as:
+        - Linear layers followed by chunking or splitting.
+        - Concatenation or stacking of tensors followed by linear layers.
+        - Activation functions followed by linear layers.
+
+Example:
+    ```
+    model=MyModel()
+    detector = SegQuantPatternDetector(
+        model,
+        example_inputs=(torch.randn(2, 10),),
+        search_patterns_lst=[
+            "linear_to_chunk",
+            "linear_to_split",
+            "concat_to_linear",
+            "stack_to_linear",
+            "activation_to_linear",
+        ],
+    )
+    # Find all patterns in the model
+    results = detector.find_all_patterns()
+    print(results)
+    ```
+"""
 import inspect
+import warnings
 from collections import namedtuple
+import torch
+from torch import nn
+from torch import fx
 from torch.fx.passes.shape_prop import ShapeProp
 from torch._subclasses.fake_tensor import FakeTensorMode
 import torch.nn.functional as F
-import warnings
+
 
 LinearInfo = namedtuple("LinearInfo", ["found", "name", "in_features", "out_features"])
 ChunkInfo = namedtuple("ChunkInfo", ["found", "chunks"])
@@ -15,85 +53,107 @@ ConcatInfo = namedtuple("ConcatInfo", ["found", "chunksizes"])
 StackInfo = namedtuple("StackInfo", ["found", "chunksizes"])
 ActInfo = namedtuple("ActInfo", ["found", "name"])
 
+
 class SegQuantPatternDetector:
-    def __init__(self, model: nn.Module, example_inputs: tuple, search_patterns=None, acts=[nn.SiLU, nn.GELU], act_funcs=[F.silu, F.gelu]):
+    """
+    A class to detect specific patterns in a PyTorch model's computation graph.
+    This class uses symbolic tracing to analyze the model and identify patterns
+    such as linear layers followed by chunking, splitting, concatenation, stacking,
+    and activation functions.
+    """
+    def __init__(
+        self,
+        model: nn.Module,
+        example_inputs: tuple,
+        search_patterns_lst=None,
+        acts=None,
+        act_funcs=None,
+    ):
         self.model = model
-        self.acts = acts
-        self.act_funcs = act_funcs
+        self.acts = acts if acts is not None else [nn.SiLU, nn.GELU]
+        self.act_funcs = act_funcs if act_funcs is not None else [F.silu, F.gelu]
 
         sig = inspect.signature(self.model.forward)
         param_names = list(sig.parameters.keys())
-        concrete = {
-            name: val for name, val in zip(param_names, example_inputs)
-        }
+        concrete = dict(zip(param_names, example_inputs))
         expand_keys = [
-            'block_controlnet_hidden_states',
-            'controlnet_block_samples',
-            'controlnet_single_block_samples',
+            "block_controlnet_hidden_states",
+            "controlnet_block_samples",
+            "controlnet_single_block_samples",
         ]
 
         for key in expand_keys:
             value = concrete.get(key, None)
             if isinstance(value, (list, tuple)):
-                concrete.update({
-                    f'{key}_{i+1}': tensor
-                    for i, tensor in enumerate(value)
-                })
+                concrete.update(
+                    {f"{key}_{i+1}": tensor for i, tensor in enumerate(value)}
+                )
                 del concrete[key]
 
         with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore"
-            )
+            warnings.filterwarnings("ignore")
             self.traced = fx.symbolic_trace(model, concrete_args=concrete)
             self.module_map = dict(self.traced.named_modules())
-            
-            if search_patterns is None:
+
+            if search_patterns_lst is None:
                 self.search_patterns = [
-                    'linear_to_chunk', 'concat_to_linear', 'linear_to_split', 'stack_to_linear'
+                    "linear_to_chunk",
+                    "concat_to_linear",
+                    "linear_to_split",
+                    "stack_to_linear",
+                    "activation_to_linear",
                 ]
             else:
-                self.search_patterns = search_patterns
-            
+                self.search_patterns = search_patterns_lst
+
             fake_mode = FakeTensorMode(allow_non_fake_inputs=True)
             ShapeProp(self.traced, fake_mode).propagate(*example_inputs)
 
     def _is_transparent(self, node):
-        if node.op == 'call_method' and node.target == 'to':
+        if node.op == "call_method" and node.target == "to":
             return True
-        if node.op == 'call_module':
+        if node.op == "call_module":
             submod = self.module_map.get(node.target, None)
             if isinstance(submod, torch.nn.Dropout):
                 return True
-        
+
         return False
 
     def _is_linear(self, node):
-        if node.op == 'call_module':
+        if node.op == "call_module":
             linear_mod = self.module_map.get(node.target, None)
             if isinstance(linear_mod, nn.Linear):
-                return LinearInfo(True, node.target, linear_mod.in_features, linear_mod.out_features)
+                return LinearInfo(
+                    True, node.target, linear_mod.in_features, linear_mod.out_features
+                )
         return LinearInfo(False, None, None, None)
 
-    def _is_chunk(self, node):
-        if (node.op == "call_method" and node.target == 'chunk') or \
-           (node.op == 'call_function' and node.target is torch.chunk):
+    @staticmethod
+    def _is_chunk(node):
+        if (node.op == "call_method" and node.target == "chunk") or (
+            node.op == "call_function" and node.target is torch.chunk
+        ):
             chunks = node.args[1] if len(node.args) > 1 else node.kwargs.get("chunks")
             dim = node.kwargs.get("dim", 0)
             if dim == 1:
                 return ChunkInfo(True, chunks)
         return ChunkInfo(False, None)
 
-    def _is_split(self, node):
-        if (node.op == "call_method" and node.target == 'split') or \
-           (node.op == 'call_function' and node.target is torch.split):
-            split_size_or_sections = node.args[1] if len(node.args) > 1 else node.kwargs.get("split_size")
+    @staticmethod
+    def _is_split(node):
+        if (node.op == "call_method" and node.target == "split") or (
+            node.op == "call_function" and node.target is torch.split
+        ):
+            split_size_or_sections = (
+                node.args[1] if len(node.args) > 1 else node.kwargs.get("split_size")
+            )
             dim = node.kwargs.get("dim", 0)
             if dim == 1:
                 return SplitInfo(True, split_size_or_sections)
         return SplitInfo(False, None)
 
-    def _is_concat(self, node):
+    @staticmethod
+    def _is_concat(node):
         if node.op == "call_function" and node.target is torch.cat:
             tensor_list = node.args[0]
             dim = node.kwargs.get("dim", 0)
@@ -101,15 +161,21 @@ class SegQuantPatternDetector:
                 if isinstance(tensor_list, (list, tuple)):
                     chunksizes = []
                     for tensor in tensor_list:
+<<<<<<< HEAD
                         if hasattr(tensor, 'meta'):
                             # Handle meta as dictionary (common in FakeTensorProp)
                             if isinstance(tensor.meta, dict) and 'val' in tensor.meta:
                                 shape = tensor.meta['val'].shape
                                 chunksizes.append(shape[1])
+=======
+                        shape = tensor.meta["tensor_meta"].shape
+                        chunksizes.append(shape[1])
+>>>>>>> d81aca6dc1d28d0a78387b9e2c3d3eac34e174c2
                     return ConcatInfo(True, chunksizes)
         return ConcatInfo(False, None)
 
-    def _is_stack(self, node):
+    @staticmethod
+    def _is_stack(node):
         # only work for 1d-shape tensors to stack with dim = 1
         if node.op == "call_function" and node.target is torch.stack:
             tensor_list = node.args[0]
@@ -118,7 +184,7 @@ class SegQuantPatternDetector:
                 if isinstance(tensor_list, (list, tuple)):
                     chunksizes = []
                     for tensor in tensor_list:
-                        shape = tensor.meta.get('tensor_meta', {}).get('shape', None)
+                        shape = tensor.meta.get("tensor_meta", {}).get("shape", None)
                         if shape is not None and len(shape) == 1:
                             chunksizes.append(shape[0])
                     if len(chunksizes) == len(tensor_list):
@@ -126,18 +192,18 @@ class SegQuantPatternDetector:
         return StackInfo(False, None)
 
     def _is_activation(self, node):
-        if node.op == 'call_module':
+        if node.op == "call_module":
             act_mod = self.module_map.get(node.target, None)
             if any(isinstance(act_mod, act) for act in self.acts):
                 return ActInfo(True, node.target)
-        elif node.op == 'call_function' and node.target in self.act_funcs:
+        elif node.op == "call_function" and node.target in self.act_funcs:
             return ActInfo(True, node.target)
         return ActInfo(False, None)
 
     def _find_pattern(self, node, pattern_type):
-        if pattern_type == 'linear_to_chunk':
+        if pattern_type == "linear_to_chunk":
             chunk_info = self._is_chunk(node)
-            if chunk_info.found: 
+            if chunk_info.found:
                 input_node = node.args[0]
                 linear_info = self._is_linear(input_node)
                 if linear_info.found:
@@ -146,7 +212,9 @@ class SegQuantPatternDetector:
 
                     chunk_size = out_features // chunks
                     remainder = out_features % chunks
-                    chunksizes = [chunk_size + (1 if i < remainder else 0) for i in range(chunks)]
+                    chunksizes = [
+                        chunk_size + (1 if i < remainder else 0) for i in range(chunks)
+                    ]
 
                     return {
                         "seg_mode": "weight",
@@ -156,7 +224,7 @@ class SegQuantPatternDetector:
                         "chunksizes": chunksizes,
                     }
 
-        elif pattern_type == 'linear_to_split':
+        elif pattern_type == "linear_to_split":
             split_info = self._is_split(node)
             if split_info.found:
                 input_node = node.args[0]
@@ -179,7 +247,7 @@ class SegQuantPatternDetector:
                         "chunksizes": chunksizes,
                     }
 
-        elif pattern_type == 'concat_to_linear':
+        elif pattern_type == "concat_to_linear":
             linear_info = self._is_linear(node)
             if linear_info.found:
                 input_node = node.args[0]
@@ -199,7 +267,7 @@ class SegQuantPatternDetector:
                         continue
                     break
 
-        elif pattern_type == 'stack_to_linear':
+        elif pattern_type == "stack_to_linear":
             linear_info = self._is_linear(node)
             if linear_info.found:
                 input_node = node.args[0]
@@ -219,7 +287,7 @@ class SegQuantPatternDetector:
                         continue
                     break
 
-        elif pattern_type == 'activation_to_linear':
+        elif pattern_type == "activation_to_linear":
             linear_info = self._is_linear(node)
             if linear_info.found:
                 input_node = node.args[0]
@@ -235,8 +303,13 @@ class SegQuantPatternDetector:
 
         return None
 
-
     def find_all_patterns(self):
+        """
+        Find all patterns in the traced graph based on the specified search patterns.
+        Returns:
+            dict: A dictionary where keys are pattern names
+            and values are lists of matched patterns.
+        """
         patterns = {pattern: [] for pattern in self.search_patterns}
 
         for node in self.traced.graph.nodes:
@@ -248,10 +321,10 @@ class SegQuantPatternDetector:
         return patterns
 
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     from typing import Optional
     from backend.torch.layers.activations import GELU
+
     class MyModel2(nn.Module):
         def __init__(
             self,
@@ -301,9 +374,20 @@ if __name__ == '__main__':
             out = self.linear2(out)
             return out
 
-    search_patterns = ['linear_to_chunk', 'linear_to_split', 'concat_to_linear', 'stack_to_linear', 'activation_to_linear']
-    detector = SegQuantPatternDetector(MyModel2(dim=10), example_inputs=(torch.randn(2, 10),), search_patterns=search_patterns)
+    search_patterns = [
+        "linear_to_chunk",
+        "linear_to_split",
+        "concat_to_linear",
+        "stack_to_linear",
+        "activation_to_linear",
+    ]
+    detector = SegQuantPatternDetector(
+        MyModel2(dim=10),
+        example_inputs=(torch.randn(2, 10),),
+        search_patterns_lst=search_patterns,
+    )
     results = detector.find_all_patterns()
 
     from pprint import pprint
+
     pprint(results)

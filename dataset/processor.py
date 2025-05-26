@@ -1,19 +1,21 @@
-import torch
 import time
-from transformers import DPTFeatureExtractor, DPTForDepthEstimation
-import cv2
-import numpy as np
-from torch.utils.data import Dataset
-from PIL import Image
 from typing import OrderedDict
 import os
 import json
+from PIL import Image
+import numpy as np
+import cv2
+import torch
+from torch.utils.data import Dataset
+from transformers import DPTFeatureExtractor, DPTForDepthEstimation
 from backend.torch.utils import load_image
+
 
 class ControlNetPreprocessor:
     """
     A class to preprocess images for ControlNet input (Canny edges, Depth maps).
     """
+
     def __init__(self, enable_blur, blur_kernel_size, device=None):
         """
         Initializes the preprocessor, loading necessary models.
@@ -32,23 +34,29 @@ class ControlNetPreprocessor:
         # --- Canny Edge Setup ---
         self.canny_low_threshold = 100
         self.canny_high_threshold = 200
-        self.canny_blur_kernel_size = blur_kernel_size # Must be odd
+        self.canny_blur_kernel_size = blur_kernel_size  # Must be odd
         self.enable_blur = enable_blur
 
-        assert self.canny_blur_kernel_size % 2 != 0, "Warning: Blur kernel size must be odd."
+        assert (
+            self.canny_blur_kernel_size % 2 != 0
+        ), "Warning: Blur kernel size must be odd."
         print("Canny edge detector configured.")
 
         # --- Depth Estimation Setup ---
         # Using Intel's DPT model (Dense Prediction Transformer) via Hugging Face
-        depth_model_name = "Intel/dpt-large" # Or try "Intel/dpt-hybrid-midas" for potentially faster/different results
+        depth_model_name = "Intel/dpt-large"  # Or try "Intel/dpt-hybrid-midas" for potentially faster/different results
         print(f"Loading depth estimation model: {depth_model_name}...")
         start_time = time.time()
         try:
-            self.depth_feature_extractor = DPTFeatureExtractor.from_pretrained(depth_model_name)
+            self.depth_feature_extractor = DPTFeatureExtractor.from_pretrained(
+                depth_model_name
+            )
             self.depth_model = DPTForDepthEstimation.from_pretrained(depth_model_name)
             self.depth_model.to(self.device)
-            self.depth_model.eval() # Set model to evaluation mode
-            print(f"Depth model loaded to {self.device} in {time.time() - start_time:.2f} seconds.")
+            self.depth_model.eval()  # Set model to evaluation mode
+            print(
+                f"Depth model loaded to {self.device} in {time.time() - start_time:.2f} seconds."
+            )
         except Exception as e:
             print(f"Error loading depth model: {e}")
             print("Please ensure 'transformers' and 'torch' are installed correctly.")
@@ -81,14 +89,18 @@ class ControlNetPreprocessor:
         if self.enable_blur:
             kernel_size = (self.canny_blur_kernel_size, self.canny_blur_kernel_size)
             image_blurred = cv2.GaussianBlur(image_gray, kernel_size, 0)
-            edges = cv2.Canny(image_blurred, self.canny_low_threshold, self.canny_high_threshold)
+            edges = cv2.Canny(
+                image_blurred, self.canny_low_threshold, self.canny_high_threshold
+            )
         else:
-            edges = cv2.Canny(image_gray, self.canny_low_threshold, self.canny_high_threshold)
-            
+            edges = cv2.Canny(
+                image_gray, self.canny_low_threshold, self.canny_high_threshold
+            )
+
         # ControlNet often expects edges as white lines on black background
         # Invert if needed (some models might expect black lines on white)
         # edges = 255 - edges
-        return Image.fromarray(edges).convert("L") # Ensure grayscale PIL image
+        return Image.fromarray(edges).convert("L")  # Ensure grayscale PIL image
 
     def get_depth_map(self, image: Image.Image) -> Image.Image | None:
         """
@@ -105,7 +117,7 @@ class ControlNetPreprocessor:
         if not isinstance(image, Image.Image):
             raise TypeError("Input must be a PIL Image.")
 
-        original_size = image.size # W, H
+        original_size = image.size  # W, H
 
         # Prepare image for the model
         inputs = self.depth_feature_extractor(images=image, return_tensors="pt")
@@ -114,13 +126,13 @@ class ControlNetPreprocessor:
         # Inference
         with torch.no_grad():
             outputs = self.depth_model(pixel_values)
-            predicted_depth = outputs.predicted_depth # This is raw output (logits)
+            predicted_depth = outputs.predicted_depth  # This is raw output (logits)
 
         # Interpolate prediction to original image size
         # Note: PIL size is (W, H), interpolate expects (H, W)
         prediction = torch.nn.functional.interpolate(
             predicted_depth.unsqueeze(1),
-            size=original_size[::-1], # Reverse to (H, W)
+            size=original_size[::-1],  # Reverse to (H, W)
             mode="bicubic",
             align_corners=False,
         )
@@ -131,11 +143,15 @@ class ControlNetPreprocessor:
         formatted = (output - np.min(output)) / (np.max(output) - np.min(output))
         # Scale to 0-255 and convert to uint8 grayscale image
         depth_map_np = (formatted * 255).astype(np.uint8)
-        depth_map_image = Image.fromarray(depth_map_np).convert("L") # Ensure grayscale PIL image
+        depth_map_image = Image.fromarray(depth_map_np).convert(
+            "L"
+        )  # Ensure grayscale PIL image
 
         return depth_map_image
 
-    def process(self, cn_type, image: Image.Image) -> tuple[Image.Image | None, Image.Image | None]:
+    def process(
+        self, cn_type, image: Image.Image
+    ) -> tuple[Image.Image | None, Image.Image | None]:
         """
         Generates both Canny edge map and depth map for the input image.
         Args:
@@ -143,13 +159,14 @@ class ControlNetPreprocessor:
         Returns:
             tuple[Image.Image | None, Image.Image | None]: (canny_map, depth_map)
         """
-        if cn_type == 'canny':
+        if cn_type == "canny":
             res_map = self.get_canny_map(image)
-        elif cn_type == 'depth':
+        elif cn_type == "depth":
             res_map = self.get_depth_map(image)
         else:
             print("Type does not exist")
         return res_map
+
 
 class LimitedCache:
     def __init__(self, max_size):
@@ -167,6 +184,7 @@ class LimitedCache:
                 self.cache.popitem(last=False)
             return value
 
+
 class CaptionControlDataset(Dataset):
     @staticmethod
     def collate_fn(batch):
@@ -175,7 +193,7 @@ class CaptionControlDataset(Dataset):
     def __init__(self, path, cache_size=1024):
         super().__init__()
         self.base_path = path
-        with open(os.path.join(path, 'metadata.json'), "r") as f:
+        with open(os.path.join(path, "metadata.json"), "r") as f:
             self.metadata = json.load(f)
 
         self.image_cache = LimitedCache(cache_size)
@@ -201,5 +219,5 @@ class CaptionControlDataset(Dataset):
             batch_size=batch_size,
             shuffle=shuffle,
             collate_fn=self.collate_fn,
-            **kwargs
+            **kwargs,
         )

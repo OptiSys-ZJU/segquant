@@ -3,11 +3,24 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from backend.torch.utils.deprecation_utils import deprecate
-from backend.torch.layers.normalization import AdaLayerNormZero, AdaLayerNormContinuous, SD35AdaLayerNormZeroX
+from backend.torch.layers.normalization import (
+    AdaLayerNormZero,
+    AdaLayerNormContinuous,
+    SD35AdaLayerNormZeroX,
+)
 from backend.torch.layers.attention_processor import Attention, JointAttnProcessor2_0
-from backend.torch.layers.activations import GEGLU, GELU, ApproximateGELU, LinearActivation, SwiGLU
+from backend.torch.layers.activations import (
+    GEGLU,
+    GELU,
+    ApproximateGELU,
+    LinearActivation,
+    SwiGLU,
+)
 
-def _chunked_feed_forward(ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int):
+
+def _chunked_feed_forward(
+    ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int
+):
     # "feed_forward_chunk_size" can be used to save memory
     if hidden_states.shape[chunk_dim] % chunk_size != 0:
         raise ValueError(
@@ -20,6 +33,7 @@ def _chunked_feed_forward(ff: nn.Module, hidden_states: torch.Tensor, chunk_dim:
         dim=chunk_dim,
     )
     return ff_output
+
 
 class FeedForward(nn.Module):
     r"""
@@ -111,7 +125,9 @@ class JointTransformerBlock(nn.Module):
 
         self.use_dual_attention = use_dual_attention
         self.context_pre_only = context_pre_only
-        context_norm_type = "ada_norm_continous" if context_pre_only else "ada_norm_zero"
+        context_norm_type = (
+            "ada_norm_continous" if context_pre_only else "ada_norm_zero"
+        )
 
         if use_dual_attention:
             self.norm1 = SD35AdaLayerNormZeroX(dim)
@@ -120,7 +136,12 @@ class JointTransformerBlock(nn.Module):
 
         if context_norm_type == "ada_norm_continous":
             self.norm1_context = AdaLayerNormContinuous(
-                dim, dim, elementwise_affine=False, eps=1e-6, bias=True, norm_type="layer_norm"
+                dim,
+                dim,
+                elementwise_affine=False,
+                eps=1e-6,
+                bias=True,
+                norm_type="layer_norm",
             )
         elif context_norm_type == "ada_norm_zero":
             self.norm1_context = AdaLayerNormZero(dim)
@@ -170,7 +191,9 @@ class JointTransformerBlock(nn.Module):
 
         if not context_pre_only:
             self.norm2_context = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
-            self.ff_context = FeedForward(dim=dim, dim_out=dim, activation_fn="gelu-approximate")
+            self.ff_context = FeedForward(
+                dim=dim, dim_out=dim, activation_fn="gelu-approximate"
+            )
         else:
             self.norm2_context = None
             self.ff_context = None
@@ -194,18 +217,30 @@ class JointTransformerBlock(nn.Module):
     ):
         joint_attention_kwargs = joint_attention_kwargs or {}
         if self.use_dual_attention:
-            norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp, norm_hidden_states2, gate_msa2 = self.norm1(
+            (
+                norm_hidden_states,
+                gate_msa,
+                shift_mlp,
+                scale_mlp,
+                gate_mlp,
+                norm_hidden_states2,
+                gate_msa2,
+            ) = self.norm1(hidden_states, emb=temb)
+        else:
+            norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(
                 hidden_states, emb=temb
             )
-        else:
-            norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
 
         if self.context_pre_only:
             norm_encoder_hidden_states = self.norm1_context(encoder_hidden_states, temb)
         else:
-            norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
-                encoder_hidden_states, emb=temb
-            )
+            (
+                norm_encoder_hidden_states,
+                c_gate_msa,
+                c_shift_mlp,
+                c_scale_mlp,
+                c_gate_mlp,
+            ) = self.norm1_context(encoder_hidden_states, emb=temb)
 
         # Attention.
         attn_output, context_attn_output = self.attn(
@@ -219,15 +254,21 @@ class JointTransformerBlock(nn.Module):
         hidden_states = hidden_states + attn_output
 
         if self.use_dual_attention:
-            attn_output2 = self.attn2(hidden_states=norm_hidden_states2, **joint_attention_kwargs)
+            attn_output2 = self.attn2(
+                hidden_states=norm_hidden_states2, **joint_attention_kwargs
+            )
             attn_output2 = gate_msa2.unsqueeze(1) * attn_output2
             hidden_states = hidden_states + attn_output2
 
         norm_hidden_states = self.norm2(hidden_states)
-        norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+        norm_hidden_states = (
+            norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+        )
         if self._chunk_size is not None:
             # "feed_forward_chunk_size" can be used to save memory
-            ff_output = _chunked_feed_forward(self.ff, norm_hidden_states, self._chunk_dim, self._chunk_size)
+            ff_output = _chunked_feed_forward(
+                self.ff, norm_hidden_states, self._chunk_dim, self._chunk_size
+            )
         else:
             ff_output = self.ff(norm_hidden_states)
         ff_output = gate_mlp.unsqueeze(1) * ff_output
@@ -242,14 +283,22 @@ class JointTransformerBlock(nn.Module):
             encoder_hidden_states = encoder_hidden_states + context_attn_output
 
             norm_encoder_hidden_states = self.norm2_context(encoder_hidden_states)
-            norm_encoder_hidden_states = norm_encoder_hidden_states * (1 + c_scale_mlp[:, None]) + c_shift_mlp[:, None]
+            norm_encoder_hidden_states = (
+                norm_encoder_hidden_states * (1 + c_scale_mlp[:, None])
+                + c_shift_mlp[:, None]
+            )
             if self._chunk_size is not None:
                 # "feed_forward_chunk_size" can be used to save memory
                 context_ff_output = _chunked_feed_forward(
-                    self.ff_context, norm_encoder_hidden_states, self._chunk_dim, self._chunk_size
+                    self.ff_context,
+                    norm_encoder_hidden_states,
+                    self._chunk_dim,
+                    self._chunk_size,
                 )
             else:
                 context_ff_output = self.ff_context(norm_encoder_hidden_states)
-            encoder_hidden_states = encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
+            encoder_hidden_states = (
+                encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
+            )
 
         return encoder_hidden_states, hidden_states

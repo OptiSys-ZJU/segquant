@@ -1,8 +1,11 @@
 __pycache__/
 .vscode/
+dist/
+affine_pics/
+*.egg-info/
 *.jpg
 *.svg
 *.pdf
 *.png
 *.log
-affine_pics/
+.pylintrc
