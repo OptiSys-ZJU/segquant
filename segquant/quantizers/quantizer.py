@@ -8,7 +8,7 @@ as well as a registry for dynamically registering and retrieving quantizer class
 from abc import ABC, abstractmethod
 from typing import Union
 import torch
-from segquant.utils.extension import load_fake_quant_fp8_ext
+from segquant.utils.extension import load_fake_quant_fp8_ext, load_real_quant_fp8_ext
 
 
 class BaseQuantizer(ABC):
@@ -441,51 +441,13 @@ class FloatQuantizer(BaseQuantizer):
         x_dequant[zero_mask] = 0.0
         return x_dequant.to(x.dtype)
 
-    def _real_quantize(self, x: torch.Tensor) -> tuple[torch.Tensor, float | tuple[float, float]]:
-        if self.dual_scale:
-            if self.axis is not None:
-                shape = [1] * x.dim()
-                shape[self.axis] = -1
-                pos_scale = self.pos_scale.view(shape)
-                neg_scale = self.neg_scale.view(shape)
-            else:
-                pos_scale = self.pos_scale
-                neg_scale = self.neg_scale
-
-            x_scaled = torch.where(x >= 0, x * pos_scale, x * neg_scale)
-
-            if self.exp_bits == 4 and self.mant_bits == 3:
-                x_quant = self._simulate_e4m3(
-                    x_scaled, self.fp_min, self.fp_max, self.mant_bits
-                )
-            else:
-                raise NotImplementedError(
-                    "Real quantization for non-e4m3 formats is not implemented."
-                )
-
-            return (x_quant, (pos_scale, neg_scale))
-        else:
-            if self.axis is not None:
-                shape = [1] * x.dim()
-                shape[self.axis] = -1
-                scale = self.scale.view(shape)
-            else:
-                scale = self.scale
-
-            x_scaled = x * scale
-            if self.exp_bits == 4 and self.mant_bits == 3:
-                x_quant = self._simulate_e4m3(
-                    x_scaled, self.fp_min, self.fp_max, self.mant_bits
-                )
-            else:
-                raise NotImplementedError(
-                    "Real quantization for non-e4m3 formats is not implemented."
-                )
-            return (x_quant, scale)
-
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
         if self.real_quant:
-            return 0
+            # when real quantization is enabled, only weights are quantized
+            ext = load_real_quant_fp8_ext(required=False)
+            if ext is not None:
+                assert not self.dual_scale, "Weight quantization does not support dual scale."
+                return ext.real_quantized_e4m3fy_quantize_weights(x, self.scale)
 
         # fake quantization
         return self._fake_quantize(x)
@@ -494,11 +456,13 @@ class FloatQuantizer(BaseQuantizer):
         if self.dual_scale:
             return (
                 f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
+                f"real_quant={self.real_quant}, "
                 f"axis={self.axis}, dual_scale=True, "
                 f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})"
             )
         return (
             f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
+            f"real_quant={self.real_quant}, "
             f"axis={self.axis}, dual_scale=False, "
             f"amax={self.amax:.4f})"
         )

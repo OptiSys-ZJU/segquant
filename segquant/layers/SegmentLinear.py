@@ -2,11 +2,12 @@ import copy
 from typing import Literal
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from segquant.calibrator.calibrator import DefaultCalibrator, SmoothQuantCalibrator
 from segquant.config import DType, Optimum
 from segquant.layers.splitter import BaseSplitter
 from segquant.quantizers.quantizer import QuantizerRegistry
-
+from segquant.utils.extension import load_real_quant_fp8_ext
 
 class BaseSegmentLinear(nn.Module):
     def __init__(
@@ -110,12 +111,28 @@ class DefaultSegmentLinear(BaseSegmentLinear):
         )
 
         if input_quant_type is not None:
+            if 'real_quant' in input_quant_args:
+                self.real_quant = input_quant_args['real_quant']
+            else:
+                self.real_quant = False
+            if 'dual_scale' in input_quant_args:
+                self.dual_scale = input_quant_args['dual_scale']
+            else:
+                self.dual_scale = False
             input_gen = lambda: QuantizerRegistry.create(
                 input_quant_type, **(input_quant_args or {})
             )
         else:
             input_gen = lambda: None
         if weight_quant_type is not None:
+            if 'real_quant' in weight_quant_args:
+                assert self.real_quant and weight_quant_args['real_quant'], \
+                    "If input quantizer is real quant, weight quantizer must also be real quant."
+            if 'dual_scale' in weight_quant_args:
+                raise ValueError(
+                    "Dual scale is not supported for weight quantizer in DefaultSegmentLinear."
+                )
+
             weight_gen = lambda: QuantizerRegistry.create(
                 weight_quant_type, **(weight_quant_args or {})
             )
@@ -132,6 +149,11 @@ class DefaultSegmentLinear(BaseSegmentLinear):
         self.calibrator = DefaultCalibrator(
             self.input_quantizers, self.weight_quantizers
         )
+
+        if self.real_quant:
+            self.ext = load_real_quant_fp8_ext(required=False)
+            if self.ext is None:
+                self.real_quant = False
 
     def __repr__(self):
         base = (
@@ -171,65 +193,62 @@ class DefaultSegmentLinear(BaseSegmentLinear):
 
     def finish_calibrate(self):
         quantized_weight = self.calibrator.quantize_weight()
-        if self.seg_mode == "weight":
-            self.linear.weight = nn.Parameter(
-                self.splitter.concat_weight(quantized_weight)
-            )
-            layers, bias = BaseSegmentLinear.split_linear(
-                self.linear, [self.linear.in_features]
-            )
-            del self.linear
-            self.linear = (layers, bias)
-        else:
-            self.linear.weight = nn.Parameter(quantized_weight[0])
-            layers, bias = BaseSegmentLinear.split_linear(self.linear, self.chunksizes)
-            del self.linear
-            self.linear = (layers, bias)
-
+        if self.seg_mode == "input":
+            assert len(quantized_weight) == 1
+            # input mode, weights should also be split
+            quantized_weight = quantized_weight[0].split(self.chunksizes, dim=1s)
+        bias = self.linear.bias.clone() if self.linear.bias is not None else None
+        del self.linear
+        self.linear = (quantized_weight, bias)
         self.has_calibrated = True
 
     def forward(self, x):
         if self.seg_mode == "input":
-            input = self.splitter.split_input(x)
+            input_chunks = self.splitter.split_input(x)
         elif self.seg_mode == "weight":
-            input = [x]
+            input_chunks = [x]
+        else:
+            raise ValueError("seg_mode not found")
 
-        quantized_input = self.calibrator.quantize(input)
-        layers, bias = self.linear
+        quantized_weights, bias = self.linear
         if self.seg_mode == "weight":
-            assert len(layers) == 1
-            quantized_output = layers[0](quantized_input[0])
-            quantized_output_chunks = self.splitter.split_output(quantized_output)
-
-            output_chunks = []
-            if False:
-                pass
-                # for weight_q, quantized_output_chunk in zip(self.weight_quantizers, quantized_output_chunks):
-                #     output_chunks.append(FakeQuantizer.dequantize(quantized_output_chunk, self.input_quantizers[0], weight_q, None, None))
+            if self.real_quant:
+                if self.dual_scale:
+                    output_chunks = [self.ext.real_quantized_e4m3fy_gemm_dual_scaled(
+                        input_chunks[0], quantized_weights[i], 
+                        self.input_quantizers[0].pos_scale, self.input_quantizers[0].neg_scale,
+                        self.weight_quantizers[i].scale) for i in range(self.chunks)]
+                else:
+                    output_chunks = [self.ext.real_quantized_e4m3fy_gemm_scaled(
+                        input_chunks[0], quantized_weights[i],
+                        self.input_quantizers[0].scale, self.weight_quantizers[i].scale)
+                        for i in range(self.chunks)]
             else:
-                output_chunks = quantized_output_chunks
+                quantized_input = self.calibrator.quantize(input_chunks)
+                output_chunks = [F.linear(quantized_input[0],quantized_weights[i])
+                                 for i in range(self.chunks)]
 
-            return (
-                self.splitter.concat_output(output_chunks) + bias
-                if bias is not None
-                else self.splitter.concat_output(output_chunks)
-            )
+            res = self.splitter.concat_output(output_chunks)
+            return (res + bias if bias is not None else res)
 
         if self.seg_mode == "input":
-            quantized_output_chunks = []
-            for quantized_input_chunk, layer in zip(quantized_input, layers):
-                quantized_output_chunk = layer(quantized_input_chunk)
-                quantized_output_chunks.append(quantized_output_chunk)
-
-            res = torch.zeros_like(quantized_output_chunks[0])
-            for input_q, quantized_output_chunk in zip(
-                self.input_quantizers, quantized_output_chunks
-            ):
-                if False:
-                    pass
-                    # res += FakeQuantizer.dequantize(quantized_output_chunk, input_q, self.weight_quantizers[0], None, None)
+            if self.real_quant:
+                if self.dual_scale:
+                    quantized_output_chunks = [self.ext.real_quantized_e4m3fy_gemm_dual_scaled(
+                        input_chunks[i], quantized_weights[i], 
+                        self.input_quantizers[i].pos_scale, self.input_quantizers[i].neg_scale,
+                        self.weight_quantizers[0].scale)
+                        for i in range(self.chunks)]
                 else:
-                    res += quantized_output_chunk
+                    quantized_output_chunks = [self.ext.real_quantized_e4m3fy_gemm_scaled(
+                        input_chunks[i], quantized_weights[i],
+                        self.input_quantizers[i].scale, self.weight_quantizers[0].scale)
+                        for i in range(self.chunks)]
+            else:
+                quantized_input = self.calibrator.quantize(input_chunks)
+                quantized_output_chunks = [F.linear(quantized_input[i],quantized_weights[i])
+                                        for i in range(self.chunks)]
+            res = sum(quantized_output_chunks)
             return res + bias if bias is not None else res
 
 
@@ -428,42 +447,3 @@ def create_segment_linear(
         weight_quant_type=weight_dtype.value,
         **kwargs,
     )
-
-
-if __name__ == "__main__":
-    weight = torch.randn(4, 6)
-    print(weight)
-    linear = nn.Linear(in_features=6, out_features=4, bias=False)
-    linear.weight = nn.Parameter(weight)
-    model1 = DefaultSegmentLinear(
-        in_features=6,
-        out_features=4,
-        bias=False,
-        seg_mode="input",
-        chunks=3,
-        chunksizes=[3, 2, 1],
-        input_quant_type="int8",
-        weight_quant_type="int8",
-        custom_weight_tensor=copy.deepcopy(weight),
-    )
-    model2 = SmoothQuantSegmentLinear(
-        in_features=6,
-        out_features=4,
-        bias=False,
-        seg_mode="input",
-        chunks=3,
-        chunksizes=[3, 2, 1],
-        input_quant_type="int8",
-        weight_quant_type="int8",
-        custom_weight_tensor=copy.deepcopy(weight),
-    )
-    x = torch.randn(2, 6)
-    print("Input:\n", x)
-    y = linear(x)
-    print("Real:\n", y)
-    model1.calibrate([x, torch.randn(2, 6)])
-    z = model1(x)
-    print("Quant:\n", z)
-    model2.calibrate([x, torch.randn(2, 6)])
-    s = model2(x)
-    print("Smooth:\n", s)

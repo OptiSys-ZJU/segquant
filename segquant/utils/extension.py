@@ -62,3 +62,22 @@ def load_fake_quant_fp8_ext(verbose=False, required=False):
         verbose=verbose,
         required=required,
     )
+
+def load_real_quant_fp8_ext(verbose=False, required=False):
+    """
+    Load the real quantization extension for FP8 quantization.
+    Args:
+        verbose (bool): If True, prints additional information during loading.
+        required (bool): If True, raises an error if the extension fails to load.
+    Returns:
+        module: The loaded extension object, or None if it fails to load and `required` is False.
+    """
+    return load_extension(
+        name="segquant_real_quant_fp8",
+        sources=[
+            "segquant/src/real_quant/quantizer_fp8.cpp",
+            "segquant/src/real_quant/quantized_fp8_gemm.cpp",
+        ],
+        verbose=verbose,
+        required=required,
+    )
