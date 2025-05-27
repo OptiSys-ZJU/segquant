@@ -161,16 +161,8 @@ class SegQuantPatternDetector:
                 if isinstance(tensor_list, (list, tuple)):
                     chunksizes = []
                     for tensor in tensor_list:
-<<<<<<< HEAD
-                        if hasattr(tensor, 'meta'):
-                            # Handle meta as dictionary (common in FakeTensorProp)
-                            if isinstance(tensor.meta, dict) and 'val' in tensor.meta:
-                                shape = tensor.meta['val'].shape
-                                chunksizes.append(shape[1])
-=======
                         shape = tensor.meta["tensor_meta"].shape
                         chunksizes.append(shape[1])
->>>>>>> d81aca6dc1d28d0a78387b9e2c3d3eac34e174c2
                     return ConcatInfo(True, chunksizes)
         return ConcatInfo(False, None)
 

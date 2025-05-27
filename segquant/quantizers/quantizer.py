@@ -457,10 +457,7 @@ class FloatQuantizer(BaseQuantizer):
 
 @QuantizerRegistry.register("int16")
 def int16_factory():
-<<<<<<< HEAD
-=======
     """Factory function for creating an IntQuantizer with 16 bits."""
->>>>>>> d81aca6dc1d28d0a78387b9e2c3d3eac34e174c2
     return IntQuantizer(num_bits=16)
 
 

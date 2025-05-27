@@ -1,7 +1,4 @@
-<<<<<<< HEAD
-=======
 import os
->>>>>>> d81aca6dc1d28d0a78387b9e2c3d3eac34e174c2
 import torch
 from torch import nn
 from benchmark import trace_pic
@@ -40,9 +37,49 @@ quant_config = {
 }
 
 
+def quant_or_load(model_target_path, target_config, dataset):
+    # if model_target_path not exist, quantize model
+    if not os.path.exists(model_target_path):
+        print(f"[INFO] {model_target_path} not found, start quantizing...")
+
+        model = StableDiffusion3ControlNetModel.from_repo(
+            ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
+            "cuda:0",
+        )
+        # decide to quant, transfer to cpu for saving
+        target_model = quant_model(
+            model, "dit", target_config, dataset, calib_args
+        ).to("cpu")
+        # save model
+        os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
+        torch.save(target_model.transformer, model_target_path)
+        print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
+    # if model_target_path exist, load model
+    else:
+        print(f"[INFO] {model_target_path} found, start loading...")
+        target_model = StableDiffusion3ControlNetModel.from_repo(
+            ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
+            "cpu",
+        )
+        target_model.transformer = torch.load(model_target_path, weights_only=False)
+
+    return target_model
+
+
 def quant_model(
     model_real: nn.Module, quant_layer: str, config, dataset, calibargs: dict
 ) -> nn.Module:
+    """
+    quantize model
+    Args:
+        model_real: real model
+        quant_layer: quant layer
+        config: config
+        dataset: dataset
+        calibargs: calib args
+    Returns:
+        quantized model
+    """
     calib_key = (
         f"maxT{calibargs['max_timestep']}_"
         f"sz{calibargs['sample_size']}_"
@@ -51,7 +88,7 @@ def quant_model(
         f"gs{calibargs['guidance_scale']}_"
         f"{'shuffle' if calibargs['shuffle'] else 'noshuffle'}"
     )
-    calibset_path = os.path.join("calibset_record", quant_layer, calib_key)
+    calibset_path = os.path.join("../segquant/calibset_record", quant_layer, calib_key)
     sampler = QDiffusionSampler()
     sample_dataloader = dataset.get_dataloader(
         batch_size=1, shuffle=calibargs["shuffle"]
@@ -82,7 +119,7 @@ def quant_model(
 
 
 def run_seg_module():
-    root_dir = "benchmark_record/run_seg_module"
+    root_dir = "../segquant/benchmark_record/run_seg_module"
     os.makedirs(root_dir, exist_ok=True)
 
     dataset = COCODataset(
@@ -90,14 +127,19 @@ def run_seg_module():
     )
 
     max_timestep = 50
-    max_num = 1024
+    # need to adjust according to the dataset size
+    max_num = 1
 
-    ### 0
+    # oad model
     model_real = StableDiffusion3ControlNetModel.from_repo(
         ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
     )
     model_real = model_real.to("cuda")
+    
+    # load latent
     latents = torch.load("../latents.pt")
+
+    # find if real pics exist, create if not
     pic_path = os.path.join(root_dir, "pics/real")
     if not os.path.exists(pic_path):
         print(f"[INFO] generating pics in [{pic_path}]...")
@@ -115,36 +157,13 @@ def run_seg_module():
     else:
         print(f"[INFO] found pics in [{pic_path}], skip")
 
-    def quant_or_load(model_target_path, target_config):
-        if not os.path.exists(model_target_path):
-            print(f"[INFO] {model_target_path} not found, start quantizing...")
-
-            model = StableDiffusion3ControlNetModel.from_repo(
-                ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-                "cuda:0",
-            )
-            target_model = quant_model(
-                model, "dit", target_config, dataset, calib_args
-            ).to("cpu")
-
-            os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
-            torch.save(target_model.transformer, model_target_path)
-            print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
-        else:
-            print(f"[INFO] {model_target_path} found, start loading...")
-            target_model = StableDiffusion3ControlNetModel.from_repo(
-                ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-                "cpu",
-            )
-            target_model.transformer = torch.load(model_target_path, weights_only=False)
-
-        return target_model
-
-    ### 1
+    # quantize or load model
     model_quant_path = os.path.join(root_dir, "model/dit/model_quant.pt")
-    model_quant = quant_or_load(model_quant_path, quant_config)
+    model_quant = quant_or_load(model_quant_path, quant_config, dataset)
     model_quant = model_quant.to("cuda")
     latents = torch.load("../latents.pt")
+
+    # generate quant pics
     trace_pic(
         model_quant,
         os.path.join(root_dir, "pics/quant"),
@@ -155,10 +174,13 @@ def run_seg_module():
         guidance_scale=calib_args["guidance_scale"],
         num_inference_steps=max_timestep,
     )
+
+    # delete model
     del model_quant
+
     print("model_quant completed")
 
-    ### 2
+    # quantize model with seg
     quant_config_with_seg = {
         "default": {
             "enable": True,
@@ -173,7 +195,7 @@ def run_seg_module():
         },
     }
     model_quant_seg_path = os.path.join(root_dir, "model/dit/model_quant_seg.pt")
-    model_quant_seg = quant_or_load(model_quant_seg_path, quant_config_with_seg)
+    model_quant_seg = quant_or_load(model_quant_seg_path, quant_config_with_seg, dataset)
     model_quant_seg = model_quant_seg.to("cuda")
     latents = torch.load("../latents.pt")
     trace_pic(
@@ -191,7 +213,7 @@ def run_seg_module():
 
 
 def run_dual_scale_module():
-    root_dir = "benchmark_record/run_dual_scale_module"
+    root_dir = "../segquant/benchmark_record/run_dual_scale_module"
     os.makedirs(root_dir, exist_ok=True)
 
     dataset = COCODataset(
@@ -201,55 +223,7 @@ def run_dual_scale_module():
     max_timestep = 50
     max_num = 1024
 
-    # ### 0
-    # model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
-    # model_real = model_real.to('cuda')
-    # latents = torch.load('../latents.pt')
-    # pic_path = os.path.join(root_dir, 'pics/real')
-    # if not os.path.exists(pic_path):
-    #     print(f'[INFO] generating pics in [{pic_path}]...')
-    #     trace_pic(model_real, pic_path, dataset.get_dataloader(), latents, max_num=max_num,
-    #             controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
-    #     print('model_real completed')
-    # else:
-    #     print(f'[INFO] found pics in [{pic_path}], skip')
-
-    def quant_or_load(model_target_path, target_config):
-        if not os.path.exists(model_target_path):
-            print(f"[INFO] {model_target_path} not found, start quantizing...")
-
-            model = StableDiffusion3ControlNetModel.from_repo(
-                ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-                "cuda:0",
-            )
-            target_model = quant_model(
-                model, "dit", target_config, dataset, calib_args
-            ).to("cpu")
-
-            os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
-            torch.save(target_model.transformer, model_target_path)
-            print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
-        else:
-            print(f"[INFO] {model_target_path} found, start loading...")
-            target_model = StableDiffusion3ControlNetModel.from_repo(
-                ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-                "cpu",
-            )
-            target_model.transformer = torch.load(model_target_path, weights_only=False)
-
-        return target_model
-
-    # ### 1
-    # model_quant_path = os.path.join(root_dir, 'model/dit/model_quant.pt')
-    # model_quant = quant_or_load(model_quant_path, quant_config)
-    # model_quant = model_quant.to('cuda')
-    # latents = torch.load('../latents.pt')
-    # trace_pic(model_quant, os.path.join(root_dir, 'pics/quant'), dataset.get_dataloader(), latents, max_num=max_num,
-    #           controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
-    # del model_quant
-    # print('model_quant completed')
-
-    ### 2
+    # quantize model with dual scale
     quant_config_with_dual_scale = {
         "default": {
             "enable": True,
@@ -267,7 +241,7 @@ def run_dual_scale_module():
         root_dir, "model/dit/model_quant_dual_scale.pt"
     )
     model_quant_dual_scale = quant_or_load(
-        model_quant_dual_scale_path, quant_config_with_dual_scale
+        model_quant_dual_scale_path, quant_config_with_dual_scale, dataset
     )
     model_quant_dual_scale = model_quant_dual_scale.to("cuda")
     latents = torch.load("../latents.pt")
@@ -298,7 +272,7 @@ def run_affiner_module():
         ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
     )
     model_quant.transformer = torch.load(
-        "benchmark_record/run_seg_module/model/dit/model_quant_seg.pt",
+        "../segquant/benchmark_record/run_seg_module/model/dit/model_quant_seg.pt",
         weights_only=False,
     )
     model_real = StableDiffusion3ControlNetModel.from_repo(
@@ -370,4 +344,5 @@ def run_affiner_module():
 
 
 if __name__ == "__main__":
-    run_dual_scale_module()
+    #run_dual_scale_module()
+    run_seg_module()
