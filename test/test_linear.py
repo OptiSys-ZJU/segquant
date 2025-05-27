@@ -144,8 +144,8 @@ def test_default_int8():
     ######################################
     CFG = {
         "quant_cfg": {
-            "*weight_quantizer": {"num_bits": 8, "axis": None},
-            "*input_quantizer": {"num_bits": 8, "axis": None},
+            "*weight_quantizer": {"num_bits": 8, "axis": None,},
+            "*input_quantizer": {"num_bits": 8, "axis": None,},
             # "linear.weight_quantizer": {
             #     "num_bits": 8,
             #     "block_sizes": {0: 10},
