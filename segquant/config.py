@@ -69,6 +69,7 @@ default_quantize_config = {
         "weight_dtype": DType.INT8,
         "opt": Optimum.SMOOTH,
         "seglinear": True,
+        "real_quant": False,
         "input_axis": None,
         "weight_axis": None,
         "search_patterns": SegPattern.all(),

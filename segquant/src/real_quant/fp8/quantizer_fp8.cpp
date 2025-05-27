@@ -5,11 +5,9 @@
 at::Tensor real_quantized_e4m3fy_quantize_weights(at::Tensor weights, float scale_w);
 
 at::Tensor real_quantized_e4m3fy_gemm_scaled(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
-at::Tensor real_quantized_e4m3fy_gemm_scaled(at::Tensor inputs, at::Tensor weights, at::Tensor bias, float scale_x, float scale_w);
  
 at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w);
-at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights, at::Tensor bias, float pos_scale_x, float neg_scale_x, float scale_w);
- 
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("real_quantized_e4m3fy_quantize_weights",
         &real_quantized_e4m3fy_quantize_weights,
@@ -20,12 +18,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("real_quantized_e4m3fy_gemm_scaled",
         [](at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w) {
-            // if (bias.defined()) {
-            //     return real_quantized_e4m3fy_gemm_scaled(inputs, weights, bias, scale_x, scale_w);
-            // }
-            // else {
-            //     return real_quantized_e4m3fy_gemm_scaled(inputs, weights, scale_x, scale_w);
-            // }
             return real_quantized_e4m3fy_gemm_scaled(inputs, weights, scale_x, scale_w);
         },
         "Run scaled FP8 GEMM with E4M3 quantization",
@@ -37,12 +29,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("real_quantized_e4m3fy_gemm_dual_scaled",
         [](at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w) {
-            // if (bias.defined()) {
-            //     return real_quantized_e4m3fy_gemm_scaled(inputs, weights, bias, pos_scale_x, neg_scale_x, scale_w);
-            // }
-            // else {
-            //     return real_quantized_e4m3fy_gemm_scaled(inputs, weights, pos_scale_x, neg_scale_x, scale_w);
-            // }
             return real_quantized_e4m3fy_gemm_scaled(inputs, weights, pos_scale_x, neg_scale_x, scale_w);
         },
         "Run dual scaled FP8 GEMM with E4M3 quantization",

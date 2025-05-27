@@ -75,8 +75,8 @@ def load_real_quant_fp8_ext(verbose=False, required=False):
     return load_extension(
         name="segquant_real_quant_fp8",
         sources=[
-            "segquant/src/real_quant/quantizer_fp8.cpp",
-            "segquant/src/real_quant/quantized_fp8_gemm.cpp",
+            "segquant/src/real_quant/fp8/quantizer_fp8.cpp",
+            "segquant/src/real_quant/fp8/quantized_fp8_gemm.cpp",
         ],
         verbose=verbose,
         required=required,

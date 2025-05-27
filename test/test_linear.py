@@ -138,6 +138,52 @@ def test_default_fp8():
     res = segquant_model.forward(x, emb)
     print("segquant:", res)
 
+def test_default_fp8_real():
+    test_model = TestModel()
+    ######################################
+    CFG = {
+        "quant_cfg": {
+            "*weight_quantizer": {"num_bits": (4, 3), "axis": None},
+            "*input_quantizer": {"num_bits": (4, 3), "axis": None},
+        },
+        "algorithm": "max",
+    }
+    modelopt_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
+    mtq.print_quant_summary(modelopt_model)
+    ######################################
+    config = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.FP8E4M3,
+            "weight_dtype": DType.FP8E4M3,
+            "opt": Optimum.DEFAULT,
+            "seglinear": True,
+            "search_patterns": [],
+            "real_quant": True,
+            "input_axis": None,
+            "weight_axis": None,
+        },
+    }
+    segquant_model = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config,
+        True,
+        example=(torch.rand(2, 10), torch.rand(2, 10)),
+    )
+    ######################################
+    x_generator = torch.Generator()
+    x_generator.manual_seed(1234)
+    x = torch.rand(2, 10, generator=x_generator)
+    emb = torch.rand(2, 10, generator=x_generator)
+    res = test_model.forward(x, emb)
+    print("origin:", res)
+    res = modelopt_model.forward(x, emb)
+    print("modelopt:", res)
+    res = segquant_model.forward(x, emb)
+    print("segquant:", res)
+
+
 
 def test_default_int8():
     test_model = TestModel()

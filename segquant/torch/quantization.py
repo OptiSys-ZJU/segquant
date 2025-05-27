@@ -8,7 +8,7 @@ import fnmatch
 import torch
 from torch import nn
 from tqdm import tqdm
-from segquant.config import default_quantize_config
+from segquant.config import DType, Optimum, default_quantize_config
 from segquant.layers.SegmentLinear import create_segment_linear
 from segquant.pattern_detector import SegQuantPatternDetector
 
@@ -22,33 +22,40 @@ def _move_to_device(batch, device):
         return {k: _move_to_device(v, device) for k, v in batch.items()}
     return batch
 
-
 def _get_quantization_config(
     final_config,
     name,
     input_dtype=None,
     weight_dtype=None,
     opt=None,
+    real_quant=None,
     input_axis=None,
     weight_axis=None,
     alpha=None,
 ):
-    input_dtype = input_dtype or final_config["default"].get("input_dtype")
-    weight_dtype = weight_dtype or final_config["default"].get("weight_dtype")
-    opt = opt or final_config["default"].get("opt")
+    if input_dtype is None:
+        input_dtype = final_config["default"].get("input_dtype", DType.INT8)
+    if weight_dtype is None:
+        weight_dtype = final_config["default"].get("weight_dtype", DType.INT8)
+    if opt is None:
+        opt = final_config["default"].get("opt", Optimum.DEFAULT)
+    if real_quant is None:
+        real_quant = final_config["default"].get("real_quant", False)
     input_axis = input_axis or final_config["default"].get("input_axis")
     weight_axis = weight_axis or final_config["default"].get("weight_axis")
-    alpha = alpha or final_config["default"].get("alpha")
+    if alpha is None:
+        alpha = final_config["default"].get("alpha", 0.5)
 
     if name in final_config:
         input_dtype = final_config[name].get("input_dtype", input_dtype)
         weight_dtype = final_config[name].get("weight_dtype", weight_dtype)
         opt = final_config[name].get("opt", opt)
+        real_quant = final_config[name].get("real_quant", real_quant)
         input_axis = final_config[name].get("input_axis", input_axis)
         weight_axis = final_config[name].get("weight_axis", weight_axis)
         alpha = final_config[name].get("alpha", alpha)
 
-    return input_dtype, weight_dtype, opt, input_axis, weight_axis, alpha
+    return input_dtype, weight_dtype, opt, real_quant, input_axis, weight_axis, alpha
 
 
 def _create_linear(
@@ -59,28 +66,12 @@ def _create_linear(
     input_dtype=None,
     weight_dtype=None,
     opt=None,
-    dual_scale=False,
+    real_quant=None,
     input_axis=None,
     weight_axis=None,
     alpha=None,
+    dual_scale=False,
 ):
-    """
-    Create a new segment linear layer based on the provided configuration.
-    Args:
-        layer: The original linear layer to be replaced.
-        layer_name: The name of the layer.
-        seg_linear_config: The configuration for the segment linear layer.
-        final_config: The final quantization configuration.
-        input_dtype: Optional; the input data type.
-        weight_dtype: Optional; the weight data type.
-        opt: Optional; the optimization type.
-        dual_scale: Whether to use dual scale quantization.
-        input_axis: Optional; the input axis for quantization.
-        weight_axis: Optional; the weight axis for quantization.
-        alpha: Optional; the scaling factor for quantization.
-    Returns:
-        A new segment linear layer with the specified configuration.
-    """
     old_linear = layer
     device = old_linear.weight.device
     old_dtype = old_linear.weight.dtype
@@ -90,6 +81,7 @@ def _create_linear(
         input_dtype,
         weight_dtype,
         opt,
+        real_quant,
         input_axis,
         weight_axis,
         alpha,
@@ -99,6 +91,7 @@ def _create_linear(
         input_dtype,
         weight_dtype,
         opt,
+        real_quant,
         input_axis,
         weight_axis,
         alpha,
@@ -117,8 +110,8 @@ def _create_linear(
         ),
         chunksizes=seg_linear_config.get("chunksizes"),
         custom_weight_tensor=old_linear.weight,
-        input_quant_args={"dual_scale": dual_scale, "axis": input_axis},
-        weight_quant_args={"axis": weight_axis},
+        input_quant_args={"real_quant": real_quant, "dual_scale": dual_scale, "axis": input_axis},
+        weight_quant_args={"real_quant": real_quant, "axis": weight_axis},
         alpha=alpha,
     )
     if has_bias:
