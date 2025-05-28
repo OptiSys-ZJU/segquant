@@ -8,7 +8,6 @@
 #include "../dequantized.cuh"
 
 #define BLOCK_SIZE 128
-#define CUTLASS_DEBUG_TRACE_LEVEL 1
 
 #define AT_DISPATCH_CASE_FLOATING_TYPES(...)                                                       \
     AT_DISPATCH_CASE(at::ScalarType::Double, __VA_ARGS__)                                            \
@@ -56,14 +55,10 @@ void launch_fp8_gemm_scaled(
     using ElementAccumulator = float;
     using ElementCompute = float;
     using LayoutInputA = cutlass::layout::RowMajor;
-    using LayoutInputB = cutlass::layout::RowMajor;
+    using LayoutInputB = cutlass::layout::ColumnMajor;
     using LayoutOutput = cutlass::layout::RowMajor;
-    constexpr int NumPerThread = 1;
-    constexpr int AlignNum = 4;
-
-    if ((reinterpret_cast<uintptr_t>(A) % AlignNum != 0) || (reinterpret_cast<uintptr_t>(B) % AlignNum != 0)) {
-        throw std::runtime_error("Input pointers are not properly aligned");
-    }
+    constexpr int NumPerThread = 4;
+    constexpr int AlignNum = 16;
 
     if (K % AlignNum != 0) {
         throw std::runtime_error("K dimension (" + std::to_string(K) + ") is not aligned to " + std::to_string(AlignNum));
@@ -193,50 +188,33 @@ at::Tensor real_quantized_e4m3fy_quantize_weights(at::Tensor weights, float scal
 at::Tensor real_quantized_e4m3fy_gemm_scaled(at::Tensor inputs, at::Tensor weights, 
     float scale_x, float scale_w) {
 
-    __nv_fp8_e4m3 *Xq, *Wq;
-
-    if (weights.dtype() != at::kByte) {
-        throw std::runtime_error("weights tensor must be uint8");
-    }
-    Wq = reinterpret_cast<__nv_fp8_e4m3*>(weights.data_ptr<uint8_t>());
-
     auto inputs_sizes = inputs.sizes();
     auto weights_sizes = weights.sizes();
-    int64_t M = inputs_sizes[0];
+    int64_t M = inputs_sizes[0]; // (M, K)
     int64_t K = inputs_sizes[1];
-    int64_t N = weights_sizes[0];
+    int64_t N = weights_sizes[0]; // (N, K)
     if (weights_sizes[1] != K) {
         throw std::runtime_error("weights tensor must have shape [N, K]");
     }
 
     auto options = inputs.options();
     auto outputs = at::empty({M, N}, options);
-
-    size_t numel_x = inputs.numel();
+    auto Xq_tensor = at::empty({M, K}, options.dtype(at::kByte));
+    __nv_fp8_e4m3* Xq = reinterpret_cast<__nv_fp8_e4m3*>(Xq_tensor.data_ptr<uint8_t>());
+    __nv_fp8_e4m3* Wq = reinterpret_cast<__nv_fp8_e4m3*>(weights.data_ptr<uint8_t>());
 
     auto stream = c10::cuda::getCurrentCUDAStream();
-
-    std::cout << "test: M = " << M << ", K = " << K << ", N = " << N << ", x = " << numel_x << std::endl;
-
-    cudaMallocAsync(&Xq, numel_x * sizeof(__nv_fp8_e4m3), stream);
-    cudaStreamSynchronize(stream);
-
+    size_t numel_x = inputs.numel();
     AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_e4m3fy_scaled_kernel", [&] {
         real_quantize_e4m3fy_scaled_kernel<<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
             inputs.data_ptr<scalar_t>(), scale_x, numel_x, Xq
         );
     });
 
-    cudaStreamSynchronize(stream);
-
     // scale can be fusioned
     AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_fp8_gemm_scaled", [&] {
         launch_fp8_gemm_scaled<scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, scale_x, scale_w, 0.0f, stream);
     });
-    cudaStreamSynchronize(stream);
-
-    cudaFreeAsync(Xq, stream);
-    cudaStreamSynchronize(stream);
 
     return outputs;
 }
