@@ -29,7 +29,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("real_quantized_e4m3fy_gemm_dual_scaled",
         [](at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w) {
-            return real_quantized_e4m3fy_gemm_scaled(inputs, weights, pos_scale_x, neg_scale_x, scale_w);
+            return real_quantized_e4m3fy_gemm_dual_scaled(inputs, weights, pos_scale_x, neg_scale_x, scale_w);
         },
         "Run dual scaled FP8 GEMM with E4M3 quantization",
         py::arg("inputs"),

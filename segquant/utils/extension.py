@@ -9,14 +9,12 @@ _loaded_extensions = {}
 
 
 def load_extension(
-    name: str, sources: list, verbose: bool = False, required: bool = False
+    name: str,
+    sources: list,
+    include_dirs: list = None,
+    verbose: bool = False,
+    required: bool = False
 ):
-    """
-    Load a C++/CUDA extension with the given name and sources.
-    If the extension is already loaded, it returns the existing instance.
-    If the extension fails to load and `required` is True, it raises an error.
-    If `verbose` is True, it prints additional information about the loading process.
-    """
     if name in _loaded_extensions:
         if verbose:
             print(f"[INFO] Extension already loaded: {name}")
@@ -26,8 +24,15 @@ def load_extension(
         if verbose:
             print(f"[INFO] Attempting to load extension: {name}")
             print(f"[INFO] Sources: {sources}")
+            if include_dirs:
+                print(f"[INFO] Include dirs: {include_dirs}")
 
-        extension = load(name=name, sources=sources, verbose=verbose)
+        extension = load(
+            name=name,
+            sources=sources,
+            extra_include_paths=include_dirs or [],
+            verbose=verbose
+        )
 
         if verbose:
             print(f"[INFO] Successfully loaded extension: {name}")
@@ -35,10 +40,9 @@ def load_extension(
         _loaded_extensions[name] = extension
         return extension
 
-    except (RuntimeError, ImportError) as e:
+    except (RuntimeError, ImportError, TypeError) as e:
         if verbose:
             print(f"[ERROR] Failed to load extension: {name}\n{e}")
-
         if required:
             raise RuntimeError(f"Required extension '{name}' failed to load.") from e
         return None
@@ -76,7 +80,10 @@ def load_real_quant_fp8_ext(verbose=False, required=False):
         name="segquant_real_quant_fp8",
         sources=[
             "segquant/src/real_quant/fp8/quantizer_fp8.cpp",
-            "segquant/src/real_quant/fp8/quantized_fp8_gemm.cpp",
+            "segquant/src/real_quant/fp8/quantized_fp8_gemm.cu",
+        ],
+        include_dirs=[
+            '/usr/local/cutlass/include'
         ],
         verbose=verbose,
         required=required,

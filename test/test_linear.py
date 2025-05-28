@@ -18,8 +18,8 @@ class RandomTensorDataset:
         generator.manual_seed(self.seed)
         self.batches = [
             (
-                torch.rand(2, 10, generator=generator),
-                torch.rand(2, 10, generator=generator),
+                torch.rand(2, 16, generator=generator),
+                torch.rand(2, 16, generator=generator),
             )
             for _ in range(self.num_batches)
         ]
@@ -64,7 +64,7 @@ def forward_loop(model):
 
 
 class TestModel(nn.Module):
-    def __init__(self, embedding_dim: int = 10, bias=True):
+    def __init__(self, embedding_dim: int = 16, bias=True):
         super().__init__()
 
         self.silu = nn.SiLU()
@@ -151,7 +151,29 @@ def test_default_fp8_real():
     modelopt_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
     mtq.print_quant_summary(modelopt_model)
     ######################################
-    config = {
+    # config = {
+    #     "default": {
+    #         "enable": True,
+    #         "input_dtype": DType.FP8E4M3,
+    #         "weight_dtype": DType.FP8E4M3,
+    #         "opt": Optimum.DEFAULT,
+    #         "seglinear": True,
+    #         "search_patterns": [],
+    #         "real_quant": False,
+    #         "input_axis": None,
+    #         "weight_axis": None,
+    #     },
+    # }
+    # segquant_model = quantize(
+    #     copy.deepcopy(test_model),
+    #     seg_data_loader,
+    #     config,
+    #     True,
+    #     example=(torch.rand(2, 10), torch.rand(2, 10)),
+    # )
+
+    ######################################
+    config_real = {
         "default": {
             "enable": True,
             "input_dtype": DType.FP8E4M3,
@@ -164,24 +186,27 @@ def test_default_fp8_real():
             "weight_axis": None,
         },
     }
-    segquant_model = quantize(
+    segquant_model_real = quantize(
         copy.deepcopy(test_model),
         seg_data_loader,
-        config,
+        config_real,
         True,
-        example=(torch.rand(2, 10), torch.rand(2, 10)),
+        example=(torch.rand(2, 16), torch.rand(2, 16)),
     )
     ######################################
     x_generator = torch.Generator()
     x_generator.manual_seed(1234)
-    x = torch.rand(2, 10, generator=x_generator)
-    emb = torch.rand(2, 10, generator=x_generator)
+    x = torch.rand(2, 16, generator=x_generator)
+    emb = torch.rand(2, 16, generator=x_generator)
     res = test_model.forward(x, emb)
     print("origin:", res)
-    res = modelopt_model.forward(x, emb)
-    print("modelopt:", res)
-    res = segquant_model.forward(x, emb)
-    print("segquant:", res)
+    # res = modelopt_model.forward(x, emb)
+    # print("modelopt:", res)
+    # res = segquant_model.forward(x, emb)
+    # print("segquant(fake):", res)
+
+    res = segquant_model_real.forward(x, emb)
+    print("segquant(real):", res)
 
 
 
@@ -291,4 +316,4 @@ def test_smooth_int8():
 
 
 if __name__ == "__main__":
-    test_smooth_int8()
+    test_default_fp8_real()

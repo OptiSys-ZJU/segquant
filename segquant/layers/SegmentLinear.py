@@ -198,7 +198,7 @@ class DefaultSegmentLinear(BaseSegmentLinear):
                         self.weight_quantizers[i].scale) for i in range(self.chunks)]
                 else:
                     output_chunks = [self.gemm_scaled(
-                        input_chunks[0], quantized_weights[i],
+                        input_chunks[0].contiguous(), quantized_weights[i].contiguous(),
                         self.input_quantizers[0].scale, self.weight_quantizers[i].scale)
                         for i in range(self.chunks)]
             else:

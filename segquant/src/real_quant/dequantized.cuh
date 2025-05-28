@@ -13,7 +13,7 @@ __global__ void real_dequantize_scaled_kernel(
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     for (int idx = 4 * tid; idx < 4 * (tid + 1) && idx < n; ++idx) {
-        float val = static_cast<float>(Ypp[idx]) / s;
+        float val = static_cast<float>(Yq[idx]) / s;
         Y[idx] = static_cast<T>(val);
     }
 }
