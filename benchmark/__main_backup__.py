@@ -252,6 +252,208 @@ def run_module(root_dir, dataset, max_timestep, max_num, latents, quant_method, 
 
     print(f"[INFO] pics generating by model_quant_{quant_method} is completed")
 
+def run_seg_module():
+    root_dir = "../segquant/benchmark_record/run_seg_module"
+    os.makedirs(root_dir, exist_ok=True)
+
+    dataset = COCODataset(
+        path="../dataset/controlnet_datasets/coco_canny", cache_size=16
+    )
+
+    max_timestep = 50
+    # need to adjust according to the dataset size
+    max_num = 5000
+
+    # load model
+    model_real = StableDiffusion3ControlNetModel.from_repo(
+        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
+    )
+    model_real = model_real.to("cuda")
+    
+    # load latent
+    latents = torch.load("../latents.pt")
+
+    # find if real pics exist, create if not
+    pic_path = os.path.join(root_dir, "pics/real")
+    if not os.path.exists(pic_path):
+        print(f"[INFO] generating pics in [{pic_path}]...")
+        trace_pic(
+            model_real,
+            pic_path,
+            dataset.get_dataloader(),
+            latents,
+            max_num=max_num,
+            controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
+            guidance_scale=calib_args["guidance_scale"],
+            num_inference_steps=max_timestep,
+        )
+        print("model_real completed")
+    else:
+        print(f"[INFO] found pics in [{pic_path}], skip")
+
+    # quantize or load model
+    model_quant_path = os.path.join(root_dir, "model/dit/model_quant.pt")
+    model_quant = quant_or_load(model_quant_path, quant_config_default, dataset)
+    model_quant = model_quant.to("cuda")
+
+
+    # generate quant pics
+    trace_pic(
+        model_quant,
+        os.path.join(root_dir, "pics/quant"),
+        dataset.get_dataloader(),
+        latents,
+        max_num=max_num,
+        controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
+        guidance_scale=calib_args["guidance_scale"],
+        num_inference_steps=max_timestep,
+    )
+
+    # delete model
+    del model_quant
+
+    print(f"[INFO] pics generating by model_quant is completed")
+
+    # quantize model with seg
+    quant_config_with_seg = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.SMOOTH,
+            "seglinear": True,
+            "search_patterns": SegPattern.seg(),
+            "input_axis": None,
+            "weight_axis": None,
+            "alpha": 0.5,
+        },
+    }
+    model_quant_seg_path = os.path.join(root_dir, "model/dit/model_quant_seg.pt")
+    model_quant_seg = quant_or_load(model_quant_seg_path, quant_config_with_seg, dataset)
+    model_quant_seg = model_quant_seg.to("cuda")
+    latents = torch.load("../latents.pt")
+    trace_pic(
+        model_quant_seg,
+        os.path.join(root_dir, "pics/quant_seg"),
+        dataset.get_dataloader(),
+        latents,
+        max_num=max_num,
+        controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
+        guidance_scale=calib_args["guidance_scale"],
+        num_inference_steps=max_timestep,
+    )
+    del model_quant_seg
+    print(f"[INFO] pics generating by model_quant_seg is completed")
+
+def run_dual_scale_module():
+    root_dir = "../segquant/benchmark_record/run_dual_scale_module"
+    os.makedirs(root_dir, exist_ok=True)
+
+    dataset = COCODataset(
+        path="../dataset/controlnet_datasets/coco_canny", cache_size=16
+    )
+
+    max_timestep = 50
+    max_num = 5000
+
+    # quantize model with dual scale
+    quant_config_with_dual_scale = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.SMOOTH,
+            "seglinear": True,
+            "search_patterns": [SegPattern.ACTIVATION2LINEAR],
+            "input_axis": None,
+            "weight_axis": None,
+            "alpha": 0.5,
+        },
+    }
+    model_quant_dual_scale_path = os.path.join(
+        root_dir, "model/dit/model_quant_dual_scale.pt"
+    )
+    model_quant_dual_scale = quant_or_load(
+        model_quant_dual_scale_path, quant_config_with_dual_scale, dataset
+    )
+    model_quant_dual_scale = model_quant_dual_scale.to("cuda")
+    latents = torch.load("../latents.pt")
+    trace_pic(
+        model_quant_dual_scale,
+        os.path.join(root_dir, "pics/quant_dual_scale"),
+        dataset.get_dataloader(),
+        latents,
+        max_num=max_num,
+        controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
+        guidance_scale=calib_args["guidance_scale"],
+        num_inference_steps=max_timestep,
+    )
+    del model_quant_dual_scale
+    print(f"[INFO] pics generating by model_quant_dual_scale is completed")
+
+def run_affiner_module():
+    # randomly generate latents to learn better affine
+    latents = randn_tensor(
+        (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
+    )
+
+    max_num = 5000
+
+    os.makedirs(root_dir, exist_ok=True)
+    dataset = COCODataset(
+        path="../dataset/controlnet_datasets/coco_canny", cache_size=16
+    )
+
+    model_quant = StableDiffusion3ControlNetModel.from_repo(
+        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
+    )
+    model_quant.transformer = torch.load(
+        "../segquant/benchmark_record/run_seg_module/model/dit/model_quant_seg.pt",
+        weights_only=False,
+    )
+    model_real = StableDiffusion3ControlNetModel.from_repo(
+        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
+    )
+    # first use random latents to learn better affine
+    affiner = process_affiner(
+        affine_config, dataset, model_real, model_quant, latents=latents, shuffle=True
+    )
+
+    # then use real latent and affined models to generate pics
+    max_num = 1
+    model_quant = model_quant.to("cuda")
+    trace_pic(
+        model_quant,
+        "affine_pics/blockaffine",
+        dataset.get_dataloader(),
+        latents,
+        steper=affiner,
+        max_num=max_num,
+        num_inference_steps=affine_config["stepper"]["max_timestep"],
+        **affine_config["extra_args"],
+    )
+    trace_pic(
+        model_quant,
+        "affine_pics/quant",
+        dataset.get_dataloader(),
+        latents,
+        max_num=max_num,
+        num_inference_steps=affine_config["stepper"]["max_timestep"],
+        **affine_config["extra_args"],
+    )
+    del model_quant
+    model_real = model_real.to("cuda")
+    trace_pic(
+        model_real,
+        "affine_pics/real",
+        dataset.get_dataloader(),
+        latents,
+        max_num=max_num,
+        num_inference_steps=affine_config["stepper"]["max_timestep"],
+        **affine_config["extra_args"],
+    )
+
+
 if __name__ == "__main__":
     # setting up args
     quant_method = "default"
@@ -264,8 +466,7 @@ if __name__ == "__main__":
     )
 
     max_timestep = 50
-    # max_num = COCODatasetSize
-    max_num = 2
+    max_num = COCODatasetSize
     latents = torch.load("../latents.pt")
 
     # if needed to generate real pics under fp16model

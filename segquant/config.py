@@ -47,7 +47,7 @@ class SegPattern(Enum):
             SegPattern.LINEAR2CHUNK,
             SegPattern.LINEAR2SPLIT,
             SegPattern.CONCAT2LINEAR,
-            SegPattern.ACTIVATION2LINEAR,
+            SegPattern.STACK2LINEAR,
         ]
 
     @classmethod
