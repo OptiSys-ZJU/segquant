@@ -97,8 +97,10 @@ class DefaultSegmentLinear(BaseSegmentLinear):
             input_gen = lambda: None
         if weight_quant_type is not None:
             if 'real_quant' in weight_quant_args:
-                assert self.real_quant and weight_quant_args['real_quant'], \
-                    "If input quantizer is real quant, weight quantizer must also be real quant."
+                assert self.real_quant == weight_quant_args['real_quant'], \
+                    f"Mismatch: self.real_quant={self.real_quant}, " \
+                    f"weight_quant_args['real_quant']={weight_quant_args['real_quant']}"
+
             if 'dual_scale' in weight_quant_args:
                 raise ValueError(
                     "Dual scale is not supported for weight quantizer in DefaultSegmentLinear."
@@ -273,11 +275,12 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
             input_gen = lambda: None
         if weight_quant_type is not None:
             if 'real_quant' in weight_quant_args:
-                assert self.real_quant and weight_quant_args['real_quant'], \
-                    "If input quantizer is real quant, weight quantizer must also be real quant."
+                assert self.real_quant == weight_quant_args['real_quant'], \
+                    f"Mismatch: self.real_quant={self.real_quant}, " \
+                    f"weight_quant_args['real_quant']={weight_quant_args['real_quant']}"
             if 'dual_scale' in weight_quant_args:
                 raise ValueError(
-                    "Dual scale is not supported for weight quantizer in DefaultSegmentLinear."
+                    "Dual scale is not supported for weight quantizer in SmoothQuantSegmentLinear."
                 )
 
             weight_gen = lambda: QuantizerRegistry.create(
@@ -388,7 +391,7 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
                         for i in range(self.chunks)]
             else:
                 quantized_input = self.calibrator.quantize(input_chunks)
-                output_chunks = [F.linear(quantized_input[0],quantized_weights[i])
+                output_chunks = [F.linear(quantized_input[i],quantized_weights[i])
                                  for i in range(self.chunks)]
 
             res = self.splitter.concat_output(output_chunks)

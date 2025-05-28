@@ -15,11 +15,11 @@ from backend.torch.utils import randn_tensor
 
 calib_args = {
     "max_timestep": 50,
-    "sample_size": 256,
+    "sample_size": 1,
     "timestep_per_sample": 50,
     "controlnet_conditioning_scale": 0,
     "guidance_scale": 7,
-    "shuffle": True,
+    "shuffle": False,
 }
 
 quant_config = {
@@ -79,7 +79,7 @@ def quant_model(
 
 
 def run_seg_module():
-    root_dir = "benchmark_record/run_seg_module"
+    root_dir = "tmp_test_linear"
     os.makedirs(root_dir, exist_ok=True)
 
     dataset = COCODataset(
@@ -87,7 +87,7 @@ def run_seg_module():
     )
 
     max_timestep = 50
-    max_num = 1024
+    max_num = 1
 
     ### 0
     model_real = StableDiffusion3ControlNetModel.from_repo(
@@ -367,4 +367,4 @@ def run_affiner_module():
 
 
 if __name__ == "__main__":
-    run_dual_scale_module()
+    run_seg_module()

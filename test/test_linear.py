@@ -212,6 +212,7 @@ def test_default_int8():
             "seglinear": True,
             # 'search_patterns': SegPattern.all(),
             "search_patterns": [],
+            "real_quant": False,
             "input_axis": None,
             "weight_axis": None,
         },
@@ -261,6 +262,8 @@ def test_smooth_int8():
             "weight_dtype": DType.INT8,
             "opt": Optimum.SMOOTH,
             "seglinear": True,
+            "real_quant": False,
+            # "search_patterns": [],
             "search_patterns": SegPattern.seg(),
             "input_axis": None,
             "weight_axis": None,
@@ -288,4 +291,4 @@ def test_smooth_int8():
 
 
 if __name__ == "__main__":
-    test_default_fp8()
+    test_smooth_int8()

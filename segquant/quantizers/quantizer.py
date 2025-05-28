@@ -87,7 +87,7 @@ class IntQuantizer(BaseQuantizer):
         axis (int or None): Axis along which to compute the scale and zero-point (default: None).
         dual_scale (bool): Whether to use dual-scale quantization (default: False).
     """
-    def __init__(self, num_bits=8, symmetric=True, axis=None, dual_scale=False):
+    def __init__(self, num_bits=8, symmetric=True, axis=None, dual_scale=False, real_quant=False):
         self.num_bits = num_bits
         self.symmetric = symmetric
         self.axis = axis
@@ -108,6 +108,7 @@ class IntQuantizer(BaseQuantizer):
         self.pos_scale = None
 
         self.scale = 1.0
+        self.real_quant = real_quant
 
     def calibrate(self, x: torch.Tensor):
         epsilon = 1.0 / (1 << 24)
