@@ -1,5 +1,6 @@
 #include <cutlass/gemm/device/gemm.h>
 #include <cutlass/gemm/device/gemm_array.h>
+#include <cutlass/gemm/device/gemm_batched.h>
 #include <cutlass/util/device_memory.h>
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
@@ -113,6 +114,81 @@ void launch_fp8_gemm_scaled(
 }
 
 template <typename T>
+void launch_fp8_batched_gemm_scaled(
+    const __nv_fp8_e4m3 *A, const __nv_fp8_e4m3 *B, T *C,
+    int M, int N, int K,
+    int batch_count,
+    float scale_x, float scale_w,
+    float beta,
+    cudaStream_t stream) {
+
+    using ElementInputA = cutlass::float_e4m3_t;
+    using ElementInputB = cutlass::float_e4m3_t;
+    using ElementOutput = typename CutlassElementOutputType<T>::type;
+    using ElementAccumulator = float;
+    using ElementCompute = float;
+    using LayoutInputA = cutlass::layout::RowMajor;
+    using LayoutInputB = cutlass::layout::ColumnMajor;
+    using LayoutOutput = cutlass::layout::RowMajor;
+    constexpr int NumPerThread = 4;
+    constexpr int AlignNum = 16;
+
+    if (K % AlignNum != 0) {
+        throw std::runtime_error("K dimension (" + std::to_string(K) + ") is not aligned to " + std::to_string(AlignNum));
+    }
+    if (N % AlignNum != 0) {
+        throw std::runtime_error("N dimension (" + std::to_string(N) + ") is not aligned to " + std::to_string(AlignNum));
+    }
+
+    using Gemm = cutlass::gemm::device::GemmBatched<
+        ElementInputA,
+        LayoutInputA,
+        ElementInputB,
+        LayoutInputB,
+        ElementOutput,
+        LayoutOutput,
+        ElementAccumulator,
+        cutlass::arch::OpClassTensorOp,
+        cutlass::arch::Sm89,
+        cutlass::gemm::GemmShape<128, 64, 128>,
+        cutlass::gemm::GemmShape<64, 32, 128>,
+        cutlass::gemm::GemmShape<16, 8, 32>,
+        cutlass::epilogue::thread::LinearCombination<
+            ElementOutput,
+            NumPerThread,
+            ElementAccumulator,
+            ElementCompute
+        >,
+        cutlass::gemm::threadblock::GemmBatchedIdentityThreadblockSwizzle,
+        3,
+        AlignNum,
+        AlignNum
+    >;
+
+    Gemm gemm;
+
+    float scale = 1.0f / (scale_x * scale_w);
+
+    typename Gemm::Arguments args{
+        {M, N, K},
+        {reinterpret_cast<const ElementInputA*>(A), K},
+        M * K,
+        {reinterpret_cast<const ElementInputB*>(B), K},
+        0,
+        {reinterpret_cast<const ElementOutput*>(C), N},
+        {reinterpret_cast<ElementOutput*>(C), N},
+        M * N,
+        {scale, beta}
+    };
+
+    cutlass::Status status = gemm(args, nullptr, stream);
+    cudaError_t err = cudaGetLastError();
+    if (status != cutlass::Status::kSuccess) {
+        throw std::runtime_error(std::string("GEMM launch failed, cutlass status: ") + cutlass::cutlassGetStatusString(status) + ", cuda error: " + cudaGetErrorString(err));
+    }
+}
+
+template <typename T>
 void launch_fp8_array_gemm_scaled(
     const __nv_fp8_e4m3** A, const __nv_fp8_e4m3** B, T** C,
     int M, int N, int K,
@@ -202,16 +278,32 @@ at::Tensor real_quantized_e4m3fy_gemm_scaled(at::Tensor inputs, at::Tensor weigh
 
     auto inputs_sizes = inputs.sizes();
     auto weights_sizes = weights.sizes();
-    int64_t M = inputs_sizes[0]; // (M, K)
-    int64_t K = inputs_sizes[1];
+    auto input_rank = inputs_sizes.size();
+    int64_t batch_count = 1;
+    if (input_rank > 2) {
+        // batch gemm
+        TORCH_CHECK(inputs.is_contiguous(), "inputs must be contiguous");
+        for (int64_t i = 0; i < input_rank - 2; ++i) {
+            batch_count *= inputs.size(i);
+        }
+    }
+    int64_t M = inputs_sizes[input_rank - 2]; // (..., M, K)
+    int64_t K = inputs_sizes[input_rank - 1];
     int64_t N = weights_sizes[0]; // (N, K)
     if (weights_sizes[1] != K) {
-        throw std::runtime_error("weights tensor must have shape [N, K]");
+        std::ostringstream oss;
+        oss << "real_quantized_e4m3fy_gemm_scaled: weights tensor must have shape [N, K], but got weights shape ["
+            << weights_sizes[0] << ", " << weights_sizes[1] << "] and inputs shape [..., "
+            << inputs_sizes[input_rank - 2] << ", " << inputs_sizes[input_rank - 1] << "]";
+        throw std::runtime_error(oss.str());
     }
 
+    // create output tensor
     auto options = inputs.options();
-    auto outputs = at::empty({M, N}, options);
-    auto Xq_tensor = at::empty({M, K}, options.dtype(at::kByte));
+    std::vector<int64_t> output_sizes(input_sizes.begin(), input_sizes.end() - 1);
+    output_sizes.push_back(N);
+    auto outputs = at::empty(output_sizes, options);
+    auto Xq_tensor = at::empty_like(inputs, options.dtype(at::kByte));
     __nv_fp8_e4m3* Xq = reinterpret_cast<__nv_fp8_e4m3*>(Xq_tensor.data_ptr<uint8_t>());
     __nv_fp8_e4m3* Wq = reinterpret_cast<__nv_fp8_e4m3*>(weights.data_ptr<uint8_t>());
 
@@ -224,10 +316,19 @@ at::Tensor real_quantized_e4m3fy_gemm_scaled(at::Tensor inputs, at::Tensor weigh
     });
 
     // scale can be fusioned
-    AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_fp8_gemm_scaled", [&] {
-        launch_fp8_gemm_scaled<scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, scale_x, scale_w, 0.0f, stream);
-    });
-
+    if (batch_count > 1) {
+        // batched gemm
+        AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_fp8_batched_gemm_scaled", [&] {
+            launch_fp8_batched_gemm_scaled<scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, batch_count, scale_x, scale_w, 0.0f, stream);
+        });
+    }
+    else {
+        // single gemm
+        AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_fp8_gemm_scaled", [&] {
+            launch_fp8_gemm_scaled<scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, scale_x, scale_w, 0.0f, stream);
+        });
+    }
+    
     return outputs;
 }
 
@@ -237,17 +338,33 @@ at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor 
     
     auto inputs_sizes = inputs.sizes();
     auto weights_sizes = weights.sizes();
-    int64_t M = inputs_sizes[0]; // (M, K)
-    int64_t K = inputs_sizes[1];
+    auto input_rank = inputs_sizes.size();
+    int64_t batch_count = 1;
+    if (input_rank > 2) {
+        // batch gemm
+        TORCH_CHECK(inputs.is_contiguous(), "inputs must be contiguous");
+        for (int64_t i = 0; i < input_rank - 2; ++i) {
+            batch_count *= inputs.size(i);
+        }
+    }
+    int64_t M = inputs_sizes[input_rank - 2]; // (..., M, K)
+    int64_t K = inputs_sizes[input_rank - 1];
     int64_t N = weights_sizes[0]; // (N, K)
     if (weights_sizes[1] != K) {
-        throw std::runtime_error("weights tensor must have shape [N, K]");
+        std::ostringstream oss;
+        oss << "real_quantized_e4m3fy_gemm_dual_scaled: weights tensor must have shape [N, K], but got weights shape ["
+            << weights_sizes[0] << ", " << weights_sizes[1] << "] and inputs shape [..., "
+            << inputs_sizes[input_rank - 2] << ", " << inputs_sizes[input_rank - 1] << "]";
+        throw std::runtime_error(oss.str());
     }
 
+    // create output tensor
     auto options = inputs.options();
-    auto outputs = at::empty({M, N}, options);
-    auto Xp_tensor = at::empty({M, K}, options.dtype(at::kByte));
-    auto Xn_tensor = at::empty({M, K}, options.dtype(at::kByte));
+    std::vector<int64_t> output_sizes(input_sizes.begin(), input_sizes.end() - 1);
+    output_sizes.push_back(N);
+    auto outputs = at::empty(output_sizes, options);
+    auto Xp_tensor = at::empty_like(inputs, options.dtype(at::kByte));
+    auto Xn_tensor = at::empty_like(inputs, options.dtype(at::kByte));
     __nv_fp8_e4m3* Xp = reinterpret_cast<__nv_fp8_e4m3*>(Xp_tensor.data_ptr<uint8_t>());
     __nv_fp8_e4m3* Xn = reinterpret_cast<__nv_fp8_e4m3*>(Xn_tensor.data_ptr<uint8_t>());
     __nv_fp8_e4m3* Wq = reinterpret_cast<__nv_fp8_e4m3*>(weights.data_ptr<uint8_t>());
@@ -260,17 +377,23 @@ at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor 
             inputs.data_ptr<scalar_t>(), pos_scale_x, neg_scale_x, numel_x, Xp, Xn);
     });
 
-    auto Y_p = at::empty({M, N}, options);
-    auto Y_n = at::empty({M, N}, options);
-    std::vector<void const *> ptr_A_batched_host{Xp, Xn};
-    std::vector<void const *> ptr_B_batched_host{Wq, Wq};
+    auto Y_p = at::empty_like(outputs, options);
+    auto Y_n = at::empty_like(outputs, options);
+    std::vector<void const *> ptr_A_batched_host;
+    std::vector<void const *> ptr_B_batched_host;
     std::vector<void*> ptr_C_batched_host;
-    AT_DISPATCH_FLOATING_TYPES(Y_p.scalar_type(), "prepare_ptr_C_batched_host", [&] {
-        ptr_C_batched_host = {
-            static_cast<void*>(Y_p.data_ptr<scalar_t>()),
-            static_cast<void*>(Y_n.data_ptr<scalar_t>())
-        };
-    });
+
+    for (int64_t i = 0; i < batch_count; ++i) {
+        // For batched gemm, we need to prepare pointers for each batch
+        ptr_A_batched_host.push_back(reinterpret_cast<void const *>(Xp + i * M * K));
+        ptr_A_batched_host.push_back(reinterpret_cast<void const *>(Xn + i * M * K));
+        ptr_B_batched_host.push_back(reinterpret_cast<void const *>(Wq));
+        ptr_B_batched_host.push_back(reinterpret_cast<void const *>(Wq));
+        AT_DISPATCH_FLOATING_TYPES(Y_p.scalar_type(), "prepare_ptr_C_batched_host", [&] {
+            ptr_C_batched_host.push_back(reinterpret_cast<void*>(Y_p.data_ptr<scalar_t>() + i * M * N));
+            ptr_C_batched_host.push_back(reinterpret_cast<void*>(Y_n.data_ptr<scalar_t>() + i * M * N));
+        });
+    }
 
     // Allocate device memory for batched GEMM
     cutlass::DeviceAllocation<void const *> ptr_A_batched;
@@ -291,7 +414,7 @@ at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor 
             reinterpret_cast<const __nv_fp8_e4m3**>(ptr_B_batched.get()),
             reinterpret_cast<scalar_t**>(ptr_C_batched.get()),
             M, N, K,
-            2,
+            2 * batch_count,
             stream);
     });
 

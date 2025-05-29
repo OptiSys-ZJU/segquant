@@ -1,4 +1,4 @@
-from dataset.processor import CaptionControlDataset
+from dataset.caption_control_dataset import CaptionControlDataset
 
 DCIDataset = CaptionControlDataset
 

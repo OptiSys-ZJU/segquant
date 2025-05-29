@@ -97,7 +97,7 @@ def _create_linear(
         alpha,
     )
 
-    new_linear = create_segment_linear(
+    new_linear, need_smooth = create_segment_linear(
         input_dtype,
         weight_dtype,
         opt,
@@ -118,7 +118,7 @@ def _create_linear(
         new_linear.linear.bias.data.copy_(old_linear.bias.data)
 
     new_linear = new_linear.to(device).to(old_dtype)
-    return new_linear
+    return new_linear, need_smooth
 
 
 def _replace_linears(model, to_replace_linears: dict):
@@ -255,6 +255,8 @@ def quantize(
 
     if verbose:
         print(f"get valid linear num [{len(linears)}]")
+    
+    need_smooth = False
 
     dual_scale_linears = set()
     enable_seg = any(cfg.get("seglinear") for cfg in final_config.values())
@@ -291,28 +293,33 @@ def quantize(
                             break
                     if disabled:
                         continue
-                    to_calib_linears[name] = _create_linear(
+                    to_calib_linears[name], this_need_smooth = _create_linear(
                         linears[name],
                         name,
                         seg_linear_config,
                         final_config,
                         dual_scale=(name in dual_scale_linears),
                     )
+                    if this_need_smooth:
+                        need_smooth = True
                     print(f"[INFO] Detected [{name}]")
                     del linears[name]
 
     for name, linear in linears.items():
-        to_calib_linears[name] = _create_linear(
+        to_calib_linears[name], this_need_smooth = _create_linear(
             linear,
             name,
             {"chunks": 1, "seg_mode": "weight"},
             final_config,
             dual_scale=(name in dual_scale_linears),
         )
+        if this_need_smooth:
+            need_smooth = True
 
-    if verbose:
-        print("start smooth ...")
-    _smooth_linears(model, to_calib_linears, calib_data_loader, device)
+    if need_smooth:
+        if verbose:
+            print("start smooth ...")
+        _smooth_linears(model, to_calib_linears, calib_data_loader, device)
     if verbose:
         print("start calibrate ...")
     _calib_linears(model, to_calib_linears, calib_data_loader, device)
