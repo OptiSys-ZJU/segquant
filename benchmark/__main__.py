@@ -14,7 +14,7 @@ from backend.torch.models.stable_diffusion_3_controlnet import (
 )
 
 
-def quant_or_load(model_target_path, target_config, dataset, calib_args):
+def quant_or_load(model_target_path, target_config, dataset, calib_args, gpu_id):
     # Determine quant_layer from config
     quant_layer = "dit" if target_config["default"]["dit"] else "controlnet"
     
@@ -24,7 +24,7 @@ def quant_or_load(model_target_path, target_config, dataset, calib_args):
 
         model = StableDiffusion3ControlNetModel.from_repo(
             ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-            f"cuda:{benchmark.gpu_id}",
+            f"cuda:{gpu_id}",
         )
         # decide to quant, transfer to cpu for saving
         target_model = quant_model(
@@ -132,8 +132,8 @@ def run_module(benchmark, affine_config, calibration_config):
     quant_config = QuantizationConfigs.get_config(benchmark.quant_method)
     affine = quant_config["affine"]
     # setting up model path
-    quant_model_type="dit" if quant_config["default"]["dit"] else "controlnet"
-    model_quant_path = f"model/{quant_model_type}/model_quant_{benchmark.quant_method}.pt"
+    quant_layer_type="dit" if quant_config["default"]["dit"] else "controlnet"
+    model_quant_path = f"model/{quant_layer_type}/model_quant_{benchmark.quant_method}.pt"
     model_quant_path = os.path.join(benchmark.res_dir, model_quant_path)
     # quantize or load model
     model_quant = quant_or_load(model_quant_path, quant_config, benchmark.dataset, calibration_config)
@@ -231,6 +231,5 @@ if __name__ == "__main__":
         generate_real_pics=args.real, # No quant, generate real pics
         gpu_id=args.gpu_id,
     )
-
     run_module(benchmark, AffineConfig.to_dict(), CalibrationConfig.to_dict())
     
