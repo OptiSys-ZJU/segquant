@@ -18,7 +18,7 @@ def trace_pic(model, path, data_loader, latents=None, max_num=None, **kwargs):
             image = model.forward(
                 prompt=prompt, control_image=control, latents=latents, **kwargs
             )[0]
-            save_path = os.path.join("../segquant/"+path, f"{count:04d}.jpg")
+            save_path = os.path.join("../segquant/" + path, f"{count:04d}.jpg")
             image[0].save(save_path)
             count += 1
             pbar.update(1)

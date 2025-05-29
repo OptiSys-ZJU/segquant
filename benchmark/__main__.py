@@ -1,137 +1,41 @@
 import os
+import argparse
 import torch
 from torch import nn
 from benchmark import trace_pic
-from segquant.config import DType, Optimum, SegPattern
+from benchmark.config import BenchmarkConfig,CalibrationConfig,AffineConfig,QuantizationConfigs
 from segquant.torch.affiner import process_affiner
 from segquant.sample.sampler import QDiffusionSampler, model_map
 from segquant.torch.calibrate_set import generate_calibrate_set
 from segquant.torch.quantization import quantize
-from dataset.coco.coco_dataset import COCODataset
+
 from backend.torch.models.stable_diffusion_3_controlnet import (
     StableDiffusion3ControlNetModel,
 )
-from backend.torch.utils import randn_tensor
 
-COCODatasetSize = 5000
 
-calib_args = {
-    "max_timestep": 50,
-    "sample_size": 256,
-    "timestep_per_sample": 50,
-    "controlnet_conditioning_scale": 0,
-    "guidance_scale": 7,
-    "shuffle": True,
-}
-
-affine_config = {
-    "solver": {
-        "type": "mserel",
-        "blocksize": 8,
-        "alpha": 0.5,
-        "lambda1": 0.1,
-        "lambda2": 0.1,
-        "sample_mode": "interpolate",
-        "percentile": 100,
-        "greater": True,
-        "scale": 1,
-        "verbose": True,
-    },
-    "stepper": {
-        "type": "blockwise",
-        "max_timestep": 50,
-        "sample_size": 1,
-        "recurrent": True,
-        "noise_target": "uncond",
-        "enable_latent_affine": False,
-        "enable_timesteps": None,
-    },
-    "extra_args": {"controlnet_conditioning_scale": 0, "guidance_scale": 7,},
-}
-
-# quantize model with default config
-quant_config_default = {
-    "default": {
-        "enable": True,
-        "input_dtype": DType.INT8,
-        "weight_dtype": DType.INT8,
-        "opt": Optimum.SMOOTH,
-        "seglinear": False,
-        "search_patterns": [],
-        "input_axis": None,
-        "weight_axis": None,
-        "alpha": 0.5,
-        "dit": True,
-        "controlnet": False,
-    },
-}
-
-# quantize model with seg
-quant_config_seg = {
-    "default": {
-        "enable": True,
-        "input_dtype": DType.INT8,
-        "weight_dtype": DType.INT8,
-        "opt": Optimum.SMOOTH,
-        "seglinear": True,
-        "search_patterns": SegPattern.seg(),
-        "input_axis": None,
-        "weight_axis": None,
-        "alpha": 0.5,
-        "dit": True,
-        "controlnet": False,
-    },
-}
-
-# quantize model with dual scale
-quant_config_dual_scale = {
-    "default": {
-        "enable": True,
-        "input_dtype": DType.INT8,
-        "weight_dtype": DType.INT8,
-        "opt": Optimum.SMOOTH,
-        "seglinear": True,
-        "search_patterns": [SegPattern.ACTIVATION2LINEAR],
-        "input_axis": None,
-        "weight_axis": None,
-        "alpha": 0.5,
-        "dit": True,
-        "controlnet": False,
-    },
-}
-
-quant_config_seg_dual = {
-    "default": {
-        "enable": True,
-        "input_dtype": DType.INT8,
-        "weight_dtype": DType.INT8,
-        "opt": Optimum.SMOOTH,
-        "seglinear": True,
-        "search_patterns": [SegPattern.seg(), SegPattern.ACTIVATION2LINEAR],
-        "input_axis": None,
-        "weight_axis": None,
-        "alpha": 0.5,
-        "dit": True,
-        "controlnet": False,
-    },
-}
-
-def quant_or_load(model_target_path, target_config, dataset):
+def quant_or_load(model_target_path, target_config, dataset, calib_args):
+    # Determine quant_layer from config
+    quant_layer = "dit" if target_config["default"]["dit"] else "controlnet"
+    
     # if model_target_path not exist, quantize model
     if not os.path.exists(model_target_path):
         print(f"[INFO] {model_target_path} not found, start quantizing...")
 
         model = StableDiffusion3ControlNetModel.from_repo(
             ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-            "cuda:0",
+            f"cuda:{benchmark.gpu_id}",
         )
         # decide to quant, transfer to cpu for saving
         target_model = quant_model(
-            model, "dit", target_config, dataset, calib_args
+            model, quant_layer, target_config, dataset, calib_args
         ).to("cpu")
-        # save model
+        # save model - save the appropriate component based on quant_layer
         os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
-        torch.save(target_model.transformer, model_target_path)
+        if quant_layer == "dit":
+            torch.save(target_model.transformer, model_target_path)
+        else:
+            torch.save(target_model.controlnet, model_target_path)
         print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
     # if model_target_path exist, load model
     else:
@@ -140,7 +44,11 @@ def quant_or_load(model_target_path, target_config, dataset):
             ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
             "cpu",
         )
-        target_model.transformer = torch.load(model_target_path, weights_only=False)
+        # Load the appropriate component based on quant_layer
+        if quant_layer == "dit":
+            target_model.transformer = torch.load(model_target_path, weights_only=False)
+        else:
+            target_model.controlnet = torch.load(model_target_path, weights_only=False)
 
     return target_model
 
@@ -195,32 +103,57 @@ def quant_model(
         )
     return model_real
 
-def run_module(root_dir, dataset, max_timestep, max_num, latents, quant_method, quant_config, affine=False):
+def run_module(benchmark, affine_config, calibration_config):
+    # No need to quant, generate real pics
+    if benchmark.generate_real_pics:
+        model_real = StableDiffusion3ControlNetModel.from_repo(
+            ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), f"cuda:{benchmark.gpu_id}"
+        )
+        # generate real pics
+        real_dir = f"../segquant/benchmark_record/run_real_module" 
+        pic_path = os.path.join(real_dir, "pics/real")
+        print(f"[INFO] generating real pics in [{pic_path}]...")
+        trace_pic(
+            model_real,
+            pic_path,
+            benchmark.dataset.get_dataloader(),
+            benchmark.latents,
+            max_num=benchmark.benchmark_size,
+            controlnet_conditioning_scale=benchmark.controlnet_conditioning_scale,
+            guidance_scale=benchmark.guidance_scale,
+            num_inference_steps=benchmark.max_timestep,
+        )
+        print(f"[INFO] real pics generated in [{pic_path}]")
+        del model_real
+        return
+    
+    # Need to quant
+    # set up parameters
+    quant_config = QuantizationConfigs.get_config(benchmark.quant_method)
+    affine = quant_config["affine"]
     # setting up model path
     quant_model_type="dit" if quant_config["default"]["dit"] else "controlnet"
-    model_quant_path = f"model/{quant_model_type}/model_quant_{quant_method}.pt"
-    model_quant_path = os.path.join(root_dir, model_quant_path)
-    
+    model_quant_path = f"model/{quant_model_type}/model_quant_{benchmark.quant_method}.pt"
+    model_quant_path = os.path.join(benchmark.res_dir, model_quant_path)
     # quantize or load model
-    model_quant = quant_or_load(model_quant_path, quant_config, dataset)
-    
-
+    model_quant = quant_or_load(model_quant_path, quant_config, benchmark.dataset, calibration_config)
+    # affine or not, different process
     if not affine:
         # get model ready to generate pics
-        model_quant = model_quant.to("cuda")
+        model_quant = model_quant.to(f"cuda:{benchmark.gpu_id}")
         # generate quant pics
-        print(f"[INFO] generating pics with model_quant_{quant_method}")
+        print(f"[INFO] generating pics with model_quant_{benchmark.quant_method}")
         trace_pic(
             model_quant,
-            os.path.join(root_dir, f"pics/quant_{quant_method}"),
-            dataset.get_dataloader(),
-            latents,
-            max_num=max_num,
-            controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
-            guidance_scale=calib_args["guidance_scale"],
-            num_inference_steps=max_timestep,
+            os.path.join(benchmark.res_dir, f"pics/quant_{benchmark.quant_method}"),
+            benchmark.dataset.get_dataloader(),
+            benchmark.latents,
+            max_num=benchmark.benchmark_size,
+            controlnet_conditioning_scale=benchmark.controlnet_conditioning_scale,
+            guidance_scale=benchmark.guidance_scale,
+            num_inference_steps=benchmark.max_timestep,
         )
-        print(f"[INFO] pics generating with model_quant_{quant_method} is completed")
+        print(f"[INFO] pics generating with model_quant_{benchmark.quant_method} is completed")
     else:
         # get model to cpu, ready to learn better affine
         model_real = StableDiffusion3ControlNetModel.from_repo(
@@ -229,69 +162,75 @@ def run_module(root_dir, dataset, max_timestep, max_num, latents, quant_method, 
         # learning better affine
         print(f"[INFO] learning better affine...")
         affiner = process_affiner(
-            affine_config, dataset, model_real, model_quant, latents=latents, shuffle=True
+            affine_config, benchmark.dataset, model_real, model_quant, latents=benchmark.latents, shuffle=True
         )
         print(f"[INFO] affine learning completed")
         # get model to gpu, ready to generate pics
-        model_quant = model_quant.to("cuda")
+        model_quant = model_quant.to(f"cuda:{benchmark.gpu_id}")
         # generate pics with affine
-        print(f"[INFO] generating pics with affine base on model_quant_{quant_method}")
+        print(f"[INFO] generating pics with affine base on model_quant_{benchmark.quant_method}")
         trace_pic(
             model_quant,
-            os.path.join(root_dir, f"pics/quant_{quant_method}"),
-            dataset.get_dataloader(),
-            latents,
+            os.path.join(benchmark.res_dir, f"pics/quant_{benchmark.quant_method}"),
+            benchmark.dataset.get_dataloader(),
+            benchmark.latents,
             steper=affiner,
-            max_num=max_num,
-            controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
-            guidance_scale=calib_args["guidance_scale"],
-            num_inference_steps=max_timestep,
+            max_num=benchmark.benchmark_size,
+            controlnet_conditioning_scale=benchmark.controlnet_conditioning_scale,
+            guidance_scale=benchmark.guidance_scale,
+            num_inference_steps=benchmark.max_timestep,
         )
-        print(f"[INFO] pics generating with affine based on model_quant_{quant_method} is completed")
+        print(f"[INFO] pics generating with affine based on model_quant_{benchmark.quant_method} is completed")
+    
     del model_quant
 
-    print(f"[INFO] pics generating by model_quant_{quant_method} is completed")
-
-if __name__ == "__main__":
-    # setting up args
-    quant_method = "default"
-    # quant_method = "seg"
-    # quant_method = "dual_scale"
-    # quant_method = "seg_dual"
-    root_dir = f"../segquant/benchmark_record/run_{quant_method}_module"
-    dataset = COCODataset(
-        path="../dataset/controlnet_datasets/coco_canny", cache_size=16
+def parse_args():
+    parser = argparse.ArgumentParser(description="Benchmark Configuration")
+    # 量化方法参数
+    parser.add_argument(
+        "-q", "--quant_method", 
+        type=str,
+        choices=["int8smooth", "int8smooth_seg", "int8smooth_dual", 
+                 "int8smooth_affine", "int8smooth_seg_dual", "int8smooth_seg_dual_affine", 
+                 "fp8", "fp8_seg", "fp8_dual", "fp8_affine", 
+                 "fp8_seg_dual", "fp8_seg_dual_affine"],  # 根据你的QuantMethod调整
+        default="int8smooth",
+        help="Quantization method"
+    )
+    # 数据集类型参数
+    parser.add_argument(
+        "-d", "--dataset_type",
+        type=str, 
+        choices=["COCO", "MJHQ", "DCI"],  # 根据你的BenchmarkType调整
+        default="COCO",
+        help="Dataset type"
+    )
+    
+    # 布尔值参数
+    parser.add_argument(
+        "-r", "--real",
+        action="store_true",  # 如果指定则为True
+        help="Generate real pictures without quantization"
     )
 
-    max_timestep = 50
-    # max_num = COCODatasetSize
-    max_num = 2
-    latents = torch.load("../latents.pt")
+    parser.add_argument(
+        "-g", "--gpu_id",
+        type=int,
+        default=0,
+        help="GPU ID"
+    )
 
-    # if needed to generate real pics under fp16model
-    generate_real_pics = False
-    if generate_real_pics:
-        # load real model
-        model_real = StableDiffusion3ControlNetModel.from_repo(
-            ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
-        )
-        model_real = model_real.to("cuda")
+    return parser.parse_args()
 
-        # generate real pics
-        real_dir = f"../segquant/benchmark_record/run_real_module" 
-        pic_path = os.path.join(real_dir, "pics/real")
-        print(f"[INFO] generating real pics in [{pic_path}]...")
-        trace_pic(
-            model_real,
-            pic_path,
-            dataset.get_dataloader(),
-            latents,
-            max_num=max_num,
-            controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
-            guidance_scale=calib_args["guidance_scale"],
-            num_inference_steps=max_timestep,
-        )
-        print(f"[INFO] real pics generated in [{pic_path}]")
-    
-    run_module(root_dir, dataset, max_timestep, max_num, latents, quant_method, quant_config_default, affine=True)
+if __name__ == "__main__":
+    args = parse_args()
+
+    benchmark = BenchmarkConfig(
+        quant_method=args.quant_method,
+        dataset_type=args.dataset_type,
+        generate_real_pics=args.real, # No quant, generate real pics
+        gpu_id=args.gpu_id,
+    )
+
+    run_module(benchmark, AffineConfig.to_dict(), CalibrationConfig.to_dict())
     
