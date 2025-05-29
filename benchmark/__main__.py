@@ -42,13 +42,13 @@ def quant_or_load(model_target_path, target_config, dataset, calib_args, gpu_id)
         print(f"[INFO] {model_target_path} found, start loading...")
         target_model = StableDiffusion3ControlNetModel.from_repo(
             ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-            "cpu",
+            f"cuda:{gpu_id}",  # Load base model to target GPU, not CPU
         )
         # Load the appropriate component based on quant_layer
         if quant_layer == "dit":
-            target_model.transformer = torch.load(model_target_path, weights_only=False)
+            target_model.transformer = torch.load(model_target_path, weights_only=False, map_location=f"cuda:{gpu_id}")
         else:
-            target_model.controlnet = torch.load(model_target_path, weights_only=False)
+            target_model.controlnet = torch.load(model_target_path, weights_only=False, map_location=f"cuda:{gpu_id}")
 
     return target_model
 
@@ -136,7 +136,7 @@ def run_module(benchmark, affine_config, calibration_config):
     model_quant_path = f"model/{quant_layer_type}/model_quant_{benchmark.quant_method}.pt"
     model_quant_path = os.path.join(benchmark.res_dir, model_quant_path)
     # quantize or load model
-    model_quant = quant_or_load(model_quant_path, quant_config, benchmark.dataset, calibration_config)
+    model_quant = quant_or_load(model_quant_path, quant_config, benchmark.dataset, calibration_config, benchmark.gpu_id)
     # affine or not, different process
     if not affine:
         # get model ready to generate pics

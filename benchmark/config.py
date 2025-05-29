@@ -145,7 +145,7 @@ class BenchmarkConfig:
         controlnet_conditioning_scale=0,
         guidance_scale=7,
         test_benchmark_size=2,
-        benchmark_size=5000,
+        benchmark_size=2,
         max_timestep=50,
         gpu_id=0,
     ):
@@ -160,10 +160,11 @@ class BenchmarkConfig:
         self.test_benchmark_size = test_benchmark_size
         self.benchmark_size = benchmark_size
         self.max_timestep = max_timestep
+        self.gpu_id = gpu_id
         self.dataset = self.get_dataset()
         self.res_dir = self.get_res_dir()
         self.latents = self.get_latents()
-        self.gpu_id = gpu_id
+        
     
     def get_res_dir(self):
         return f"../segquant/benchmark_record/{self.dataset_type}/run_{self.quant_method}_module"
@@ -183,5 +184,5 @@ class BenchmarkConfig:
         return dataset
         
     def get_latents(self):
-        latents = torch.load(self.latents_path)
+        latents = torch.load(self.latents_path, map_location=f"cuda:{self.gpu_id}")
         return latents
