@@ -314,6 +314,36 @@ class SmoothQuantCalibrator(BaseCalibrator):
         """
         return self.quantized_weights
 
+    def smooth_input(self, input_t: List[torch.Tensor]):
+        """
+        Args:
+            input_t(when input_t-segment): [tensor(batch_size * split_size1), 
+                                            tensor(batch_size * split_size2), ...]
+            input_t(when weight-segment): [tensor(batch_size * in_features)]
+        
+        Returns:
+            Union[Tuple[list[Tensor], list[Tensor]], Tuple[list[Tensor], list[Tensor]]]: 
+                when input_t-segment:
+                    - [Tensor(batch_size * split_size) * n]
+                    - [Tensor(out_features, split_size) * n]
+
+                when weight-segment:
+                    - [Tensor(batch_size * split_size) * n]
+                    - [Tensor(out_features, split_size) * n]
+        """
+
+        smoothed_input = []
+        input_broadcast = self._broadcast_list(input_t)
+        for input_chunk, s in zip(input_broadcast, self.s):
+            if self.dual_s:
+                input_smooth = torch.where(
+                    input_chunk >= 0, input_chunk / s[1], input_chunk / s[0]
+                )
+            else:
+                input_smooth = input_chunk / s
+            smoothed_input.append(input_smooth.to(input_chunk.dtype))
+        return smoothed_input
+
     def quantize(self, input_t: List[torch.Tensor]):
         """
         Args:

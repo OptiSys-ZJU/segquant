@@ -5,13 +5,12 @@
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <string>
-#include "quantizer_fp8.cuh"
-#include "../dequantized.cuh"
+#include "quantizer.cuh"
+#include "dequantizer.cuh"
 
 #define BLOCK_SIZE 128
 
 #define AT_DISPATCH_CASE_FLOATING_TYPES(...)                                                       \
-    AT_DISPATCH_CASE(at::ScalarType::Double, __VA_ARGS__)                                            \
     AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__)                                             \
     AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)                                              \
     AT_DISPATCH_CASE(at::ScalarType::BFloat16, __VA_ARGS__)
@@ -23,13 +22,18 @@ template <typename T>
 struct CutlassElementOutputType;
 
 template <>
-struct CutlassElementOutputType<at::Half> {
-    using type = cutlass::half_t;
+struct CutlassElementOutputType<__nv_fp8_e4m3> {
+    using type = cutlass::float_e4m3_t;
 };
 
 template <>
-struct CutlassElementOutputType<float> {
-    using type = float;
+struct CutlassElementOutputType<int8_t> {
+    using type = int8_t;
+};
+
+template <>
+struct CutlassElementOutputType<at::Half> {
+    using type = cutlass::half_t;
 };
 
 template <>
@@ -38,27 +42,68 @@ struct CutlassElementOutputType<at::BFloat16> {
 };
 
 template <>
-struct CutlassElementOutputType<double> {
-    using type = double;
+struct CutlassElementOutputType<float> {
+    using type = float;
 };
 
 template <typename T>
-void launch_fp8_gemm_scaled(
-    const __nv_fp8_e4m3 *A, const __nv_fp8_e4m3 *B, T *C,
+struct CutlassElementAccumulatorType;
+
+template <>
+struct CutlassElementAccumulatorType<int8_t> {
+    using type = int32_t;
+};
+
+template <>
+struct CutlassElementAccumulatorType<__nv_fp8_e4m3> {
+    using type = float;
+};
+
+
+template <typename T>
+struct CutlassArchType;
+
+template <>
+struct CutlassArchType<int8_t> {
+    using arch = cutlass::arch::Sm80;
+};
+
+template <>
+struct CutlassArchType<__nv_fp8_e4m3> {
+    using arch = cutlass::arch::Sm89;
+};
+
+template <typename T>
+struct StoreType;
+
+template <>
+struct StoreType<int8_t> {
+    using type = int8_t;
+};
+
+template <>
+struct StoreType<__nv_fp8_e4m3> {
+    using type = uint8_t;
+};
+
+template <typename ABType, typename CType>
+void launch_gemm_scaled(
+    const ABType *A, const ABType *B, CType *C,
     int M, int N, int K,
     float scale_x, float scale_w,
     float beta,
     cudaStream_t stream) {
 
-    using ElementInputA = cutlass::float_e4m3_t;
-    using ElementInputB = cutlass::float_e4m3_t;
-    using ElementOutput = typename CutlassElementOutputType<T>::type;
-    using ElementAccumulator = float;
+    using ElementInputA = typename CutlassElementOutputType<ABType>::type;
+    using ElementInputB = typename CutlassElementOutputType<ABType>::type;
+    using ElementOutput = typename CutlassElementOutputType<CType>::type;
+    using ElementAccumulator = typename CutlassElementAccumulatorType<ABType>::type;
     using ElementCompute = float;
     using LayoutInputA = cutlass::layout::RowMajor;
     using LayoutInputB = cutlass::layout::ColumnMajor;
     using LayoutOutput = cutlass::layout::RowMajor;
-    constexpr int NumPerThread = 4;
+    using CutlassArch = typename CutlassArchType<ABType>::arch;
+    constexpr int NumPerThread = 128 / cutlass::sizeof_bits<ElementOutput>::value;
     constexpr int AlignNum = 16;
 
     if (K % AlignNum != 0) {
@@ -77,7 +122,7 @@ void launch_fp8_gemm_scaled(
         LayoutOutput,
         ElementAccumulator,
         cutlass::arch::OpClassTensorOp,
-        cutlass::arch::Sm89,
+        CutlassArch,
         cutlass::gemm::GemmShape<128, 64, 128>,
         cutlass::gemm::GemmShape<64, 32, 128>,
         cutlass::gemm::GemmShape<16, 8, 32>,
@@ -113,24 +158,25 @@ void launch_fp8_gemm_scaled(
     }
 }
 
-template <typename T>
-void launch_fp8_batched_gemm_scaled(
-    const __nv_fp8_e4m3 *A, const __nv_fp8_e4m3 *B, T *C,
+template <typename ABType, typename CType>
+void launch_batched_gemm_scaled(
+    const ABType *A, const ABType *B, CType *C,
     int M, int N, int K,
     int batch_count,
     float scale_x, float scale_w,
     float beta,
     cudaStream_t stream) {
 
-    using ElementInputA = cutlass::float_e4m3_t;
-    using ElementInputB = cutlass::float_e4m3_t;
-    using ElementOutput = typename CutlassElementOutputType<T>::type;
-    using ElementAccumulator = float;
+    using ElementInputA = typename CutlassElementOutputType<ABType>::type;
+    using ElementInputB = typename CutlassElementOutputType<ABType>::type;
+    using ElementOutput = typename CutlassElementOutputType<CType>::type;
+    using ElementAccumulator = typename CutlassElementAccumulatorType<ABType>::type;
     using ElementCompute = float;
     using LayoutInputA = cutlass::layout::RowMajor;
     using LayoutInputB = cutlass::layout::ColumnMajor;
     using LayoutOutput = cutlass::layout::RowMajor;
-    constexpr int NumPerThread = 4;
+    using CutlassArch = typename CutlassArchType<ABType>::arch;
+    constexpr int NumPerThread = 128 / cutlass::sizeof_bits<ElementOutput>::value;
     constexpr int AlignNum = 16;
 
     if (K % AlignNum != 0) {
@@ -149,7 +195,7 @@ void launch_fp8_batched_gemm_scaled(
         LayoutOutput,
         ElementAccumulator,
         cutlass::arch::OpClassTensorOp,
-        cutlass::arch::Sm89,
+        CutlassArch,
         cutlass::gemm::GemmShape<128, 64, 128>,
         cutlass::gemm::GemmShape<64, 32, 128>,
         cutlass::gemm::GemmShape<16, 8, 32>,
@@ -176,9 +222,11 @@ void launch_fp8_batched_gemm_scaled(
         {reinterpret_cast<const ElementInputB*>(B), K},
         0,
         {reinterpret_cast<const ElementOutput*>(C), N},
+        M * N,
         {reinterpret_cast<ElementOutput*>(C), N},
         M * N,
-        {scale, beta}
+        {scale, beta},
+        batch_count
     };
 
     cutlass::Status status = gemm(args, nullptr, stream);
@@ -188,22 +236,23 @@ void launch_fp8_batched_gemm_scaled(
     }
 }
 
-template <typename T>
-void launch_fp8_array_gemm_scaled(
-    const __nv_fp8_e4m3** A, const __nv_fp8_e4m3** B, T** C,
+template <typename ABType, typename CType>
+void launch_array_gemm_scaled(
+    const ABType** A, const ABType** B, CType** C,
     int M, int N, int K,
     int batch_count,
     cudaStream_t stream) {
 
-    using ElementInputA = cutlass::float_e4m3_t;
-    using ElementInputB = cutlass::float_e4m3_t;
-    using ElementOutput = typename CutlassElementOutputType<T>::type;
-    using ElementAccumulator = float;
+    using ElementInputA = typename CutlassElementOutputType<ABType>::type;
+    using ElementInputB = typename CutlassElementOutputType<ABType>::type;
+    using ElementOutput = typename CutlassElementOutputType<CType>::type;
+    using ElementAccumulator = typename CutlassElementAccumulatorType<ABType>::type;
     using ElementCompute = float;
     using LayoutInputA = cutlass::layout::RowMajor;
     using LayoutInputB = cutlass::layout::ColumnMajor;
     using LayoutOutput = cutlass::layout::RowMajor;
-    constexpr int NumPerThread = 4;
+    using CutlassArch = typename CutlassArchType<ABType>::arch;
+    constexpr int NumPerThread = 128 / cutlass::sizeof_bits<ElementOutput>::value;
     constexpr int AlignNum = 16;
 
     if (K % AlignNum != 0) {
@@ -222,7 +271,7 @@ void launch_fp8_array_gemm_scaled(
         LayoutOutput,
         ElementAccumulator,
         cutlass::arch::OpClassTensorOp,
-        cutlass::arch::Sm89,
+        CutlassArch,
         cutlass::gemm::GemmShape<128, 64, 128>,
         cutlass::gemm::GemmShape<64, 32, 128>,
         cutlass::gemm::GemmShape<16, 8, 32>,
@@ -256,15 +305,20 @@ void launch_fp8_array_gemm_scaled(
     }
 }
 
-at::Tensor real_quantized_e4m3fy_quantize_weights(at::Tensor weights, float scale_w) {
+template<typename T>
+at::Tensor real_quantized_quantize_weights(at::Tensor weights, float scale_w);
+
+template <>
+at::Tensor real_quantized_quantize_weights<__nv_fp8_e4m3>(at::Tensor weights, float scale_w) {
+    // use uint8 to store quantized weights
     auto options = weights.options().dtype(at::kByte);
     auto quantized_weights = at::empty(weights.sizes(), options);
 
     size_t numel = weights.numel();
     auto stream = c10::cuda::getCurrentCUDAStream();
 
-    AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "real_quantize_e4m3fy_scaled_kernel", [&] {
-        real_quantize_e4m3fy_scaled_kernel<<<numel / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+    AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "real_quantize_scaled_kernel", [&] {
+        real_quantize_scaled_kernel<scalar_t, __nv_fp8_e4m3, uint8_t><<<numel / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
             weights.data_ptr<scalar_t>(), scale_w, numel, 
             quantized_weights.data_ptr<uint8_t>()
         );
@@ -273,9 +327,26 @@ at::Tensor real_quantized_e4m3fy_quantize_weights(at::Tensor weights, float scal
     return quantized_weights;
 }
 
-at::Tensor real_quantized_e4m3fy_gemm_scaled(at::Tensor inputs, at::Tensor weights, 
-    float scale_x, float scale_w) {
+template <>
+at::Tensor real_quantized_quantize_weights<int8_t>(at::Tensor weights, float scale_w) {
+    auto options = weights.options().dtype(at::kChar);
+    auto quantized_weights = at::empty(weights.sizes(), options);
 
+    size_t numel = weights.numel();
+    auto stream = c10::cuda::getCurrentCUDAStream();
+
+    AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "real_quantize_scaled_kernel", [&] {
+        real_quantize_scaled_kernel<scalar_t, int8_t, int8_t><<<numel / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+            weights.data_ptr<scalar_t>(), scale_w, numel, 
+            quantized_weights.data_ptr<int8_t>()
+        );
+    });
+
+    return quantized_weights;
+}
+
+template<typename T>
+at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w) {
     auto inputs_sizes = inputs.sizes();
     auto weights_sizes = weights.sizes();
     auto input_rank = inputs_sizes.size();
@@ -300,17 +371,18 @@ at::Tensor real_quantized_e4m3fy_gemm_scaled(at::Tensor inputs, at::Tensor weigh
 
     // create output tensor
     auto options = inputs.options();
-    std::vector<int64_t> output_sizes(input_sizes.begin(), input_sizes.end() - 1);
+    std::vector<int64_t> output_sizes(inputs_sizes.begin(), inputs_sizes.end() - 1);
     output_sizes.push_back(N);
     auto outputs = at::empty(output_sizes, options);
-    auto Xq_tensor = at::empty_like(inputs, options.dtype(at::kByte));
-    __nv_fp8_e4m3* Xq = reinterpret_cast<__nv_fp8_e4m3*>(Xq_tensor.data_ptr<uint8_t>());
-    __nv_fp8_e4m3* Wq = reinterpret_cast<__nv_fp8_e4m3*>(weights.data_ptr<uint8_t>());
+    // fp8 and int8 quantized tensors
+    auto Xq_tensor = at::empty_like(inputs, options.dtype(c10::CppTypeToScalarType<typename StoreType<T>::type>::value));
+    T* Xq = reinterpret_cast<T*>(Xq_tensor.template data_ptr<typename StoreType<T>::type>());
+    T* Wq = reinterpret_cast<T*>(weights.template data_ptr<typename StoreType<T>::type>());
 
     auto stream = c10::cuda::getCurrentCUDAStream();
     size_t numel_x = inputs.numel();
-    AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_e4m3fy_scaled_kernel", [&] {
-        real_quantize_e4m3fy_scaled_kernel<<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+    AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_scaled_kernel", [&] {
+        real_quantize_scaled_kernel<scalar_t, T, T><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
             inputs.data_ptr<scalar_t>(), scale_x, numel_x, Xq
         );
     });
@@ -319,20 +391,21 @@ at::Tensor real_quantized_e4m3fy_gemm_scaled(at::Tensor inputs, at::Tensor weigh
     if (batch_count > 1) {
         // batched gemm
         AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_fp8_batched_gemm_scaled", [&] {
-            launch_fp8_batched_gemm_scaled<scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, batch_count, scale_x, scale_w, 0.0f, stream);
+            launch_batched_gemm_scaled<T, scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, batch_count, scale_x, scale_w, 0.0f, stream);
         });
     }
     else {
         // single gemm
         AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_fp8_gemm_scaled", [&] {
-            launch_fp8_gemm_scaled<scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, scale_x, scale_w, 0.0f, stream);
+            launch_gemm_scaled<T, scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, scale_x, scale_w, 0.0f, stream);
         });
     }
     
     return outputs;
 }
 
-at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights,
+template<typename T>
+at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights,
                                 float pos_scale_x, float neg_scale_x,
                                 float scale_w) {
     
@@ -360,20 +433,20 @@ at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor 
 
     // create output tensor
     auto options = inputs.options();
-    std::vector<int64_t> output_sizes(input_sizes.begin(), input_sizes.end() - 1);
+    std::vector<int64_t> output_sizes(inputs_sizes.begin(), inputs_sizes.end() - 1);
     output_sizes.push_back(N);
     auto outputs = at::empty(output_sizes, options);
-    auto Xp_tensor = at::empty_like(inputs, options.dtype(at::kByte));
-    auto Xn_tensor = at::empty_like(inputs, options.dtype(at::kByte));
-    __nv_fp8_e4m3* Xp = reinterpret_cast<__nv_fp8_e4m3*>(Xp_tensor.data_ptr<uint8_t>());
-    __nv_fp8_e4m3* Xn = reinterpret_cast<__nv_fp8_e4m3*>(Xn_tensor.data_ptr<uint8_t>());
-    __nv_fp8_e4m3* Wq = reinterpret_cast<__nv_fp8_e4m3*>(weights.data_ptr<uint8_t>());
+    auto Xp_tensor = at::empty_like(inputs, options.dtype(c10::CppTypeToScalarType<typename StoreType<T>::type>::value));
+    auto Xn_tensor = at::empty_like(inputs, options.dtype(c10::CppTypeToScalarType<typename StoreType<T>::type>::value));
+    T* Xp = reinterpret_cast<T*>(Xp_tensor.template data_ptr<typename StoreType<T>::type>());
+    T* Xn = reinterpret_cast<T*>(Xn_tensor.template data_ptr<typename StoreType<T>::type>());
+    T* Wq = reinterpret_cast<T*>(weights.template data_ptr<typename StoreType<T>::type>());
 
     auto stream = c10::cuda::getCurrentCUDAStream();
     size_t numel_x = inputs.numel();
     // X = Xp + Xn
-    AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_e4m3fy_dual_scaled_kernel", [&] {
-        real_quantize_e4m3fy_dual_scaled_kernel<<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+    AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_dual_scaled_kernel", [&] {
+        real_quantize_dual_scaled_kernel<scalar_t, T, T><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
             inputs.data_ptr<scalar_t>(), pos_scale_x, neg_scale_x, numel_x, Xp, Xn);
     });
 
@@ -408,10 +481,10 @@ at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor 
     ptr_B_batched.copy_from_host(ptr_B_batched_host.data());
     ptr_C_batched.copy_from_host(ptr_C_batched_host.data());
 
-    AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_fp8_array_gemm_scaled", [&] {
-        launch_fp8_array_gemm_scaled<scalar_t>(
-            reinterpret_cast<const __nv_fp8_e4m3**>(ptr_A_batched.get()),
-            reinterpret_cast<const __nv_fp8_e4m3**>(ptr_B_batched.get()),
+    AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_array_gemm_scaled", [&] {
+        launch_array_gemm_scaled<T, scalar_t>(
+            reinterpret_cast<const T**>(ptr_A_batched.get()),
+            reinterpret_cast<const T**>(ptr_B_batched.get()),
             reinterpret_cast<scalar_t**>(ptr_C_batched.get()),
             M, N, K,
             2 * batch_count,
@@ -421,7 +494,7 @@ at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor 
     // Y = Y_p + Y_n
     size_t numel_y = outputs.numel();
     AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_dual_scaled_kernel", [&] {
-        real_dequantize_dual_scaled_kernel<<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+        real_dequantize_dual_scaled_kernel<scalar_t><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
             Y_p.data_ptr<scalar_t>(), 
             Y_n.data_ptr<scalar_t>(), 
             outputs.data_ptr<scalar_t>(), 
@@ -433,3 +506,13 @@ at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor 
 
     return outputs;
 }
+
+#ifdef SEGQUANT_FP8
+template at::Tensor real_quantized_gemm_scaled<__nv_fp8_e4m3>(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<__nv_fp8_e4m3>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w);
+#endif
+
+#ifdef SEGQUANT_INT8
+template at::Tensor real_quantized_gemm_scaled<int8_t>(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<int8_t>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w);
+#endif

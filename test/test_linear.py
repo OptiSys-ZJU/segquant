@@ -302,5 +302,64 @@ def test_smooth_int8():
     print("segquant:", res[0])
 
 
+def test_smooth_int8_real():
+    test_model = TestModel().to(torch.device("cuda:0"))
+    ######################################
+    config = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.SMOOTH,
+            "seglinear": True,
+            "real_quant": False,
+            "search_patterns": SegPattern.all(),
+            "input_axis": None,
+            "weight_axis": None,
+            "alpha": 0.5,
+        },
+    }
+    segquant_model = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config,
+        True,
+        example=(torch.rand(2, 16), torch.rand(2, 16)),
+    )
+    ######################################
+    config_real = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.SMOOTH,
+            "seglinear": True,
+            "real_quant": True,
+            "search_patterns": SegPattern.all(),
+            "input_axis": None,
+            "weight_axis": None,
+            "alpha": 0.5,
+        },
+    }
+    segquant_model_real = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config_real,
+        True,
+        example=(torch.rand(2, 16), torch.rand(2, 16)),
+    )
+    ######################################
+    x_generator = torch.Generator()
+    x_generator.manual_seed(1234)
+    x = torch.rand(2, 16, generator=x_generator).to(torch.device("cuda:0"))
+    emb = torch.rand(2, 16, generator=x_generator).to(torch.device("cuda:0"))
+    res = test_model.forward(x, emb)
+    print("origin:", res[0])
+    res = segquant_model.forward(x, emb)
+    print("segquant:", res[0])
+    res = segquant_model_real.forward(x, emb)
+    print("segquant_real:", res[0])
+
+
 if __name__ == "__main__":
-    test_default_fp8_real()
+    test_smooth_int8_real()

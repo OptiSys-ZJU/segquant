@@ -6,9 +6,8 @@ as well as a registry for dynamically registering and retrieving quantizer class
 """
 
 from abc import ABC, abstractmethod
-from typing import Union
 import torch
-from segquant.utils.extension import load_fake_quant_fp8_ext, load_real_quant_fp8_ext
+from segquant.utils.extension import load_fake_quant_fp8_ext, load_real_quant_fp8_ext, load_real_quant_int8_ext
 
 
 class BaseQuantizer(ABC):
@@ -239,6 +238,14 @@ class IntQuantizer(BaseQuantizer):
         return x_dequant.to(x.dtype)
 
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
+        if self.real_quant:
+            # when real quantization is enabled, only weights are quantized
+            ext = load_real_quant_int8_ext(required=False)
+            if ext is not None:
+                assert not self.dual_scale, "Weight quantization does not support dual scale."
+                return ext.real_quantized_quantize_weights(x, self.scale)
+
+        # fake quantization
         return self._fake_quantize(x)
 
     def __repr__(self):
@@ -246,6 +253,7 @@ class IntQuantizer(BaseQuantizer):
             if self.dual_scale:
                 return (
                     f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
+                    f"real_quant={self.real_quant}, "
                     f"dual_scale=True, axis={self.axis}, "
                     f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})"
                 )
@@ -255,16 +263,19 @@ class IntQuantizer(BaseQuantizer):
                 amax_str = f"[{amin:.4f}, {amax:.4f}]"
                 return (
                     f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
+                    f"real_quant={self.real_quant}, "
                     f"dual_scale=False, axis={self.axis}, "
                     f"amax=[{amax_str}])"
                 )
             return (
                 f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
+                f"real_quant={self.real_quant}, "
                 f"dual_scale=False, axis={self.axis}, "
                 f"amax={self.amax:.4f})"
             )
         return (
             f"IntQuantizer(num_bits={self.num_bits}, symmetric=False, axis={self.axis}, "
+            f"real_quant={self.real_quant}, "
             f"amin={self.amin:.4f}, amax={self.amax:.4f}, zero_point={self.zero_point:.4f})"
         )
 
@@ -448,7 +459,7 @@ class FloatQuantizer(BaseQuantizer):
             ext = load_real_quant_fp8_ext(required=False)
             if ext is not None:
                 assert not self.dual_scale, "Weight quantization does not support dual scale."
-                return ext.real_quantized_e4m3fy_quantize_weights(x, self.scale)
+                return ext.real_quantized_quantize_weights(x, self.scale)
 
         # fake quantization
         return self._fake_quantize(x)

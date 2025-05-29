@@ -90,11 +90,7 @@ class DefaultSegmentLinear(BaseSegmentLinear):
                 self.dual_scale = input_quant_args['dual_scale']
             else:
                 self.dual_scale = False
-            input_gen = lambda: QuantizerRegistry.create(
-                input_quant_type, **(input_quant_args or {})
-            )
-        else:
-            input_gen = lambda: None
+
         if weight_quant_type is not None:
             if 'real_quant' in weight_quant_args:
                 assert self.real_quant == weight_quant_args['real_quant'], \
@@ -106,11 +102,28 @@ class DefaultSegmentLinear(BaseSegmentLinear):
                     "Dual scale is not supported for weight quantizer in DefaultSegmentLinear."
                 )
 
-            weight_gen = lambda: QuantizerRegistry.create(
+        if self.real_quant:
+            assert input_quant_type == weight_quant_type, \
+                "For real quantization, input and weight quantizers must be the same type."
+            self.this_type = input_quant_type
+            if self.this_type not in ext_dict:
+                self.real_quant = False
+            else:
+                if ext_dict[self.this_type]['gemm_scaled_fn'] is None or \
+                    ext_dict[self.this_type]['gemm_dual_scaled_fn'] is None:
+                    self.real_quant = False
+
+        input_quant_args['real_quant'] = self.real_quant
+        def input_gen():
+            return QuantizerRegistry.create(
+                input_quant_type, **(input_quant_args or {})
+            )
+
+        weight_quant_args['real_quant'] = self.real_quant
+        def weight_gen():
+            return QuantizerRegistry.create(
                 weight_quant_type, **(weight_quant_args or {})
             )
-        else:
-            weight_gen = lambda: None
 
         if seg_mode == "input":
             self.input_quantizers = [input_gen() for _ in range(chunks)]
@@ -123,15 +136,6 @@ class DefaultSegmentLinear(BaseSegmentLinear):
             self.input_quantizers, self.weight_quantizers
         )
 
-        if self.real_quant:
-            self.this_type = 'fp8'
-            if self.this_type not in ext_dict:
-                self.real_quant = False
-            else:
-                if ext_dict[self.this_type]['gemm_scaled_fn'] is None or \
-                    ext_dict[self.this_type]['gemm_dual_scaled_fn'] is None:
-                    self.real_quant = False
-
     def __repr__(self):
         base = (
             f"DefaultSegmentLinear(\n"
@@ -140,6 +144,8 @@ class DefaultSegmentLinear(BaseSegmentLinear):
             f"  seg_mode={self.seg_mode},\n"
             f"  chunks={self.chunks},\n"
             f"  chunksize={self.chunksizes},\n"
+            f"  real_quant={self.real_quant},\n"
+            f"  type={self.this_type},\n" if self.real_quant else ""
         )
         if self.has_calibrated:
             input_q = ",\n    ".join(repr(i) for i in self.input_quantizers)
@@ -274,26 +280,40 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
             else:
                 self.dual_scale = False
 
-            input_gen = lambda: QuantizerRegistry.create(
-                input_quant_type, **(input_quant_args or {})
-            )
-        else:
-            input_gen = lambda: None
         if weight_quant_type is not None:
             if 'real_quant' in weight_quant_args:
                 assert self.real_quant == weight_quant_args['real_quant'], \
                     f"Mismatch: self.real_quant={self.real_quant}, " \
                     f"weight_quant_args['real_quant']={weight_quant_args['real_quant']}"
+
             if 'dual_scale' in weight_quant_args:
                 raise ValueError(
-                    "Dual scale is not supported for weight quantizer in SmoothQuantSegmentLinear."
+                    "Dual scale is not supported for weight quantizer in DefaultSegmentLinear."
                 )
 
-            weight_gen = lambda: QuantizerRegistry.create(
+        if self.real_quant:
+            assert input_quant_type == weight_quant_type, \
+                "For real quantization, input and weight quantizers must be the same type."
+            self.this_type = input_quant_type
+            if self.this_type not in ext_dict:
+                self.real_quant = False
+            else:
+                if ext_dict[self.this_type]['gemm_scaled_fn'] is None or \
+                    ext_dict[self.this_type]['gemm_dual_scaled_fn'] is None:
+                    self.real_quant = False
+
+        input_quant_args['real_quant'] = self.real_quant
+        def input_gen():
+            return QuantizerRegistry.create(
+                input_quant_type, **(input_quant_args or {})
+            )
+
+        weight_quant_args['real_quant'] = self.real_quant
+        def weight_gen():
+            return QuantizerRegistry.create(
                 weight_quant_type, **(weight_quant_args or {})
             )
-        else:
-            weight_gen = lambda: None
+
 
         self.input_quantizers = [input_gen() for _ in range(chunks)]
         self.weight_quantizers = [weight_gen() for _ in range(chunks)]
@@ -304,15 +324,6 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
             self.input_quantizers, self.weight_quantizers, alpha=alpha, dual_s=dual_s
         )
 
-        if self.real_quant:
-            self.this_type = 'fp8'
-            if self.this_type not in ext_dict:
-                self.real_quant = False
-            else:
-                if ext_dict[self.this_type]['gemm_scaled_fn'] is None or \
-                    ext_dict[self.this_type]['gemm_dual_scaled_fn'] is None:
-                    self.real_quant = False
-
     def __repr__(self):
         base = (
             f"SmoothQuantSegmentLinear(\n"
@@ -322,6 +333,8 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
             f"  chunks={self.chunks},\n"
             f"  chunksize={self.chunksizes},\n"
             f"  alpha={self.calibrator.alpha},\n"
+            f"  real_quant={self.real_quant},\n"
+            f"  type={self.this_type},\n" if self.real_quant else ""
         )
         if self.has_calibrated:
             input_q = ",\n    ".join(repr(i) for i in self.input_quantizers)
@@ -382,17 +395,18 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
         quantized_weights, bias = self.linear
         if self.seg_mode == "weight":
             if self.real_quant:
+                smoothed_input_chunks = self.calibrator.smooth_input(input_chunks)
                 if self.dual_scale:
                     gemm_fn = ext_dict[self.this_type]['gemm_dual_scaled_fn']
                     output_chunks = [gemm_fn(
-                        input_chunks[0], quantized_weights[i],
+                        smoothed_input_chunks[i], quantized_weights[i],
                         self.input_quantizers[i].pos_scale, self.input_quantizers[i].neg_scale,
                         self.weight_quantizers[i].scale)
                         for i in range(self.chunks)]
                 else:
                     gemm_fn = ext_dict[self.this_type]['gemm_scaled_fn']
                     output_chunks = [gemm_fn(
-                        input_chunks[0], quantized_weights[i],
+                        smoothed_input_chunks[i], quantized_weights[i],
                         self.input_quantizers[i].scale,
                         self.weight_quantizers[i].scale)
                         for i in range(self.chunks)]
@@ -406,17 +420,18 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
 
         if self.seg_mode == "input":
             if self.real_quant:
+                smoothed_input_chunks = self.calibrator.smooth_input(input_chunks)
                 if self.dual_scale:
                     gemm_fn = ext_dict[self.this_type]['gemm_dual_scaled_fn']
                     quantized_output_chunks = [gemm_fn(
-                        input_chunks[i], quantized_weights[i],
+                        smoothed_input_chunks[i], quantized_weights[i],
                         self.input_quantizers[i].pos_scale, self.input_quantizers[i].neg_scale,
                         self.weight_quantizers[i].scale)
                         for i in range(self.chunks)]
                 else:
                     gemm_fn = ext_dict[self.this_type]['gemm_scaled_fn']
                     quantized_output_chunks = [gemm_fn(
-                        input_chunks[i], quantized_weights[i],
+                        smoothed_input_chunks[i], quantized_weights[i],
                         self.input_quantizers[i].scale,
                         self.weight_quantizers[i].scale)
                         for i in range(self.chunks)]
