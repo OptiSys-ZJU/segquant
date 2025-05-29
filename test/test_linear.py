@@ -148,7 +148,7 @@ def test_default_fp8_real():
             "weight_dtype": DType.FP8E4M3,
             "opt": Optimum.DEFAULT,
             "seglinear": True,
-            "search_patterns": [],
+            "search_patterns": [SegPattern.ACTIVATION2LINEAR],
             "real_quant": False,
             "input_axis": None,
             "weight_axis": None,
@@ -170,7 +170,7 @@ def test_default_fp8_real():
             "weight_dtype": DType.FP8E4M3,
             "opt": Optimum.DEFAULT,
             "seglinear": True,
-            "search_patterns": [],
+            "search_patterns": [SegPattern.ACTIVATION2LINEAR],
             "real_quant": True,
             "input_axis": None,
             "weight_axis": None,
@@ -192,9 +192,6 @@ def test_default_fp8_real():
     print("origin:", res)
     res = segquant_model.forward(x, emb)
     print("segquant(fake):", res)
-
-    print(segquant_model.linear.input_quantizers[0].scale, segquant_model.linear.weight_quantizers[0].scale)
-
     res = segquant_model_real.forward(x, emb)
     print("segquant(real):", res)
 

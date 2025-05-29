@@ -124,11 +124,18 @@ void launch_fp8_array_gemm_scaled(
     using ElementOutput = typename CutlassElementOutputType<T>::type;
     using ElementAccumulator = float;
     using ElementCompute = float;
-    constexpr int NumPerThread = 4;
-
     using LayoutInputA = cutlass::layout::RowMajor;
     using LayoutInputB = cutlass::layout::ColumnMajor;
     using LayoutOutput = cutlass::layout::RowMajor;
+    constexpr int NumPerThread = 4;
+    constexpr int AlignNum = 16;
+
+    if (K % AlignNum != 0) {
+        throw std::runtime_error("K dimension (" + std::to_string(K) + ") is not aligned to " + std::to_string(AlignNum));
+    }
+    if (N % AlignNum != 0) {
+        throw std::runtime_error("N dimension (" + std::to_string(N) + ") is not aligned to " + std::to_string(AlignNum));
+    }
 
     using GemmArray = cutlass::gemm::device::GemmArray<
         ElementInputA,
@@ -148,7 +155,11 @@ void launch_fp8_array_gemm_scaled(
             NumPerThread,
             ElementAccumulator,
             ElementCompute
-        >
+        >,
+        cutlass::gemm::threadblock::GemmBatchedIdentityThreadblockSwizzle,
+        3,
+        AlignNum,
+        AlignNum
     >;
 
     typename GemmArray::Arguments args{
@@ -163,8 +174,9 @@ void launch_fp8_array_gemm_scaled(
 
     GemmArray gemm;
     cutlass::Status status = gemm(args, nullptr, stream);
+    cudaError_t err = cudaGetLastError();
     if (status != cutlass::Status::kSuccess) {
-        throw std::runtime_error("Array GEMM launch failed");
+        throw std::runtime_error(std::string("GEMM launch failed, cutlass status: ") + cutlass::cutlassGetStatusString(status) + ", cuda error: " + cudaGetErrorString(err));
     }
 }
 
@@ -223,36 +235,33 @@ at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor 
                                 float pos_scale_x, float neg_scale_x,
                                 float scale_w) {
     
-    __nv_fp8_e4m3 *Xp, *Xn, *Wq;
-    
     auto inputs_sizes = inputs.sizes();
     auto weights_sizes = weights.sizes();
-    int64_t M = inputs_sizes[0];
+    int64_t M = inputs_sizes[0]; // (M, K)
     int64_t K = inputs_sizes[1];
-    int64_t N = weights_sizes[0];
+    int64_t N = weights_sizes[0]; // (N, K)
+    if (weights_sizes[1] != K) {
+        throw std::runtime_error("weights tensor must have shape [N, K]");
+    }
 
     auto options = inputs.options();
     auto outputs = at::empty({M, N}, options);
-
-    size_t numel_x = inputs.numel();
-    size_t numel_y = outputs.numel();
+    auto Xp_tensor = at::empty({M, K}, options.dtype(at::kByte));
+    auto Xn_tensor = at::empty({M, K}, options.dtype(at::kByte));
+    __nv_fp8_e4m3* Xp = reinterpret_cast<__nv_fp8_e4m3*>(Xp_tensor.data_ptr<uint8_t>());
+    __nv_fp8_e4m3* Xn = reinterpret_cast<__nv_fp8_e4m3*>(Xn_tensor.data_ptr<uint8_t>());
+    __nv_fp8_e4m3* Wq = reinterpret_cast<__nv_fp8_e4m3*>(weights.data_ptr<uint8_t>());
 
     auto stream = c10::cuda::getCurrentCUDAStream();
-
-    cudaMallocAsync(&Xp, numel_x * sizeof(__nv_fp8_e4m3), stream);
-    cudaMallocAsync(&Xn, numel_x * sizeof(__nv_fp8_e4m3), stream);
-    
+    size_t numel_x = inputs.numel();
     // X = Xp + Xn
     AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_e4m3fy_dual_scaled_kernel", [&] {
         real_quantize_e4m3fy_dual_scaled_kernel<<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
             inputs.data_ptr<scalar_t>(), pos_scale_x, neg_scale_x, numel_x, Xp, Xn);
     });
 
-    Wq = reinterpret_cast<__nv_fp8_e4m3*>(weights.data_ptr<uint8_t>());
-
-    auto Y_p = at::empty_like(outputs);
-    auto Y_n = at::empty_like(outputs);
-    
+    auto Y_p = at::empty({M, N}, options);
+    auto Y_n = at::empty({M, N}, options);
     std::vector<void const *> ptr_A_batched_host{Xp, Xn};
     std::vector<void const *> ptr_B_batched_host{Wq, Wq};
     std::vector<void*> ptr_C_batched_host;
@@ -287,6 +296,7 @@ at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor 
     });
 
     // Y = Y_p + Y_n
+    size_t numel_y = outputs.numel();
     AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_dual_scaled_kernel", [&] {
         real_dequantize_dual_scaled_kernel<<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
             Y_p.data_ptr<scalar_t>(), 
@@ -297,9 +307,6 @@ at::Tensor real_quantized_e4m3fy_gemm_dual_scaled(at::Tensor inputs, at::Tensor 
             numel_y
         );
     });
-
-    cudaFreeAsync(Xp, stream);
-    cudaFreeAsync(Xn, stream);
 
     return outputs;
 }
