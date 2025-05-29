@@ -144,8 +144,7 @@ class BenchmarkConfig:
         latents_path="../latents.pt",
         controlnet_conditioning_scale=0,
         guidance_scale=7,
-        test_benchmark_size=2,
-        benchmark_size=2,
+        benchmark_size=5000,
         max_timestep=50,
         gpu_id=0,
     ):
@@ -157,7 +156,6 @@ class BenchmarkConfig:
         self.generate_real_pics = generate_real_pics
         self.controlnet_conditioning_scale = controlnet_conditioning_scale
         self.guidance_scale = guidance_scale
-        self.test_benchmark_size = test_benchmark_size
         self.benchmark_size = benchmark_size
         self.max_timestep = max_timestep
         self.gpu_id = gpu_id
