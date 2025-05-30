@@ -110,12 +110,10 @@ def run_module(benchmark, affine_config, calibration_config):
             ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), f"cuda:{benchmark.gpu_id}"
         )
         # generate real pics
-        real_dir = f"../segquant/benchmark_record/run_real_module" 
-        pic_path = os.path.join(real_dir, "pics/real")
-        print(f"[INFO] generating real pics in [{pic_path}]...")
+        print(f"[INFO] generating real pics with model_real")
         trace_pic(
             model_real,
-            pic_path,
+            os.path.join(f"../segquant/benchmark_record/{benchmark.dataset_type}/run_real_module", f"pics/real"),
             benchmark.dataset.get_dataloader(),
             benchmark.latents,
             max_num=benchmark.benchmark_size,
@@ -123,7 +121,7 @@ def run_module(benchmark, affine_config, calibration_config):
             guidance_scale=benchmark.guidance_scale,
             num_inference_steps=benchmark.max_timestep,
         )
-        print(f"[INFO] real pics generated in [{pic_path}]")
+        print(f"[INFO] real pics generated with model_real")
         del model_real
         return
     
