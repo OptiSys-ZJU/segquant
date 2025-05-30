@@ -1,15 +1,27 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.fx
 import torch.nn as nn
 import json
 from types import SimpleNamespace
 import inspect
 from safetensors.torch import load_file
-from backend.torch.layers.embeddings import PatchEmbed, CombinedTimestepTextProjEmbeddings
-from backend.torch.layers.attention_processor import Attention, AttentionProcessor, FusedJointAttnProcessor2_0
+from backend.torch.layers.embeddings import (
+    PatchEmbed,
+    CombinedTimestepTextProjEmbeddings,
+)
+from backend.torch.layers.attention_processor import (
+    Attention,
+    AttentionProcessor,
+    FusedJointAttnProcessor2_0,
+)
 from backend.torch.layers.attention import JointTransformerBlock
 from backend.torch.layers.normalization import AdaLayerNormContinuous
+
+torch.fx.wrap("len")
+torch.fx.wrap("int")
+
 
 class SD3Transformer2DModel(nn.Module):
     """
@@ -53,17 +65,19 @@ class SD3Transformer2DModel(nn.Module):
     def from_config(cls, config_path, weight_path):
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-            model = cls(sample_size=config['sample_size'],
-                        patch_size=config['patch_size'],
-                        in_channels=config['in_channels'],
-                        num_layers=config['num_layers'],
-                        attention_head_dim=config['attention_head_dim'],
-                        num_attention_heads=config['num_attention_heads'],
-                        joint_attention_dim=config['joint_attention_dim'],
-                        caption_projection_dim=config['caption_projection_dim'],
-                        pooled_projection_dim=config['pooled_projection_dim'],
-                        out_channels=config['out_channels'],
-                        pos_embed_max_size=config['pos_embed_max_size'])
+            model = cls(
+                sample_size=config["sample_size"],
+                patch_size=config["patch_size"],
+                in_channels=config["in_channels"],
+                num_layers=config["num_layers"],
+                attention_head_dim=config["attention_head_dim"],
+                num_attention_heads=config["num_attention_heads"],
+                joint_attention_dim=config["joint_attention_dim"],
+                caption_projection_dim=config["caption_projection_dim"],
+                pooled_projection_dim=config["pooled_projection_dim"],
+                out_channels=config["out_channels"],
+                pos_embed_max_size=config["pos_embed_max_size"],
+            )
 
             model_state_dict = model.state_dict()
             weights = load_file(weight_path)
@@ -102,7 +116,6 @@ class SD3Transformer2DModel(nn.Module):
             if key in init_params:
                 setattr(self.config, key, value)
 
-
         self.out_channels = out_channels if out_channels is not None else in_channels
         self.inner_dim = num_attention_heads * attention_head_dim
 
@@ -133,13 +146,19 @@ class SD3Transformer2DModel(nn.Module):
             ]
         )
 
-        self.norm_out = AdaLayerNormContinuous(self.inner_dim, self.inner_dim, elementwise_affine=False, eps=1e-6)
-        self.proj_out = nn.Linear(self.inner_dim, patch_size * patch_size * self.out_channels, bias=True)
+        self.norm_out = AdaLayerNormContinuous(
+            self.inner_dim, self.inner_dim, elementwise_affine=False, eps=1e-6
+        )
+        self.proj_out = nn.Linear(
+            self.inner_dim, patch_size * patch_size * self.out_channels, bias=True
+        )
 
         self.gradient_checkpointing = False
 
     # Copied from diffusers.models.unets.unet_3d_condition.UNet3DConditionModel.enable_forward_chunking
-    def enable_forward_chunking(self, chunk_size: Optional[int] = None, dim: int = 0) -> None:
+    def enable_forward_chunking(
+        self, chunk_size: Optional[int] = None, dim: int = 0
+    ) -> None:
         """
         Sets the attention processor to use [feed forward
         chunking](https://huggingface.co/blog/reformer#2-chunked-feed-forward-layers).
@@ -158,7 +177,9 @@ class SD3Transformer2DModel(nn.Module):
         # By default chunk size is 1
         chunk_size = chunk_size or 1
 
-        def fn_recursive_feed_forward(module: torch.nn.Module, chunk_size: int, dim: int):
+        def fn_recursive_feed_forward(
+            module: torch.nn.Module, chunk_size: int, dim: int
+        ):
             if hasattr(module, "set_chunk_feed_forward"):
                 module.set_chunk_feed_forward(chunk_size=chunk_size, dim=dim)
 
@@ -170,7 +191,9 @@ class SD3Transformer2DModel(nn.Module):
 
     # Copied from diffusers.models.unets.unet_3d_condition.UNet3DConditionModel.disable_forward_chunking
     def disable_forward_chunking(self):
-        def fn_recursive_feed_forward(module: torch.nn.Module, chunk_size: int, dim: int):
+        def fn_recursive_feed_forward(
+            module: torch.nn.Module, chunk_size: int, dim: int
+        ):
             if hasattr(module, "set_chunk_feed_forward"):
                 module.set_chunk_feed_forward(chunk_size=chunk_size, dim=dim)
 
@@ -191,7 +214,11 @@ class SD3Transformer2DModel(nn.Module):
         # set recursively
         processors = {}
 
-        def fn_recursive_add_processors(name: str, module: torch.nn.Module, processors: Dict[str, AttentionProcessor]):
+        def fn_recursive_add_processors(
+            name: str,
+            module: torch.nn.Module,
+            processors: Dict[str, AttentionProcessor],
+        ):
             if hasattr(module, "get_processor"):
                 processors[f"{name}.processor"] = module.get_processor()
 
@@ -206,7 +233,9 @@ class SD3Transformer2DModel(nn.Module):
         return processors
 
     # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_attn_processor
-    def set_attn_processor(self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]):
+    def set_attn_processor(
+        self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]
+    ):
         r"""
         Sets the attention processor to use to compute attention.
 
@@ -256,7 +285,9 @@ class SD3Transformer2DModel(nn.Module):
 
         for _, attn_processor in self.attn_processors.items():
             if "Added" in str(attn_processor.__class__.__name__):
-                raise ValueError("`fuse_qkv_projections()` is not supported for models having added KV projections.")
+                raise ValueError(
+                    "`fuse_qkv_projections()` is not supported for models having added KV projections."
+                )
 
         self.original_attn_processors = self.attn_processors
 
@@ -326,22 +357,40 @@ class SD3Transformer2DModel(nn.Module):
 
         height, width = hidden_states.shape[-2:]
 
-        hidden_states = self.pos_embed(hidden_states)  # takes care of adding positional embeddings too.
+        hidden_states = self.pos_embed(
+            hidden_states
+        )  # takes care of adding positional embeddings too.
         temb = self.time_text_embed(timestep, pooled_projections)
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
-        if joint_attention_kwargs is not None and "ip_adapter_image_embeds" in joint_attention_kwargs:
-            ip_adapter_image_embeds = joint_attention_kwargs.pop("ip_adapter_image_embeds")
-            ip_hidden_states, ip_temb = self.image_proj(ip_adapter_image_embeds, timestep)
+        if (
+            joint_attention_kwargs is not None
+            and "ip_adapter_image_embeds" in joint_attention_kwargs
+        ):
+            ip_adapter_image_embeds = joint_attention_kwargs.pop(
+                "ip_adapter_image_embeds"
+            )
+            ip_hidden_states, ip_temb = self.image_proj(
+                ip_adapter_image_embeds, timestep
+            )
 
-            joint_attention_kwargs.update(ip_hidden_states=ip_hidden_states, temb=ip_temb)
+            joint_attention_kwargs.update(
+                ip_hidden_states=ip_hidden_states, temb=ip_temb
+            )
 
         for index_block, block in enumerate(self.transformer_blocks):
             # Skip specified layers
-            is_skip = True if skip_layers is not None and index_block in skip_layers else False
+            is_skip = (
+                True
+                if skip_layers is not None and index_block in skip_layers
+                else False
+            )
 
             if torch.is_grad_enabled() and self.gradient_checkpointing and not is_skip:
-                encoder_hidden_states, hidden_states = self._gradient_checkpointing_func(
+                (
+                    encoder_hidden_states,
+                    hidden_states,
+                ) = self._gradient_checkpointing_func(
                     block,
                     hidden_states,
                     encoder_hidden_states,
@@ -357,9 +406,19 @@ class SD3Transformer2DModel(nn.Module):
                 )
 
             # controlnet residual
-            if block_controlnet_hidden_states is not None and block.context_pre_only is False:
-                interval_control = len(self.transformer_blocks) / len(block_controlnet_hidden_states)
-                hidden_states = hidden_states + block_controlnet_hidden_states[int(index_block / interval_control)]
+            if (
+                block_controlnet_hidden_states is not None
+                and block.context_pre_only is False
+            ):
+                interval_control = len(self.transformer_blocks) / len(
+                    block_controlnet_hidden_states
+                )
+                hidden_states = (
+                    hidden_states
+                    + block_controlnet_hidden_states[
+                        int(index_block / interval_control)
+                    ]
+                )
 
         hidden_states = self.norm_out(hidden_states, temb)
         hidden_states = self.proj_out(hidden_states)
@@ -370,11 +429,23 @@ class SD3Transformer2DModel(nn.Module):
         width = width // patch_size
 
         hidden_states = hidden_states.reshape(
-            shape=(hidden_states.shape[0], height, width, patch_size, patch_size, self.out_channels)
+            shape=(
+                hidden_states.shape[0],
+                height,
+                width,
+                patch_size,
+                patch_size,
+                self.out_channels,
+            )
         )
         hidden_states = torch.einsum("nhwpqc->nchpwq", hidden_states)
         output = hidden_states.reshape(
-            shape=(hidden_states.shape[0], self.out_channels, height * patch_size, width * patch_size)
+            shape=(
+                hidden_states.shape[0],
+                self.out_channels,
+                height * patch_size,
+                width * patch_size,
+            )
         )
 
         return (output,)

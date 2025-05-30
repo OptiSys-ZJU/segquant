@@ -11,6 +11,7 @@ ACT2CLS = {
     "relu": nn.ReLU,
 }
 
+
 def get_activation(act_fn: str) -> nn.Module:
     """Helper function to get activation function from string.
 
@@ -25,7 +26,10 @@ def get_activation(act_fn: str) -> nn.Module:
     if act_fn in ACT2CLS:
         return ACT2CLS[act_fn]()
     else:
-        raise ValueError(f"activation function {act_fn} not found in ACT2FN mapping {list(ACT2CLS.keys())}")
+        raise ValueError(
+            f"activation function {act_fn} not found in ACT2FN mapping {list(ACT2CLS.keys())}"
+        )
+
 
 class GELU(nn.Module):
     r"""
@@ -38,7 +42,9 @@ class GELU(nn.Module):
         bias (`bool`, defaults to True): Whether to use a bias in the linear layer.
     """
 
-    def __init__(self, dim_in: int, dim_out: int, approximate: str = "none", bias: bool = True):
+    def __init__(
+        self, dim_in: int, dim_out: int, approximate: str = "none", bias: bool = True
+    ):
         super().__init__()
         self.proj = nn.Linear(dim_in, dim_out, bias=bias)
         self.approximate = approximate
@@ -50,6 +56,7 @@ class GELU(nn.Module):
         hidden_states = self.proj(hidden_states)
         hidden_states = self.gelu(hidden_states)
         return hidden_states
+
 
 class SwiGLU(nn.Module):
     r"""
@@ -73,8 +80,11 @@ class SwiGLU(nn.Module):
         hidden_states, gate = hidden_states.chunk(2, dim=-1)
         return hidden_states * self.activation(gate)
 
+
 class LinearActivation(nn.Module):
-    def __init__(self, dim_in: int, dim_out: int, bias: bool = True, activation: str = "silu"):
+    def __init__(
+        self, dim_in: int, dim_out: int, bias: bool = True, activation: str = "silu"
+    ):
         super().__init__()
 
         self.proj = nn.Linear(dim_in, dim_out, bias=bias)
@@ -83,6 +93,7 @@ class LinearActivation(nn.Module):
     def forward(self, hidden_states):
         hidden_states = self.proj(hidden_states)
         return self.activation(hidden_states)
+
 
 class GEGLU(nn.Module):
     r"""
@@ -109,6 +120,7 @@ class GEGLU(nn.Module):
         hidden_states, gate = hidden_states.chunk(2, dim=-1)
         return hidden_states * self.gelu(gate)
 
+
 class ApproximateGELU(nn.Module):
     r"""
     The approximate form of the Gaussian Error Linear Unit (GELU). For more details, see section 2 of this
@@ -127,6 +139,7 @@ class ApproximateGELU(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.proj(x)
         return x * torch.sigmoid(1.702 * x)
+
 
 class FP32SiLU(nn.Module):
     r"""

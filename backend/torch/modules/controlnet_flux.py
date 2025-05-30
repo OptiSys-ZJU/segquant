@@ -18,32 +18,44 @@ import inspect
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.fx
 import torch.nn as nn
 
 from safetensors.torch import load_file
 from backend.torch.layers.attention_processor import AttentionProcessor
-from backend.torch.layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings, CombinedTimestepTextProjEmbeddings, ControlNetConditioningEmbedding, FluxPosEmbed
-from backend.torch.modules.transformer_flux import FluxSingleTransformerBlock, FluxTransformerBlock
+from backend.torch.layers.embeddings import (
+    CombinedTimestepGuidanceTextProjEmbeddings,
+    CombinedTimestepTextProjEmbeddings,
+    ControlNetConditioningEmbedding,
+    FluxPosEmbed,
+)
+from backend.torch.modules.transformer_flux import (
+    FluxSingleTransformerBlock,
+    FluxTransformerBlock,
+)
 from backend.torch.utils import zero_module
 
-class FluxControlNetModel(nn.Module):
+torch.fx.wrap("len")
 
+
+class FluxControlNetModel(nn.Module):
     @classmethod
     def from_config(cls, config_path, weight_path):
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-            model = cls(patch_size=config['patch_size'],
-                        in_channels=config['in_channels'],
-                        num_layers=config['num_layers'],
-                        num_single_layers=config['num_single_layers'],
-                        attention_head_dim=config['attention_head_dim'],
-                        num_attention_heads=config['num_attention_heads'],
-                        joint_attention_dim=config['joint_attention_dim'],
-                        pooled_projection_dim=config['pooled_projection_dim'],
-                        guidance_embeds=config['guidance_embeds'],
-                        axes_dims_rope=config['axes_dims_rope'],
-                        num_mode=config['num_mode'],
-                        )
+            model = cls(
+                patch_size=config["patch_size"],
+                in_channels=config["in_channels"],
+                num_layers=config["num_layers"],
+                num_single_layers=config["num_single_layers"],
+                attention_head_dim=config["attention_head_dim"],
+                num_attention_heads=config["num_attention_heads"],
+                joint_attention_dim=config["joint_attention_dim"],
+                pooled_projection_dim=config["pooled_projection_dim"],
+                guidance_embeds=config["guidance_embeds"],
+                axes_dims_rope=config["axes_dims_rope"],
+                num_mode=config["num_mode"],
+            )
 
             model_state_dict = model.state_dict()
             weights = load_file(weight_path)
@@ -81,7 +93,9 @@ class FluxControlNetModel(nn.Module):
 
         self.pos_embed = FluxPosEmbed(theta=10000, axes_dim=axes_dims_rope)
         text_time_guidance_cls = (
-            CombinedTimestepGuidanceTextProjEmbeddings if guidance_embeds else CombinedTimestepTextProjEmbeddings
+            CombinedTimestepGuidanceTextProjEmbeddings
+            if guidance_embeds
+            else CombinedTimestepTextProjEmbeddings
         )
         self.time_text_embed = text_time_guidance_cls(
             embedding_dim=self.inner_dim, pooled_projection_dim=pooled_projection_dim
@@ -115,11 +129,15 @@ class FluxControlNetModel(nn.Module):
         # controlnet_blocks
         self.controlnet_blocks = nn.ModuleList([])
         for _ in range(len(self.transformer_blocks)):
-            self.controlnet_blocks.append(zero_module(nn.Linear(self.inner_dim, self.inner_dim)))
+            self.controlnet_blocks.append(
+                zero_module(nn.Linear(self.inner_dim, self.inner_dim))
+            )
 
         self.controlnet_single_blocks = nn.ModuleList([])
         for _ in range(len(self.single_transformer_blocks)):
-            self.controlnet_single_blocks.append(zero_module(nn.Linear(self.inner_dim, self.inner_dim)))
+            self.controlnet_single_blocks.append(
+                zero_module(nn.Linear(self.inner_dim, self.inner_dim))
+            )
 
         self.union = num_mode is not None
         if self.union:
@@ -127,12 +145,15 @@ class FluxControlNetModel(nn.Module):
 
         if conditioning_embedding_channels is not None:
             self.input_hint_block = ControlNetConditioningEmbedding(
-                conditioning_embedding_channels=conditioning_embedding_channels, block_out_channels=(16, 16, 16, 16)
+                conditioning_embedding_channels=conditioning_embedding_channels,
+                block_out_channels=(16, 16, 16, 16),
             )
             self.controlnet_x_embedder = torch.nn.Linear(in_channels, self.inner_dim)
         else:
             self.input_hint_block = None
-            self.controlnet_x_embedder = zero_module(torch.nn.Linear(in_channels, self.inner_dim))
+            self.controlnet_x_embedder = zero_module(
+                torch.nn.Linear(in_channels, self.inner_dim)
+            )
 
         self.gradient_checkpointing = False
 
@@ -147,7 +168,11 @@ class FluxControlNetModel(nn.Module):
         # set recursively
         processors = {}
 
-        def fn_recursive_add_processors(name: str, module: torch.nn.Module, processors: Dict[str, AttentionProcessor]):
+        def fn_recursive_add_processors(
+            name: str,
+            module: torch.nn.Module,
+            processors: Dict[str, AttentionProcessor],
+        ):
             if hasattr(module, "get_processor"):
                 processors[f"{name}.processor"] = module.get_processor()
 
@@ -216,15 +241,23 @@ class FluxControlNetModel(nn.Module):
 
         if load_weights_from_transformer:
             controlnet.pos_embed.load_state_dict(transformer.pos_embed.state_dict())
-            controlnet.time_text_embed.load_state_dict(transformer.time_text_embed.state_dict())
-            controlnet.context_embedder.load_state_dict(transformer.context_embedder.state_dict())
+            controlnet.time_text_embed.load_state_dict(
+                transformer.time_text_embed.state_dict()
+            )
+            controlnet.context_embedder.load_state_dict(
+                transformer.context_embedder.state_dict()
+            )
             controlnet.x_embedder.load_state_dict(transformer.x_embedder.state_dict())
-            controlnet.transformer_blocks.load_state_dict(transformer.transformer_blocks.state_dict(), strict=False)
+            controlnet.transformer_blocks.load_state_dict(
+                transformer.transformer_blocks.state_dict(), strict=False
+            )
             controlnet.single_transformer_blocks.load_state_dict(
                 transformer.single_transformer_blocks.state_dict(), strict=False
             )
 
-            controlnet.controlnet_x_embedder = zero_module(controlnet.controlnet_x_embedder)
+            controlnet.controlnet_x_embedder = zero_module(
+                controlnet.controlnet_x_embedder
+            )
 
         return controlnet
 
@@ -280,7 +313,10 @@ class FluxControlNetModel(nn.Module):
         else:
             lora_scale = 1.0
 
-        if joint_attention_kwargs is not None and joint_attention_kwargs.get("scale", None) is not None:
+        if (
+            joint_attention_kwargs is not None
+            and joint_attention_kwargs.get("scale", None) is not None
+        ):
             print(
                 "Passing `scale` via `joint_attention_kwargs` when not using the PEFT backend is ineffective."
             )
@@ -292,7 +328,12 @@ class FluxControlNetModel(nn.Module):
             height = height_pw // self.config.patch_size
             width = width_pw // self.config.patch_size
             controlnet_cond = controlnet_cond.reshape(
-                batch_size, channels, height, self.config.patch_size, width, self.config.patch_size
+                batch_size,
+                channels,
+                height,
+                self.config.patch_size,
+                width,
+                self.config.patch_size,
             )
             controlnet_cond = controlnet_cond.permute(0, 2, 4, 1, 3, 5)
             controlnet_cond = controlnet_cond.reshape(batch_size, height * width, -1)
@@ -314,10 +355,14 @@ class FluxControlNetModel(nn.Module):
         if self.union:
             # union mode
             if controlnet_mode is None:
-                raise ValueError("`controlnet_mode` cannot be `None` when applying ControlNet-Union")
+                raise ValueError(
+                    "`controlnet_mode` cannot be `None` when applying ControlNet-Union"
+                )
             # union mode emb
             controlnet_mode_emb = self.controlnet_mode_embedder(controlnet_mode)
-            encoder_hidden_states = torch.cat([controlnet_mode_emb, encoder_hidden_states], dim=1)
+            encoder_hidden_states = torch.cat(
+                [controlnet_mode_emb, encoder_hidden_states], dim=1
+            )
             txt_ids = torch.cat([txt_ids[:1], txt_ids], dim=0)
 
         if txt_ids.ndim == 3:
@@ -339,12 +384,11 @@ class FluxControlNetModel(nn.Module):
         block_samples = ()
         for index_block, block in enumerate(self.transformer_blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
-                encoder_hidden_states, hidden_states = self._gradient_checkpointing_func(
-                    block,
-                    hidden_states,
+                (
                     encoder_hidden_states,
-                    temb,
-                    image_rotary_emb,
+                    hidden_states,
+                ) = self._gradient_checkpointing_func(
+                    block, hidden_states, encoder_hidden_states, temb, image_rotary_emb,
                 )
 
             else:
@@ -362,10 +406,7 @@ class FluxControlNetModel(nn.Module):
         for index_block, block in enumerate(self.single_transformer_blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 hidden_states = self._gradient_checkpointing_func(
-                    block,
-                    hidden_states,
-                    temb,
-                    image_rotary_emb,
+                    block, hidden_states, temb, image_rotary_emb,
                 )
 
             else:
@@ -374,27 +415,42 @@ class FluxControlNetModel(nn.Module):
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
                 )
-            single_block_samples = single_block_samples + (hidden_states[:, encoder_hidden_states.shape[1] :],)
+            single_block_samples = single_block_samples + (
+                hidden_states[:, encoder_hidden_states.shape[1] :],
+            )
 
         # controlnet block
         controlnet_block_samples = ()
-        for block_sample, controlnet_block in zip(block_samples, self.controlnet_blocks):
+        for block_sample, controlnet_block in zip(
+            block_samples, self.controlnet_blocks
+        ):
             block_sample = controlnet_block(block_sample)
             controlnet_block_samples = controlnet_block_samples + (block_sample,)
 
         controlnet_single_block_samples = ()
-        for single_block_sample, controlnet_block in zip(single_block_samples, self.controlnet_single_blocks):
+        for single_block_sample, controlnet_block in zip(
+            single_block_samples, self.controlnet_single_blocks
+        ):
             single_block_sample = controlnet_block(single_block_sample)
-            controlnet_single_block_samples = controlnet_single_block_samples + (single_block_sample,)
+            controlnet_single_block_samples = controlnet_single_block_samples + (
+                single_block_sample,
+            )
 
         # scaling
-        controlnet_block_samples = [sample * conditioning_scale for sample in controlnet_block_samples]
-        controlnet_single_block_samples = [sample * conditioning_scale for sample in controlnet_single_block_samples]
+        controlnet_block_samples = [
+            sample * conditioning_scale for sample in controlnet_block_samples
+        ]
+        controlnet_single_block_samples = [
+            sample * conditioning_scale for sample in controlnet_single_block_samples
+        ]
 
-        controlnet_block_samples = None if len(controlnet_block_samples) == 0 else controlnet_block_samples
-        controlnet_single_block_samples = (
-            None if len(controlnet_single_block_samples) == 0 else controlnet_single_block_samples
-        )
+        controlnet_block_samples = controlnet_block_samples or None
+        controlnet_single_block_samples = controlnet_single_block_samples or None
+
+        # controlnet_block_samples = None if len(controlnet_block_samples) == 0 else controlnet_block_samples
+        # controlnet_single_block_samples = (
+        #     None if len(controlnet_single_block_samples) == 0 else controlnet_single_block_samples
+        # )
 
         return (controlnet_block_samples, controlnet_single_block_samples)
 
@@ -435,7 +491,9 @@ class FluxMultiControlNetModel(nn.Module):
         if len(self.nets) == 1 and self.nets[0].union:
             controlnet = self.nets[0]
 
-            for i, (image, mode, scale) in enumerate(zip(controlnet_cond, controlnet_mode, conditioning_scale)):
+            for i, (image, mode, scale) in enumerate(
+                zip(controlnet_cond, controlnet_mode, conditioning_scale)
+            ):
                 block_samples, single_block_samples = controlnet(
                     hidden_states=hidden_states,
                     controlnet_cond=image,
@@ -457,7 +515,9 @@ class FluxMultiControlNetModel(nn.Module):
                 else:
                     control_block_samples = [
                         control_block_sample + block_sample
-                        for control_block_sample, block_sample in zip(control_block_samples, block_samples)
+                        for control_block_sample, block_sample in zip(
+                            control_block_samples, block_samples
+                        )
                     ]
 
                     control_single_block_samples = [
@@ -495,9 +555,14 @@ class FluxMultiControlNetModel(nn.Module):
                     if block_samples is not None and control_block_samples is not None:
                         control_block_samples = [
                             control_block_sample + block_sample
-                            for control_block_sample, block_sample in zip(control_block_samples, block_samples)
+                            for control_block_sample, block_sample in zip(
+                                control_block_samples, block_samples
+                            )
                         ]
-                    if single_block_samples is not None and control_single_block_samples is not None:
+                    if (
+                        single_block_samples is not None
+                        and control_single_block_samples is not None
+                    ):
                         control_single_block_samples = [
                             control_single_block_sample + block_sample
                             for control_single_block_sample, block_sample in zip(
