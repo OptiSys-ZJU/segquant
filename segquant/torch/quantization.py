@@ -32,6 +32,7 @@ def _get_quantization_config(
     input_axis=None,
     weight_axis=None,
     alpha=None,
+    low_rank=None,
 ):
     if input_dtype is None:
         input_dtype = final_config["default"].get("input_dtype", DType.INT8)
@@ -45,6 +46,8 @@ def _get_quantization_config(
     weight_axis = weight_axis or final_config["default"].get("weight_axis")
     if alpha is None:
         alpha = final_config["default"].get("alpha", 0.5)
+    if low_rank is None:
+        low_rank = final_config["default"].get("low_rank", 32)
 
     if name in final_config:
         input_dtype = final_config[name].get("input_dtype", input_dtype)
@@ -54,8 +57,9 @@ def _get_quantization_config(
         input_axis = final_config[name].get("input_axis", input_axis)
         weight_axis = final_config[name].get("weight_axis", weight_axis)
         alpha = final_config[name].get("alpha", alpha)
+        low_rank = final_config[name].get("low_rank", low_rank)
 
-    return input_dtype, weight_dtype, opt, real_quant, input_axis, weight_axis, alpha
+    return input_dtype, weight_dtype, opt, real_quant, input_axis, weight_axis, alpha, low_rank
 
 
 def _create_linear(
@@ -70,6 +74,7 @@ def _create_linear(
     input_axis=None,
     weight_axis=None,
     alpha=None,
+    low_rank=None,
     dual_scale=False,
 ):
     old_linear = layer
@@ -85,6 +90,7 @@ def _create_linear(
         input_axis,
         weight_axis,
         alpha,
+        low_rank,
     ) = _get_quantization_config(
         final_config,
         layer_name,
@@ -95,6 +101,7 @@ def _create_linear(
         input_axis,
         weight_axis,
         alpha,
+        low_rank,
     )
 
     new_linear, need_smooth = create_segment_linear(
@@ -113,6 +120,7 @@ def _create_linear(
         input_quant_args={"real_quant": real_quant, "dual_scale": dual_scale, "axis": input_axis},
         weight_quant_args={"real_quant": real_quant, "axis": weight_axis},
         alpha=alpha,
+        low_rank=low_rank,
     )
     if has_bias:
         new_linear.linear.bias.data.copy_(old_linear.bias.data)
