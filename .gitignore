@@ -1,1 +1,11 @@
-__pycache__/benchmark/expr_old.py
+__pycache__/
+.vscode/
+dist/
+affine_pics/
+*.egg-info/
+*.jpg
+*.svg
+*.pdf
+*.png
+*.log
+.pylintrc
