@@ -44,7 +44,7 @@ at::Tensor fake_e4m3fy_cuda(at::Tensor inputs) {
     size_t numel = inputs.numel();
     auto outputs = torch::empty_like(inputs);
     auto stream = c10::cuda::getCurrentCUDAStream();
-    AT_DISPATCH_FLOATING_TYPES(inputs.type().scalarType(), "fake_e4m3fy_cuda", [&] {
+    AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "fake_e4m3fy_cuda", [&] {
         fake_e4m3fy_kernel<<<numel / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
             inputs.data_ptr<scalar_t>(), numel, outputs.data_ptr<scalar_t>());
     });

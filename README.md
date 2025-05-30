@@ -2,7 +2,7 @@
 A Semantics-Aware and Generalizable Quantization Framework for Diffusion Models
 
 ## Environment
-Our project has been tested with Python 3.10 (specifically version 3.10.12) and CUDA 12.5. We highly recommend using a virtual environment, such as Anaconda3, to manage and install the required dependencies.
+Our project has been tested with Python 3.12 (specifically version 3.12.3) and CUDA 12.5. We highly recommend using a virtual environment, such as Anaconda3, to manage and install the required dependencies.
 
 ## Install
 Before installation, make sure all required Python dependencies are available. You can install them using:

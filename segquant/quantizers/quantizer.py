@@ -7,7 +7,7 @@ as well as a registry for dynamically registering and retrieving quantizer class
 
 from abc import ABC, abstractmethod
 import torch
-from segquant.utils.extension import load_fake_quant_fp8_ext
+from segquant.utils.extension import load_fake_quant_fp8_ext, load_real_quant_fp8_ext, load_real_quant_int8_ext
 
 
 class BaseQuantizer(ABC):
@@ -86,7 +86,7 @@ class IntQuantizer(BaseQuantizer):
         axis (int or None): Axis along which to compute the scale and zero-point (default: None).
         dual_scale (bool): Whether to use dual-scale quantization (default: False).
     """
-    def __init__(self, num_bits=8, symmetric=True, axis=None, dual_scale=False):
+    def __init__(self, num_bits=8, symmetric=True, axis=None, dual_scale=False, real_quant=False):
         self.num_bits = num_bits
         self.symmetric = symmetric
         self.axis = axis
@@ -107,6 +107,9 @@ class IntQuantizer(BaseQuantizer):
         self.pos_scale = None
 
         self.scale = 1.0
+        self.real_quant = real_quant
+        if self.real_quant:
+            assert self.axis is None, "Real quantization does not support axis."
 
     def calibrate(self, x: torch.Tensor):
         epsilon = 1.0 / (1 << 24)
@@ -237,6 +240,14 @@ class IntQuantizer(BaseQuantizer):
         return x_dequant.to(x.dtype)
 
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
+        if self.real_quant:
+            # when real quantization is enabled, only weights are quantized
+            ext = load_real_quant_int8_ext(required=False)
+            if ext is not None:
+                assert not self.dual_scale, "Weight quantization does not support dual scale."
+                return ext.real_quantized_quantize_weights(x, self.scale)
+
+        # fake quantization
         return self._fake_quantize(x)
 
     def __repr__(self):
@@ -244,6 +255,7 @@ class IntQuantizer(BaseQuantizer):
             if self.dual_scale:
                 return (
                     f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
+                    f"real_quant={self.real_quant}, "
                     f"dual_scale=True, axis={self.axis}, "
                     f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})"
                 )
@@ -253,16 +265,19 @@ class IntQuantizer(BaseQuantizer):
                 amax_str = f"[{amin:.4f}, {amax:.4f}]"
                 return (
                     f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
+                    f"real_quant={self.real_quant}, "
                     f"dual_scale=False, axis={self.axis}, "
                     f"amax=[{amax_str}])"
                 )
             return (
                 f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
+                f"real_quant={self.real_quant}, "
                 f"dual_scale=False, axis={self.axis}, "
                 f"amax={self.amax:.4f})"
             )
         return (
             f"IntQuantizer(num_bits={self.num_bits}, symmetric=False, axis={self.axis}, "
+            f"real_quant={self.real_quant}, "
             f"amin={self.amin:.4f}, amax={self.amax:.4f}, zero_point={self.zero_point:.4f})"
         )
 
@@ -280,7 +295,7 @@ class FloatQuantizer(BaseQuantizer):
         axis (int or None): Axis along which to compute the scale and zero-point (default: None).
         dual_scale (bool): Whether to use dual-scale quantization (default: False).
     """
-    def __init__(self, exp_bits=4, mant_bits=3, axis=None, dual_scale=False):
+    def __init__(self, exp_bits=4, mant_bits=3, axis=None, dual_scale=False, real_quant=False):
         self.exp_bits = exp_bits
         self.mant_bits = mant_bits
         self.axis = axis
@@ -303,6 +318,10 @@ class FloatQuantizer(BaseQuantizer):
         self.neg_amax = None
         self.pos_amax = None
         self.amax = None
+
+        self.real_quant = real_quant
+        if self.real_quant:
+            assert self.axis is None, "Real quantization does not support axis."
 
     def calibrate(self, x: torch.Tensor):
         epsilon = 1.0 / (1 << 24)
@@ -439,17 +458,27 @@ class FloatQuantizer(BaseQuantizer):
         return x_dequant.to(x.dtype)
 
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
+        if self.real_quant:
+            # when real quantization is enabled, only weights are quantized
+            ext = load_real_quant_fp8_ext(required=False)
+            if ext is not None:
+                assert not self.dual_scale, "Weight quantization does not support dual scale."
+                return ext.real_quantized_quantize_weights(x, self.scale)
+
+        # fake quantization
         return self._fake_quantize(x)
 
     def __repr__(self):
         if self.dual_scale:
             return (
                 f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
+                f"real_quant={self.real_quant}, "
                 f"axis={self.axis}, dual_scale=True, "
                 f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})"
             )
         return (
             f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
+            f"real_quant={self.real_quant}, "
             f"axis={self.axis}, dual_scale=False, "
             f"amax={self.amax:.4f})"
         )

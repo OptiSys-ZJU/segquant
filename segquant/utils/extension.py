@@ -9,14 +9,13 @@ _loaded_extensions = {}
 
 
 def load_extension(
-    name: str, sources: list, verbose: bool = False, required: bool = False
+    name: str,
+    sources: list,
+    include_dirs: list = None,
+    verbose: bool = False,
+    required: bool = False,
+    **kwargs,
 ):
-    """
-    Load a C++/CUDA extension with the given name and sources.
-    If the extension is already loaded, it returns the existing instance.
-    If the extension fails to load and `required` is True, it raises an error.
-    If `verbose` is True, it prints additional information about the loading process.
-    """
     if name in _loaded_extensions:
         if verbose:
             print(f"[INFO] Extension already loaded: {name}")
@@ -26,8 +25,16 @@ def load_extension(
         if verbose:
             print(f"[INFO] Attempting to load extension: {name}")
             print(f"[INFO] Sources: {sources}")
+            if include_dirs:
+                print(f"[INFO] Include dirs: {include_dirs}")
 
-        extension = load(name=name, sources=sources, verbose=verbose)
+        extension = load(
+            name=name,
+            sources=sources,
+            extra_include_paths=include_dirs or [],
+            verbose=verbose,
+            **kwargs,
+        )
 
         if verbose:
             print(f"[INFO] Successfully loaded extension: {name}")
@@ -35,10 +42,9 @@ def load_extension(
         _loaded_extensions[name] = extension
         return extension
 
-    except (RuntimeError, ImportError) as e:
+    except (RuntimeError, ImportError, TypeError) as e:
         if verbose:
             print(f"[ERROR] Failed to load extension: {name}\n{e}")
-
         if required:
             raise RuntimeError(f"Required extension '{name}' failed to load.") from e
         return None
@@ -61,4 +67,52 @@ def load_fake_quant_fp8_ext(verbose=False, required=False):
         ],
         verbose=verbose,
         required=required,
+    )
+
+def load_real_quant_fp8_ext(verbose=False, required=False):
+    """
+    Load the real quantization extension for FP8 quantization.
+    Args:
+        verbose (bool): If True, prints additional information during loading.
+        required (bool): If True, raises an error if the extension fails to load.
+    Returns:
+        module: The loaded extension object, or None if it fails to load and `required` is False.
+    """
+    return load_extension(
+        name="segquant_real_quant_fp8",
+        sources=[
+            "segquant/src/real_quant/quantized_fp8.cpp",
+            "segquant/src/real_quant/real_gemm.cu",
+        ],
+        include_dirs=[
+            '/usr/local/cutlass/include'
+        ],
+        verbose=verbose,
+        required=required,
+        extra_cflags=['-DSEGQUANT_FP8'],
+        extra_cuda_cflags=['-DSEGQUANT_FP8'],
+    )
+
+def load_real_quant_int8_ext(verbose=False, required=False):
+    """
+    Load the real quantization extension for INT8 quantization.
+    Args:
+        verbose (bool): If True, prints additional information during loading.
+        required (bool): If True, raises an error if the extension fails to load.
+    Returns:
+        module: The loaded extension object, or None if it fails to load and `required` is False.
+    """
+    return load_extension(
+        name="segquant_real_quant_int8",
+        sources=[
+            "segquant/src/real_quant/quantized_int8.cpp",
+            "segquant/src/real_quant/real_gemm.cu",
+        ],
+        include_dirs=[
+            '/usr/local/cutlass/include'
+        ],
+        verbose=verbose,
+        required=required,
+        extra_cflags=['-DSEGQUANT_INT8'],
+        extra_cuda_cflags=['-DSEGQUANT_INT8'],
     )

@@ -18,8 +18,8 @@ class RandomTensorDataset:
         generator.manual_seed(self.seed)
         self.batches = [
             (
-                torch.rand(2, 10, generator=generator),
-                torch.rand(2, 10, generator=generator),
+                torch.rand(2, 16, generator=generator),
+                torch.rand(2, 16, generator=generator),
             )
             for _ in range(self.num_batches)
         ]
@@ -64,7 +64,7 @@ def forward_loop(model):
 
 
 class TestModel(nn.Module):
-    def __init__(self, embedding_dim: int = 10, bias=True):
+    def __init__(self, embedding_dim: int = 16, bias=True):
         super().__init__()
 
         self.silu = nn.SiLU()
@@ -114,6 +114,7 @@ def test_default_fp8():
             "weight_dtype": DType.FP8E4M3,
             "opt": Optimum.DEFAULT,
             "seglinear": True,
+            "real_quant": False,
             "search_patterns": [],
             "input_axis": None,
             "weight_axis": None,
@@ -124,13 +125,13 @@ def test_default_fp8():
         seg_data_loader,
         config,
         True,
-        example=(torch.rand(2, 10), torch.rand(2, 10)),
+        example=(torch.rand(2, 16), torch.rand(2, 16)),
     )
     ######################################
     x_generator = torch.Generator()
     x_generator.manual_seed(1234)
-    x = torch.rand(2, 10, generator=x_generator)
-    emb = torch.rand(2, 10, generator=x_generator)
+    x = torch.rand(2, 16, generator=x_generator)
+    emb = torch.rand(2, 16, generator=x_generator)
     res = test_model.forward(x, emb)
     print("origin:", res)
     res = modelopt_model.forward(x, emb)
@@ -138,14 +139,72 @@ def test_default_fp8():
     res = segquant_model.forward(x, emb)
     print("segquant:", res)
 
+def test_default_fp8_real():
+    test_model = TestModel().to(torch.device("cuda:0"))
+    ######################################
+    config = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.FP8E4M3,
+            "weight_dtype": DType.FP8E4M3,
+            "opt": Optimum.DEFAULT,
+            "seglinear": True,
+            "search_patterns": SegPattern.all(),
+            "real_quant": False,
+            "input_axis": None,
+            "weight_axis": None,
+        },
+    }
+    segquant_model = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config,
+        True,
+        example=(torch.rand(2, 16), torch.rand(2, 16)),
+    )
+
+    ######################################
+    config_real = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.FP8E4M3,
+            "weight_dtype": DType.FP8E4M3,
+            "opt": Optimum.DEFAULT,
+            "seglinear": True,
+            "search_patterns": SegPattern.all(),
+            "real_quant": True,
+            "input_axis": None,
+            "weight_axis": None,
+        },
+    }
+    segquant_model_real = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config_real,
+        True,
+        example=(torch.rand(2, 16), torch.rand(2, 16)),
+    )
+    ######################################
+    x_generator = torch.Generator()
+    x_generator.manual_seed(1234)
+    x = torch.rand(2, 16, generator=x_generator).to(torch.device("cuda:0"))
+    emb = torch.rand(2, 16, generator=x_generator).to(torch.device("cuda:0"))
+    res = test_model.forward(x, emb)
+    print("origin:", res)
+    res = segquant_model.forward(x, emb)
+    print("segquant(fake):", res)
+    res = segquant_model_real.forward(x, emb)
+    print("segquant(real):", res)
+
+
 
 def test_default_int8():
     test_model = TestModel()
     ######################################
     CFG = {
         "quant_cfg": {
-            "*weight_quantizer": {"num_bits": 8, "axis": None},
-            "*input_quantizer": {"num_bits": 8, "axis": None},
+            "*weight_quantizer": {"num_bits": 8, "axis": None,},
+            "*input_quantizer": {"num_bits": 8, "axis": None,},
             # "linear.weight_quantizer": {
             #     "num_bits": 8,
             #     "block_sizes": {0: 10},
@@ -166,6 +225,7 @@ def test_default_int8():
             "seglinear": True,
             # 'search_patterns': SegPattern.all(),
             "search_patterns": [],
+            "real_quant": False,
             "input_axis": None,
             "weight_axis": None,
         },
@@ -215,6 +275,8 @@ def test_smooth_int8():
             "weight_dtype": DType.INT8,
             "opt": Optimum.SMOOTH,
             "seglinear": True,
+            "real_quant": False,
+            # "search_patterns": [],
             "search_patterns": SegPattern.seg(),
             "input_axis": None,
             "weight_axis": None,
@@ -241,5 +303,64 @@ def test_smooth_int8():
     print("segquant:", res[0])
 
 
+def test_smooth_int8_real():
+    test_model = TestModel().to(torch.device("cuda:0"))
+    ######################################
+    config = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.SMOOTH,
+            "seglinear": True,
+            "real_quant": False,
+            "search_patterns": SegPattern.all(),
+            "input_axis": None,
+            "weight_axis": None,
+            "alpha": 0.5,
+        },
+    }
+    segquant_model = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config,
+        True,
+        example=(torch.rand(2, 16), torch.rand(2, 16)),
+    )
+    ######################################
+    config_real = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.INT8,
+            "weight_dtype": DType.INT8,
+            "opt": Optimum.SMOOTH,
+            "seglinear": True,
+            "real_quant": True,
+            "search_patterns": SegPattern.all(),
+            "input_axis": None,
+            "weight_axis": None,
+            "alpha": 0.5,
+        },
+    }
+    segquant_model_real = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config_real,
+        True,
+        example=(torch.rand(2, 16), torch.rand(2, 16)),
+    )
+    ######################################
+    x_generator = torch.Generator()
+    x_generator.manual_seed(1234)
+    x = torch.rand(2, 16, generator=x_generator).to(torch.device("cuda:0"))
+    emb = torch.rand(2, 16, generator=x_generator).to(torch.device("cuda:0"))
+    res = test_model.forward(x, emb)
+    print("origin:", res[0])
+    res = segquant_model.forward(x, emb)
+    print("segquant:", res[0])
+    res = segquant_model_real.forward(x, emb)
+    print("segquant_real:", res[0])
+
+
 if __name__ == "__main__":
-    test_default_int8()
+    test_default_fp8()
