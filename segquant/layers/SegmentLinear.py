@@ -224,14 +224,14 @@ class DefaultSegmentLinear(BaseSegmentLinear):
                 if self.dual_scale:
                     gemm_fn = ext_dict[self.this_type]['gemm_dual_scaled_fn']
                     quantized_output_chunks = [gemm_fn(
-                        input_chunks[i], quantized_weights[i],
+                        input_chunks[i].contiguous(), quantized_weights[i].contiguous(),
                         self.input_quantizers[i].pos_scale, self.input_quantizers[i].neg_scale,
                         self.weight_quantizers[0].scale)
                         for i in range(self.chunks)]
                 else:
                     gemm_fn = ext_dict[self.this_type]['gemm_scaled_fn']
                     quantized_output_chunks = [gemm_fn(
-                        input_chunks[i], quantized_weights[i],
+                        input_chunks[i].contiguous(), quantized_weights[i].contiguous(),
                         self.input_quantizers[i].scale, self.weight_quantizers[0].scale)
                         for i in range(self.chunks)]
             else:
@@ -399,14 +399,14 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
                 if self.dual_scale:
                     gemm_fn = ext_dict[self.this_type]['gemm_dual_scaled_fn']
                     output_chunks = [gemm_fn(
-                        smoothed_input_chunks[i], quantized_weights[i],
+                        smoothed_input_chunks[i].contiguous(), quantized_weights[i].contiguous(),
                         self.input_quantizers[i].pos_scale, self.input_quantizers[i].neg_scale,
                         self.weight_quantizers[i].scale)
                         for i in range(self.chunks)]
                 else:
                     gemm_fn = ext_dict[self.this_type]['gemm_scaled_fn']
                     output_chunks = [gemm_fn(
-                        smoothed_input_chunks[i], quantized_weights[i],
+                        smoothed_input_chunks[i].contiguous(), quantized_weights[i].contiguous(),
                         self.input_quantizers[i].scale,
                         self.weight_quantizers[i].scale)
                         for i in range(self.chunks)]
@@ -424,14 +424,14 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
                 if self.dual_scale:
                     gemm_fn = ext_dict[self.this_type]['gemm_dual_scaled_fn']
                     quantized_output_chunks = [gemm_fn(
-                        smoothed_input_chunks[i], quantized_weights[i],
+                        smoothed_input_chunks[i].contiguous(), quantized_weights[i].contiguous(),
                         self.input_quantizers[i].pos_scale, self.input_quantizers[i].neg_scale,
                         self.weight_quantizers[i].scale)
                         for i in range(self.chunks)]
                 else:
                     gemm_fn = ext_dict[self.this_type]['gemm_scaled_fn']
                     quantized_output_chunks = [gemm_fn(
-                        smoothed_input_chunks[i], quantized_weights[i],
+                        smoothed_input_chunks[i].contiguous(), quantized_weights[i].contiguous(),
                         self.input_quantizers[i].scale,
                         self.weight_quantizers[i].scale)
                         for i in range(self.chunks)]

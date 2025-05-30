@@ -114,6 +114,7 @@ def test_default_fp8():
             "weight_dtype": DType.FP8E4M3,
             "opt": Optimum.DEFAULT,
             "seglinear": True,
+            "real_quant": False,
             "search_patterns": [],
             "input_axis": None,
             "weight_axis": None,
@@ -124,13 +125,13 @@ def test_default_fp8():
         seg_data_loader,
         config,
         True,
-        example=(torch.rand(2, 10), torch.rand(2, 10)),
+        example=(torch.rand(2, 16), torch.rand(2, 16)),
     )
     ######################################
     x_generator = torch.Generator()
     x_generator.manual_seed(1234)
-    x = torch.rand(2, 10, generator=x_generator)
-    emb = torch.rand(2, 10, generator=x_generator)
+    x = torch.rand(2, 16, generator=x_generator)
+    emb = torch.rand(2, 16, generator=x_generator)
     res = test_model.forward(x, emb)
     print("origin:", res)
     res = modelopt_model.forward(x, emb)
@@ -148,7 +149,7 @@ def test_default_fp8_real():
             "weight_dtype": DType.FP8E4M3,
             "opt": Optimum.DEFAULT,
             "seglinear": True,
-            "search_patterns": [SegPattern.ACTIVATION2LINEAR],
+            "search_patterns": SegPattern.all(),
             "real_quant": False,
             "input_axis": None,
             "weight_axis": None,
@@ -170,7 +171,7 @@ def test_default_fp8_real():
             "weight_dtype": DType.FP8E4M3,
             "opt": Optimum.DEFAULT,
             "seglinear": True,
-            "search_patterns": [SegPattern.ACTIVATION2LINEAR],
+            "search_patterns": SegPattern.all(),
             "real_quant": True,
             "input_axis": None,
             "weight_axis": None,
@@ -362,4 +363,4 @@ def test_smooth_int8_real():
 
 
 if __name__ == "__main__":
-    test_smooth_int8_real()
+    test_default_fp8()
