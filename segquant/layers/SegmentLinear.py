@@ -612,7 +612,6 @@ class SVDQuantSegmentLinear(BaseSegmentLinear):
                     ]
                 else:
                     gemm_fn = ext_dict[self.this_type]['gemm_scaled_fn']
-                    print(smoothed_input[0].shape, l1s[0].shape, l2s[0].shape, quantized_weights[0].shape)
                     output_chunks = [
                         smoothed_input[i] @ l1s[i] @ l2s[i]
                         + gemm_fn(

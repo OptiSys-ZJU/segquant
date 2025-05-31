@@ -21,7 +21,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("real_quantized_quantize_weights",
         [](at::Tensor weights, float scale_w) {
             TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
-            TORCH_CHECK(weights.numel() % 2, "Quantization to int4 requires the number of elements to be even");
+            TORCH_CHECK(weights.numel() % 2 == 0, "Quantization to int4 requires the number of elements to be even");
             return real_quantized_quantize_weights<cutlass::int4b_t>(weights, scale_w);
         },
         "Quantize weights to int4 format",

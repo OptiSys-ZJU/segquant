@@ -17,7 +17,7 @@ calib_args = {
     "max_timestep": 50,
     "sample_size": 1,
     "timestep_per_sample": 50,
-    "controlnet_conditioning_scale": 0,
+    "controlnet_conditioning_scale": 0.8,
     "guidance_scale": 7,
     "shuffle": False,
 }
@@ -25,15 +25,16 @@ calib_args = {
 quant_config = {
     "default": {
         "enable": True,
-        "input_dtype": DType.INT8,
-        "weight_dtype": DType.INT8,
-        "opt": Optimum.SMOOTH,
+        "input_dtype": DType.INT4,
+        "weight_dtype": DType.INT4,
+        "opt": Optimum.SVD,
         "seglinear": False,
         "real_quant": False,
         "search_patterns": [],
         "input_axis": None,
         "weight_axis": None,
         "alpha": 0.5,
+        "low_rank": 32,
     },
 }
 
@@ -126,11 +127,11 @@ def run_seg_module():
                 "cuda:0",
             )
             target_model = quant_model(
-                model, "dit", target_config, dataset, calib_args
+                model, "controlnet", target_config, dataset, calib_args
             ).to("cpu")
 
             os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
-            torch.save(target_model.transformer, model_target_path)
+            torch.save(target_model.controlnet, model_target_path)
             print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
         else:
             print(f"[INFO] {model_target_path} found, start loading...")
@@ -138,7 +139,7 @@ def run_seg_module():
                 ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
                 "cpu",
             )
-            target_model.transformer = torch.load(model_target_path, weights_only=False)
+            target_model.controlnet = torch.load(model_target_path, weights_only=False)
 
         return target_model
 
@@ -160,35 +161,35 @@ def run_seg_module():
     print("model_quant completed")
 
     ### 2
-    quant_config_with_seg = {
-        "default": {
-            "enable": True,
-            "input_dtype": DType.INT8,
-            "weight_dtype": DType.INT8,
-            "opt": Optimum.SMOOTH,
-            "seglinear": True,
-            "real_quant": True,
-            "search_patterns": SegPattern.seg(),
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 0.5,
-        },
-    }
-    model_quant_seg_path = os.path.join(root_dir, "model/dit/model_quant_seg.pt")
-    model_quant_seg = quant_or_load(model_quant_seg_path, quant_config_with_seg)
-    model_quant_seg = model_quant_seg.to("cuda")
-    trace_pic(
-        model_quant_seg,
-        os.path.join(root_dir, "pics/quant_seg"),
-        dataset.get_dataloader(),
-        latents,
-        max_num=max_num,
-        controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
-        guidance_scale=calib_args["guidance_scale"],
-        num_inference_steps=max_timestep,
-    )
-    del model_quant_seg
-    print("model_quant_seg completed")
+    # quant_config_with_seg = {
+    #     "default": {
+    #         "enable": True,
+    #         "input_dtype": DType.INT8,
+    #         "weight_dtype": DType.INT8,
+    #         "opt": Optimum.SMOOTH,
+    #         "seglinear": True,
+    #         "real_quant": True,
+    #         "search_patterns": SegPattern.seg(),
+    #         "input_axis": None,
+    #         "weight_axis": None,
+    #         "alpha": 0.5,
+    #     },
+    # }
+    # model_quant_seg_path = os.path.join(root_dir, "model/dit/model_quant_seg.pt")
+    # model_quant_seg = quant_or_load(model_quant_seg_path, quant_config_with_seg)
+    # model_quant_seg = model_quant_seg.to("cuda")
+    # trace_pic(
+    #     model_quant_seg,
+    #     os.path.join(root_dir, "pics/quant_seg"),
+    #     dataset.get_dataloader(),
+    #     latents,
+    #     max_num=max_num,
+    #     controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
+    #     guidance_scale=calib_args["guidance_scale"],
+    #     num_inference_steps=max_timestep,
+    # )
+    # del model_quant_seg
+    # print("model_quant_seg completed")
 
 
 def run_dual_scale_module():

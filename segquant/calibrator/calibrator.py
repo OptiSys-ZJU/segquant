@@ -479,6 +479,7 @@ class SVDQuantCalibrator(BaseCalibrator):
                 )
 
                 # svd
+                print(f'torch.linalg.svd: calibrating weight {idx} with shape {weight_smooth.shape}')
                 u, s, vt = torch.linalg.svd(weight_smooth.t().double())
                 if u.shape[1] < self.low_rank or vt.shape[0] < self.low_rank:
                     raise ValueError(
