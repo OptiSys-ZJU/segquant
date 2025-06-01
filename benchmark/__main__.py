@@ -11,13 +11,14 @@ from dataset.coco.coco_dataset import COCODataset
 from backend.torch.models.stable_diffusion_3_controlnet import (
     StableDiffusion3ControlNetModel,
 )
+from backend.torch.models.flux_controlnet import FluxControlNetModel
 from backend.torch.utils import randn_tensor
 
 calib_args = {
     "max_timestep": 50,
     "sample_size": 1,
     "timestep_per_sample": 50,
-    "controlnet_conditioning_scale": 0.8,
+    "controlnet_conditioning_scale": 0,
     "guidance_scale": 7,
     "shuffle": False,
 }
@@ -25,11 +26,11 @@ calib_args = {
 quant_config = {
     "default": {
         "enable": True,
-        "input_dtype": DType.INT4,
-        "weight_dtype": DType.INT4,
-        "opt": Optimum.SVD,
+        "input_dtype": DType.INT8,
+        "weight_dtype": DType.INT8,
+        "opt": Optimum.SMOOTH,
         "seglinear": False,
-        "real_quant": False,
+        "real_quant": True,
         "search_patterns": [],
         "input_axis": None,
         "weight_axis": None,
@@ -50,7 +51,7 @@ def quant_model(
         f"gs{calibargs['guidance_scale']}_"
         f"{'shuffle' if calibargs['shuffle'] else 'noshuffle'}"
     )
-    calibset_path = os.path.join("calibset_record", quant_layer, calib_key)
+    calibset_path = os.path.join("calibset_record", "flux", quant_layer, calib_key)
     sampler = QDiffusionSampler()
     sample_dataloader = dataset.get_dataloader(
         batch_size=1, shuffle=calibargs["shuffle"]
@@ -84,10 +85,13 @@ def run_seg_module():
     root_dir = "tmp_test_linear"
     os.makedirs(root_dir, exist_ok=True)
 
+    # latents = randn_tensor(
+    #     (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
+    # )
     latents = randn_tensor(
-        (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
+        (1, 4096, 64,), device=torch.device("cuda:0"), dtype=torch.float16
     )
-
+    
     dataset = COCODataset(
         path="../dataset/controlnet_datasets/coco_canny", cache_size=16
     )
@@ -96,12 +100,16 @@ def run_seg_module():
     max_num = 1
 
     ### 0
-    model_real = StableDiffusion3ControlNetModel.from_repo(
-        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
-    )
-    model_real = model_real.to("cuda")
     pic_path = os.path.join(root_dir, "pics/real")
     if not os.path.exists(pic_path):
+        # model_real = StableDiffusion3ControlNetModel.from_repo(
+        #     ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
+        # )
+        model_real = FluxControlNetModel.from_repo(
+            ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"), "cpu"
+        )
+        model_real = model_real.to("cuda")
+
         print(f"[INFO] generating pics in [{pic_path}]...")
         trace_pic(
             model_real,
@@ -113,21 +121,25 @@ def run_seg_module():
             guidance_scale=calib_args["guidance_scale"],
             num_inference_steps=max_timestep,
         )
+        del model_real
         print("model_real completed")
     else:
         print(f"[INFO] found pics in [{pic_path}], skip")
-    del model_real
 
     def quant_or_load(model_target_path, target_config):
         if not os.path.exists(model_target_path):
             print(f"[INFO] {model_target_path} not found, start quantizing...")
 
-            model = StableDiffusion3ControlNetModel.from_repo(
-                ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
+            # model = StableDiffusion3ControlNetModel.from_repo(
+            #     ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
+            #     "cuda:0",
+            # )
+            model = FluxControlNetModel.from_repo(
+                ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"),
                 "cuda:0",
             )
             target_model = quant_model(
-                model, "controlnet", target_config, dataset, calib_args
+                model, "dit", target_config, dataset, calib_args
             ).to("cpu")
 
             os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
@@ -135,11 +147,15 @@ def run_seg_module():
             print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
         else:
             print(f"[INFO] {model_target_path} found, start loading...")
-            target_model = StableDiffusion3ControlNetModel.from_repo(
-                ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-                "cpu",
+            # target_model = StableDiffusion3ControlNetModel.from_repo(
+            #     ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
+            #     "cpu",
+            # )
+            target_model = FluxControlNetModel.from_repo(
+                ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"),
+                "cuda:0",
             )
-            target_model.controlnet = torch.load(model_target_path, weights_only=False)
+            target_model.transformer = torch.load(model_target_path, weights_only=False)
 
         return target_model
 
