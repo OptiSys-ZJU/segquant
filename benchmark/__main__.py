@@ -26,9 +26,9 @@ calib_args = {
 quant_config = {
     "default": {
         "enable": True,
-        "input_dtype": DType.INT8,
-        "weight_dtype": DType.INT8,
-        "opt": Optimum.SMOOTH,
+        "input_dtype": DType.INT4,
+        "weight_dtype": DType.INT4,
+        "opt": Optimum.SVD,
         "seglinear": False,
         "real_quant": True,
         "search_patterns": [],
@@ -38,6 +38,13 @@ quant_config = {
         "low_rank": 32,
     },
 }
+
+# latents = randn_tensor(
+#     (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
+# )
+latents = randn_tensor(
+    (1, 4096, 64,), device=torch.device("cuda:0"), dtype=torch.float16
+)
 
 
 def quant_model(
@@ -67,6 +74,9 @@ def quant_model(
         timestep_per_sample=calibargs["timestep_per_sample"],
         controlnet_conditioning_scale=calibargs["controlnet_conditioning_scale"],
         guidance_scale=calibargs["guidance_scale"],
+
+
+        latents=latents,
     )
 
     calib_loader = calibset.get_dataloader(batch_size=1)
@@ -84,13 +94,6 @@ def quant_model(
 def run_seg_module():
     root_dir = "tmp_test_linear"
     os.makedirs(root_dir, exist_ok=True)
-
-    # latents = randn_tensor(
-    #     (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
-    # )
-    latents = randn_tensor(
-        (1, 4096, 64,), device=torch.device("cuda:0"), dtype=torch.float16
-    )
     
     dataset = COCODataset(
         path="../dataset/controlnet_datasets/coco_canny", cache_size=16
@@ -106,7 +109,7 @@ def run_seg_module():
         #     ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
         # )
         model_real = FluxControlNetModel.from_repo(
-            ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"), "cpu"
+            ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"), "cpu", enable_control=False,
         )
         model_real = model_real.to("cuda")
 
@@ -137,6 +140,7 @@ def run_seg_module():
             model = FluxControlNetModel.from_repo(
                 ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"),
                 "cuda:0",
+                enable_control=False,
             )
             target_model = quant_model(
                 model, "dit", target_config, dataset, calib_args

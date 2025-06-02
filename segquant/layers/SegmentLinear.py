@@ -691,6 +691,7 @@ def create_segment_linear(
 
     if opt == Optimum.DEFAULT:
         kwargs.pop("alpha", None)
+        kwargs.pop("low_rank", None)
     elif opt == Optimum.SMOOTH:
         kwargs.pop("low_rank", None)
 
