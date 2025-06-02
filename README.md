@@ -20,7 +20,17 @@ Alternatively, you can build and install the package as a standard Python packag
 python -m build
 pip install dist/segquant-*.whl
 ```
-> Note: This project is organized using pyproject.toml, and requires Python ≥ 3.10. You should also ensure build tools such as setuptools, wheel, and build are installed.
+> Note: This project is organized using pyproject.toml, and requires Python ≥ 3.12. You should also ensure build tools such as setuptools, wheel, and build are installed.
+
+### Setting `CUTLASS_PATH` Environment Variable
+
+This project may depend on the **CUTLASS** library. You'll need to set the `CUTLASS_PATH` environment variable to point to its installation directory. If it's not set, the project will default to `/usr/local/cutlass`.
+
+You can set this temporarily in your current terminal session:
+
+```bash
+export CUTLASS_PATH=/path/to/your/cutlass
+```
 
 ## Usage
 ### Quantization

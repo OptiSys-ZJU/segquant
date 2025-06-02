@@ -37,6 +37,29 @@ quant_config = {
         "alpha": 0.5,
         "low_rank": 32,
     },
+
+    "*transformer_blocks.*.attn.to_k*": {
+        "enable": False,
+    },
+    "*transformer_blocks.*.attn.to_v*": {
+        "enable": False,
+    },
+    "*transformer_blocks.*.norm1.linear*": {
+        "enable": False,
+    },
+    "*transformer_blocks.*.norm1_context.linear*": {
+        "enable": False,
+    },
+
+    "*single_transformer_blocks.*.attn.to_k*": {
+        "enable": False,
+    },
+    "*single_transformer_blocks.*.attn.to_v*": {
+        "enable": False,
+    },
+    "*single_transformer_blocks.*.norm.linear*": {
+        "enable": False,
+    },
 }
 
 # latents = randn_tensor(
@@ -147,7 +170,7 @@ def run_seg_module():
             ).to("cpu")
 
             os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
-            torch.save(target_model.controlnet, model_target_path)
+            torch.save(target_model.transformer, model_target_path)
             print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
         else:
             print(f"[INFO] {model_target_path} found, start loading...")
