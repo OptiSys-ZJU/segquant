@@ -7,7 +7,7 @@ as well as a registry for dynamically registering and retrieving quantizer class
 
 from abc import ABC, abstractmethod
 import torch
-from segquant.utils.extension import load_fake_quant_fp8_ext, load_real_quant_fp8_ext, load_real_quant_int8_ext
+from segquant.utils.extension import load_fake_quant_fp8_ext, load_real_quant_fp8_ext, load_real_quant_int4_ext, load_real_quant_int8_ext
 
 
 class BaseQuantizer(ABC):
@@ -242,10 +242,15 @@ class IntQuantizer(BaseQuantizer):
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
         if self.real_quant:
             # when real quantization is enabled, only weights are quantized
-            ext = load_real_quant_int8_ext(required=False)
-            if ext is not None:
-                assert not self.dual_scale, "Weight quantization does not support dual scale."
-                return ext.real_quantized_quantize_weights(x, self.scale)
+            assert not self.dual_scale, "Weight quantization does not support dual scale."
+            if self.num_bits == 8:
+                ext = load_real_quant_int8_ext(required=False)
+                if ext is not None:
+                    return ext.real_quantized_quantize_weights(x, self.scale)
+            elif self.num_bits == 4:
+                ext = load_real_quant_int4_ext(required=False)
+                if ext is not None:
+                    return ext.real_quantized_quantize_weights(x, self.scale)
 
         # fake quantization
         return self._fake_quantize(x)
@@ -485,24 +490,24 @@ class FloatQuantizer(BaseQuantizer):
 
 
 @QuantizerRegistry.register("int16")
-def int16_factory():
+def int16_factory(**kwargs):
     """Factory function for creating an IntQuantizer with 16 bits."""
-    return IntQuantizer(num_bits=16)
+    return IntQuantizer(num_bits=16, **kwargs)
 
 
 @QuantizerRegistry.register("int6")
-def int6_factory():
+def int6_factory(**kwargs):
     """Factory function for creating an IntQuantizer with 6 bits."""
-    return IntQuantizer(num_bits=6)
+    return IntQuantizer(num_bits=6, **kwargs)
 
 
 @QuantizerRegistry.register("int4")
-def int4_factory():
+def int4_factory(**kwargs):
     """Factory function for creating an IntQuantizer with 4 bits."""
-    return IntQuantizer(num_bits=4)
+    return IntQuantizer(num_bits=4, **kwargs)
 
 
 @QuantizerRegistry.register("fpe5m2")
-def fp8e5m2_factory():
+def fp8e5m2_factory(**kwargs):
     """Factory function for creating a FloatQuantizer with 5 exponent bits and 2 mantissa bits."""
-    return FloatQuantizer(exp_bits=5, mant_bits=2)
+    return FloatQuantizer(exp_bits=5, mant_bits=2, **kwargs)

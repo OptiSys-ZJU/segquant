@@ -160,6 +160,7 @@ class FluxControlNetModel(nn.Module):
         device="cuda:0",
         controlnet=None,
         transformer=None,
+        enable_control=True,
     ):
         main_repo, control_net_repo = repo
 
@@ -191,7 +192,7 @@ class FluxControlNetModel(nn.Module):
                 .to(device)
             )
 
-        if controlnet is None:
+        if enable_control and controlnet is None:
             controlnet = (
                 ControlNet.from_config(
                     f"{control_net_repo}/config.json",
@@ -200,6 +201,8 @@ class FluxControlNetModel(nn.Module):
                 .half()
                 .to(device)
             )
+        if not enable_control:
+            controlnet = None
 
         return (
             cls(
@@ -880,28 +883,29 @@ class FluxControlNetModel(nn.Module):
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
 
-        if not isinstance(control_guidance_start, list) and isinstance(
-            control_guidance_end, list
-        ):
-            control_guidance_start = len(control_guidance_end) * [
-                control_guidance_start
-            ]
-        elif not isinstance(control_guidance_end, list) and isinstance(
-            control_guidance_start, list
-        ):
-            control_guidance_end = len(control_guidance_start) * [control_guidance_end]
-        elif not isinstance(control_guidance_start, list) and not isinstance(
-            control_guidance_end, list
-        ):
-            mult = (
-                len(self.controlnet.nets)
-                if isinstance(self.controlnet, MultiControlNet)
-                else 1
-            )
-            control_guidance_start, control_guidance_end = (
-                mult * [control_guidance_start],
-                mult * [control_guidance_end],
-            )
+        if self.controlnet is not None:
+            if not isinstance(control_guidance_start, list) and isinstance(
+                control_guidance_end, list
+            ):
+                control_guidance_start = len(control_guidance_end) * [
+                    control_guidance_start
+                ]
+            elif not isinstance(control_guidance_end, list) and isinstance(
+                control_guidance_start, list
+            ):
+                control_guidance_end = len(control_guidance_start) * [control_guidance_end]
+            elif not isinstance(control_guidance_start, list) and not isinstance(
+                control_guidance_end, list
+            ):
+                mult = (
+                    len(self.controlnet.nets)
+                    if isinstance(self.controlnet, MultiControlNet)
+                    else 1
+                )
+                control_guidance_start, control_guidance_end = (
+                    mult * [control_guidance_start],
+                    mult * [control_guidance_end],
+                )
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(
@@ -1073,6 +1077,8 @@ class FluxControlNetModel(nn.Module):
                 )
                 control_modes.append(control_mode)
             control_mode = control_modes
+        else:
+            controlnet_blocks_repeat = False
 
         # 4. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels // 4
@@ -1111,15 +1117,16 @@ class FluxControlNetModel(nn.Module):
         self._num_timesteps = len(timesteps)
 
         # 6. Create tensor stating which controlnets to keep
-        controlnet_keep = []
-        for i in range(len(timesteps)):
-            keeps = [
-                1.0 - float(i / len(timesteps) < s or (i + 1) / len(timesteps) > e)
-                for s, e in zip(control_guidance_start, control_guidance_end)
-            ]
-            controlnet_keep.append(
-                keeps[0] if isinstance(self.controlnet, ControlNet) else keeps
-            )
+        if self.controlnet is not None:
+            controlnet_keep = []
+            for i in range(len(timesteps)):
+                keeps = [
+                    1.0 - float(i / len(timesteps) < s or (i + 1) / len(timesteps) > e)
+                    for s, e in zip(control_guidance_start, control_guidance_end)
+                ]
+                controlnet_keep.append(
+                    keeps[0] if isinstance(self.controlnet, ControlNet) else keeps
+                )
 
         if (ip_adapter_image is not None or ip_adapter_image_embeds is not None) and (
             negative_ip_adapter_image is None
@@ -1185,50 +1192,53 @@ class FluxControlNetModel(nn.Module):
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
 
-                if isinstance(self.controlnet, MultiControlNet):
-                    use_guidance = self.controlnet.nets[0].config.guidance_embeds
-                else:
-                    use_guidance = self.controlnet.config.guidance_embeds
-
-                guidance = (
-                    torch.tensor([guidance_scale], device=device)
-                    if use_guidance
-                    else None
-                )
-                guidance = (
-                    guidance.expand(latents.shape[0]) if guidance is not None else None
-                )
-
-                if isinstance(controlnet_keep[i], list):
-                    cond_scale = [
-                        c * s
-                        for c, s in zip(
-                            controlnet_conditioning_scale, controlnet_keep[i]
-                        )
-                    ]
-                else:
-                    controlnet_cond_scale = controlnet_conditioning_scale
-                    if isinstance(controlnet_cond_scale, list):
-                        controlnet_cond_scale = controlnet_cond_scale[0]
-                    cond_scale = controlnet_cond_scale * controlnet_keep[i]
-
                 # controlnet
-                (
-                    controlnet_block_samples,
-                    controlnet_single_block_samples,
-                ) = self.controlnet(
-                    hidden_states=latents,
-                    controlnet_cond=control_image,
-                    controlnet_mode=control_mode,
-                    conditioning_scale=cond_scale,
-                    encoder_hidden_states=prompt_embeds,
-                    pooled_projections=pooled_prompt_embeds,
-                    timestep=timestep / 1000,
-                    img_ids=latent_image_ids,
-                    txt_ids=text_ids,
-                    guidance=guidance,
-                    joint_attention_kwargs=self.joint_attention_kwargs,
-                )
+                if self.controlnet is not None:
+                    if isinstance(self.controlnet, MultiControlNet):
+                        use_guidance = self.controlnet.nets[0].config.guidance_embeds
+                    else:
+                        use_guidance = self.controlnet.config.guidance_embeds
+
+                    guidance = (
+                        torch.tensor([guidance_scale], device=device)
+                        if use_guidance
+                        else None
+                    )
+                    guidance = (
+                        guidance.expand(latents.shape[0]) if guidance is not None else None
+                    )
+
+                    if isinstance(controlnet_keep[i], list):
+                        cond_scale = [
+                            c * s
+                            for c, s in zip(
+                                controlnet_conditioning_scale, controlnet_keep[i]
+                            )
+                        ]
+                    else:
+                        controlnet_cond_scale = controlnet_conditioning_scale
+                        if isinstance(controlnet_cond_scale, list):
+                            controlnet_cond_scale = controlnet_cond_scale[0]
+                        cond_scale = controlnet_cond_scale * controlnet_keep[i]
+                    (
+                        controlnet_block_samples,
+                        controlnet_single_block_samples,
+                    ) = self.controlnet(
+                        hidden_states=latents,
+                        controlnet_cond=control_image,
+                        controlnet_mode=control_mode,
+                        conditioning_scale=cond_scale,
+                        encoder_hidden_states=prompt_embeds,
+                        pooled_projections=pooled_prompt_embeds,
+                        timestep=timestep / 1000,
+                        img_ids=latent_image_ids,
+                        txt_ids=text_ids,
+                        guidance=guidance,
+                        joint_attention_kwargs=self.joint_attention_kwargs,
+                    )
+                else:
+                    controlnet_block_samples = torch.zeros(1, device=device)
+                    controlnet_single_block_samples = torch.zeros(1, device=device)
 
                 guidance = (
                     torch.tensor([guidance_scale], device=device)

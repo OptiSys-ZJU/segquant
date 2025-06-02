@@ -2,11 +2,13 @@
 This module provides utility functions for loading C++/CUDA extensions
 and a specific extension for FP8 fake quantization.
 """
-
+import os
 from torch.utils.cpp_extension import load
 
 _loaded_extensions = {}
 
+cutlass_path = os.environ.get('CUTLASS_PATH', '/usr/local/cutlass')
+print(f"Use Cutlass Path [{cutlass_path}]")
 
 def load_extension(
     name: str,
@@ -85,7 +87,7 @@ def load_real_quant_fp8_ext(verbose=False, required=False):
             "segquant/src/real_quant/real_gemm.cu",
         ],
         include_dirs=[
-            '/usr/local/cutlass/include'
+            f'{cutlass_path}/include'
         ],
         verbose=verbose,
         required=required,
@@ -109,10 +111,34 @@ def load_real_quant_int8_ext(verbose=False, required=False):
             "segquant/src/real_quant/real_gemm.cu",
         ],
         include_dirs=[
-            '/usr/local/cutlass/include'
+            f'{cutlass_path}/include'
         ],
         verbose=verbose,
         required=required,
         extra_cflags=['-DSEGQUANT_INT8'],
         extra_cuda_cflags=['-DSEGQUANT_INT8'],
+    )
+
+def load_real_quant_int4_ext(verbose=False, required=False):
+    """
+    Load the real quantization extension for INT4 quantization.
+    Args:
+        verbose (bool): If True, prints additional information during loading.
+        required (bool): If True, raises an error if the extension fails to load.
+    Returns:
+        module: The loaded extension object, or None if it fails to load and `required` is False.
+    """
+    return load_extension(
+        name="segquant_real_quant_int4",
+        sources=[
+            "segquant/src/real_quant/quantized_int4.cpp",
+            "segquant/src/real_quant/real_gemm.cu",
+        ],
+        include_dirs=[
+            f'{cutlass_path}/include'
+        ],
+        verbose=verbose,
+        required=required,
+        extra_cflags=['-DSEGQUANT_INT4'],
+        extra_cuda_cflags=['-DSEGQUANT_INT4'],
     )
