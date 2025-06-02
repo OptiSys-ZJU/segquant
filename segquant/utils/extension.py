@@ -2,11 +2,13 @@
 This module provides utility functions for loading C++/CUDA extensions
 and a specific extension for FP8 fake quantization.
 """
-
+import os
 from torch.utils.cpp_extension import load
 
 _loaded_extensions = {}
 
+cutlass_path = os.environ.get('CUTLASS_PATH', '/usr/local/cutlass')
+print(f"Use Cutlass Path [{cutlass_path}]")
 
 def load_extension(
     name: str,
@@ -85,7 +87,7 @@ def load_real_quant_fp8_ext(verbose=False, required=False):
             "segquant/src/real_quant/real_gemm.cu",
         ],
         include_dirs=[
-            '/usr/local/cutlass/include'
+            f'{cutlass_path}/include'
         ],
         verbose=verbose,
         required=required,
@@ -109,7 +111,7 @@ def load_real_quant_int8_ext(verbose=False, required=False):
             "segquant/src/real_quant/real_gemm.cu",
         ],
         include_dirs=[
-            '/usr/local/cutlass/include'
+            f'{cutlass_path}/include'
         ],
         verbose=verbose,
         required=required,
@@ -133,7 +135,7 @@ def load_real_quant_int4_ext(verbose=False, required=False):
             "segquant/src/real_quant/real_gemm.cu",
         ],
         include_dirs=[
-            '/usr/local/cutlass/include'
+            f'{cutlass_path}/include'
         ],
         verbose=verbose,
         required=required,
