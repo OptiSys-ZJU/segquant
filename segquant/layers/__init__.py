@@ -22,4 +22,5 @@ def build_ext_dict():
 
     return d
 
-ext_dict = build_ext_dict()
+# ext_dict = build_ext_dict()
+ext_dict = {}

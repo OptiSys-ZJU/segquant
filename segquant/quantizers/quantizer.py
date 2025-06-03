@@ -239,6 +239,9 @@ class IntQuantizer(BaseQuantizer):
         x_dequant = (x_int - zero_point) / scale
         return x_dequant.to(x.dtype)
 
+    def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
+        return self._fake_quantize(x)
+
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
         if self.real_quant:
             # when real quantization is enabled, only weights are quantized
@@ -462,7 +465,12 @@ class FloatQuantizer(BaseQuantizer):
         x_dequant[zero_mask] = 0.0
         return x_dequant.to(x.dtype)
 
-    def quantize(self, x: torch.Tensor) -> torch.Tensor:
+    def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
+        return self._fake_quantize(x)
+
+    def quantize(self, x: torch.Tensor, force_fake=False) -> torch.Tensor:
+        if force_fake:
+            return self._fake_quantize(x)
         if self.real_quant:
             # when real quantization is enabled, only weights are quantized
             ext = load_real_quant_fp8_ext(required=False)

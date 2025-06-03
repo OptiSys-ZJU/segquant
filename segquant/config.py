@@ -31,6 +31,11 @@ class Optimum(Enum):
     SMOOTH = "smooth"
     SVD = "svd"
 
+class Calibrate(Enum):
+    """Calibrate methods for quantization."""
+    AMAX = "amax"
+    GPTQ = "gptq"
+
 
 class SegPattern(Enum):
     """Patterns for segmenting linear layers in quantization."""
@@ -65,13 +70,23 @@ class SegPattern(Enum):
 default_quantize_config = {
     "default": {
         "enable": True,
-        "input_dtype": DType.INT8,
-        "weight_dtype": DType.INT8,
-        "opt": Optimum.SMOOTH,
         "seglinear": True,
-        "real_quant": False,
-        "input_axis": None,
-        "weight_axis": None,
         "search_patterns": SegPattern.all(),
+        "real_quant": False,
+        "opt": {
+            "type": Optimum.SMOOTH,
+            "alpha": 0.5,
+        },
+        "calib": {
+            "type": Calibrate.AMAX,
+        },
+        "input_quant": {
+            "type": DType.INT8,
+            "axis": None,
+        },
+        "weight_quant": {
+            "type": DType.INT8,
+            "axis": None,
+        },
     },
 }

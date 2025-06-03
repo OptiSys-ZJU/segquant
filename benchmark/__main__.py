@@ -2,7 +2,7 @@ import os
 import torch
 from torch import nn
 from benchmark import trace_pic
-from segquant.config import DType, Optimum, SegPattern
+from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.affiner import process_affiner
 from segquant.sample.sampler import QDiffusionSampler, model_map
 from segquant.torch.calibrate_set import generate_calibrate_set
@@ -26,48 +26,33 @@ calib_args = {
 quant_config = {
     "default": {
         "enable": True,
-        "input_dtype": DType.INT4,
-        "weight_dtype": DType.INT4,
-        "opt": Optimum.SVD,
-        "seglinear": False,
-        "real_quant": True,
+        "seglinear": True,
         "search_patterns": [],
-        "input_axis": None,
-        "weight_axis": None,
-        "alpha": 0.5,
-        "low_rank": 32,
-    },
-
-    "*transformer_blocks.*.attn.to_k*": {
-        "enable": False,
-    },
-    "*transformer_blocks.*.attn.to_v*": {
-        "enable": False,
-    },
-    "*transformer_blocks.*.norm1.linear*": {
-        "enable": False,
-    },
-    "*transformer_blocks.*.norm1_context.linear*": {
-        "enable": False,
-    },
-
-    "*single_transformer_blocks.*.attn.to_k*": {
-        "enable": False,
-    },
-    "*single_transformer_blocks.*.attn.to_v*": {
-        "enable": False,
-    },
-    "*single_transformer_blocks.*.norm.linear*": {
-        "enable": False,
+        "real_quant": False,
+        "opt": {
+            "type": Optimum.SMOOTH,
+            "alpha": 0.5,
+        },
+        "calib": {
+            "type": Calibrate.AMAX,
+        },
+        "input_quant": {
+            "type": DType.INT8,
+            "axis": None,
+        },
+        "weight_quant": {
+            "type": DType.INT8,
+            "axis": None,
+        },
     },
 }
 
-# latents = randn_tensor(
-#     (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
-# )
 latents = randn_tensor(
-    (1, 4096, 64,), device=torch.device("cuda:0"), dtype=torch.float16
+    (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
 )
+# latents = randn_tensor(
+#     (1, 4096, 64,), device=torch.device("cuda:0"), dtype=torch.float16
+# )
 
 
 def quant_model(
@@ -81,7 +66,8 @@ def quant_model(
         f"gs{calibargs['guidance_scale']}_"
         f"{'shuffle' if calibargs['shuffle'] else 'noshuffle'}"
     )
-    calibset_path = os.path.join("calibset_record", "flux", quant_layer, calib_key)
+    calibset_path = os.path.join("calibset_record", quant_layer, calib_key)
+    # calibset_path = os.path.join("calibset_record", "flux", quant_layer, calib_key)
     sampler = QDiffusionSampler()
     sample_dataloader = dataset.get_dataloader(
         batch_size=1, shuffle=calibargs["shuffle"]
@@ -126,45 +112,45 @@ def run_seg_module():
     max_num = 1
 
     ### 0
-    pic_path = os.path.join(root_dir, "pics/real")
-    if not os.path.exists(pic_path):
-        # model_real = StableDiffusion3ControlNetModel.from_repo(
-        #     ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
-        # )
-        model_real = FluxControlNetModel.from_repo(
-            ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"), "cpu", enable_control=False,
-        )
-        model_real = model_real.to("cuda")
+    # pic_path = os.path.join(root_dir, "pics/real")
+    # if not os.path.exists(pic_path):
+    #     model_real = StableDiffusion3ControlNetModel.from_repo(
+    #         ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
+    #     )
+    #     # model_real = FluxControlNetModel.from_repo(
+    #     #     ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"), "cpu", enable_control=False,
+    #     # )
+    #     model_real = model_real.to("cuda")
 
-        print(f"[INFO] generating pics in [{pic_path}]...")
-        trace_pic(
-            model_real,
-            pic_path,
-            dataset.get_dataloader(),
-            latents,
-            max_num=max_num,
-            controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
-            guidance_scale=calib_args["guidance_scale"],
-            num_inference_steps=max_timestep,
-        )
-        del model_real
-        print("model_real completed")
-    else:
-        print(f"[INFO] found pics in [{pic_path}], skip")
+    #     print(f"[INFO] generating pics in [{pic_path}]...")
+    #     trace_pic(
+    #         model_real,
+    #         pic_path,
+    #         dataset.get_dataloader(),
+    #         latents,
+    #         max_num=max_num,
+    #         controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
+    #         guidance_scale=calib_args["guidance_scale"],
+    #         num_inference_steps=max_timestep,
+    #     )
+    #     del model_real
+    #     print("model_real completed")
+    # else:
+    #     print(f"[INFO] found pics in [{pic_path}], skip")
 
     def quant_or_load(model_target_path, target_config):
         if not os.path.exists(model_target_path):
             print(f"[INFO] {model_target_path} not found, start quantizing...")
 
-            # model = StableDiffusion3ControlNetModel.from_repo(
-            #     ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-            #     "cuda:0",
-            # )
-            model = FluxControlNetModel.from_repo(
-                ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"),
+            model = StableDiffusion3ControlNetModel.from_repo(
+                ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
                 "cuda:0",
-                enable_control=False,
             )
+            # model = FluxControlNetModel.from_repo(
+            #     ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"),
+            #     "cuda:0",
+            #     enable_control=False,
+            # )
             target_model = quant_model(
                 model, "dit", target_config, dataset, calib_args
             ).to("cpu")
@@ -174,56 +160,25 @@ def run_seg_module():
             print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
         else:
             print(f"[INFO] {model_target_path} found, start loading...")
-            # target_model = StableDiffusion3ControlNetModel.from_repo(
-            #     ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-            #     "cpu",
-            # )
-            target_model = FluxControlNetModel.from_repo(
-                ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"),
-                "cuda:0",
+            target_model = StableDiffusion3ControlNetModel.from_repo(
+                ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
+                "cpu",
             )
+            # target_model = FluxControlNetModel.from_repo(
+            #     ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"),
+            #     "cuda:0",
+            # )
             target_model.transformer = torch.load(model_target_path, weights_only=False)
 
         return target_model
 
     ### 1
-    model_quant_path = os.path.join(root_dir, "model/dit/model_quant.pt")
-    model_quant = quant_or_load(model_quant_path, quant_config)
-    model_quant = model_quant.to("cuda")
-    trace_pic(
-        model_quant,
-        os.path.join(root_dir, "pics/quant"),
-        dataset.get_dataloader(),
-        latents,
-        max_num=max_num,
-        controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
-        guidance_scale=calib_args["guidance_scale"],
-        num_inference_steps=max_timestep,
-    )
-    del model_quant
-    print("model_quant completed")
-
-    ### 2
-    # quant_config_with_seg = {
-    #     "default": {
-    #         "enable": True,
-    #         "input_dtype": DType.INT8,
-    #         "weight_dtype": DType.INT8,
-    #         "opt": Optimum.SMOOTH,
-    #         "seglinear": True,
-    #         "real_quant": True,
-    #         "search_patterns": SegPattern.seg(),
-    #         "input_axis": None,
-    #         "weight_axis": None,
-    #         "alpha": 0.5,
-    #     },
-    # }
-    # model_quant_seg_path = os.path.join(root_dir, "model/dit/model_quant_seg.pt")
-    # model_quant_seg = quant_or_load(model_quant_seg_path, quant_config_with_seg)
-    # model_quant_seg = model_quant_seg.to("cuda")
+    # model_quant_path = os.path.join(root_dir, "model/dit/model_quant.pt")
+    # model_quant = quant_or_load(model_quant_path, quant_config)
+    # model_quant = model_quant.to("cuda")
     # trace_pic(
-    #     model_quant_seg,
-    #     os.path.join(root_dir, "pics/quant_seg"),
+    #     model_quant,
+    #     os.path.join(root_dir, "pics/quant"),
     #     dataset.get_dataloader(),
     #     latents,
     #     max_num=max_num,
@@ -231,8 +186,48 @@ def run_seg_module():
     #     guidance_scale=calib_args["guidance_scale"],
     #     num_inference_steps=max_timestep,
     # )
-    # del model_quant_seg
-    # print("model_quant_seg completed")
+    # del model_quant
+    # print("model_quant completed")
+
+    ### 2
+    quant_config_with_seg = {
+        "default": {
+            "enable": True,
+            "seglinear": True,
+            "search_patterns": SegPattern.all(),
+            "real_quant": False,
+            "opt": {
+                "type": Optimum.SMOOTH,
+                "alpha": 0.5,
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+        },
+    }
+    model_quant_seg_path = os.path.join(root_dir, "model/dit/model_quant_seg.pt")
+    model_quant_seg = quant_or_load(model_quant_seg_path, quant_config_with_seg)
+    model_quant_seg = model_quant_seg.to("cuda")
+    trace_pic(
+        model_quant_seg,
+        os.path.join(root_dir, "pics/quant_seg"),
+        dataset.get_dataloader(),
+        latents,
+        max_num=max_num,
+        controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
+        guidance_scale=calib_args["guidance_scale"],
+        num_inference_steps=max_timestep,
+    )
+    del model_quant_seg
+    print("model_quant_seg completed")
 
 
 def run_dual_scale_module():
