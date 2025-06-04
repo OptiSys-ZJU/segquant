@@ -20,7 +20,7 @@ __global__ void real_dequantize_scaled_kernel(
 
 template <typename T>
 __global__ void real_dequantize_dual_scaled_kernel(
-    const T* Yp, const T* Yn,
+    const float* Yp, const float* Yn,
     T* Y,
     float s_pq, float s_nq,
     size_t n
@@ -28,8 +28,8 @@ __global__ void real_dequantize_dual_scaled_kernel(
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     for (int idx = 4 * tid; idx < 4 * (tid + 1) && idx < n; ++idx) {
-        float val_pq = static_cast<float>(Yp[idx]) / s_pq;
-        float val_nq = static_cast<float>(Yn[idx]) / s_nq;
+        float val_pq = Yp[idx] / s_pq;
+        float val_nq = Yn[idx] / s_nq;
 
         float sum = val_pq + val_nq;
         Y[idx] = static_cast<T>(sum);

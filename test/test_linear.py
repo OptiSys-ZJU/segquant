@@ -7,6 +7,8 @@ from segquant.config import DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 
+embedding_dim = 1536
+
 class RandomTensorDataset:
     def __init__(self, num_batches=6, seed=42):
         self.num_batches = num_batches
@@ -18,8 +20,8 @@ class RandomTensorDataset:
         generator.manual_seed(self.seed)
         self.batches = [
             (
-                torch.rand(2, 16, generator=generator),
-                torch.rand(2, 16, generator=generator),
+                torch.rand(2, embedding_dim, generator=generator),
+                torch.rand(2, embedding_dim, generator=generator),
             )
             for _ in range(self.num_batches)
         ]
@@ -361,6 +363,104 @@ def test_smooth_int8_real():
     res = segquant_model_real.forward(x, emb)
     print("segquant_real:", res[0])
 
+def test_svd_int4():
+    test_model = TestModel(embedding_dim)
+    ######################################
+    CFG = {
+        "quant_cfg": {
+            "*weight_quantizer": {"num_bits": 4, "axis": None},
+            "*input_quantizer": {"num_bits": 4, "axis": -1},
+            # "linear.weight_quantizer": {
+            #     "num_bits": 8,
+            #     "block_sizes": {0: 10},
+            #     "enable": True,
+            # },
+        },
+        "algorithm": {"method": "svdquant", "lowrank": 32},
+    }
+    modelopt_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
+    mtq.print_quant_summary(modelopt_model)
+     ######################################
+    config = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.INT4,
+            "weight_dtype": DType.INT4,
+            "opt": Optimum.SVD,
+            "seglinear": True,
+            "real_quant": False,
+            "search_patterns": [],
+            # "search_patterns": SegPattern.all(),
+            "input_axis": None,
+            "weight_axis": None,
+            "alpha": 0.5,
+            "low_rank": 32,
+        },
+    }
+    segquant_model = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config,
+        True,
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+    )
+    ######################################
+    x_generator = torch.Generator()
+    x_generator.manual_seed(1234)
+    x = torch.rand(2, embedding_dim, generator=x_generator)
+    emb = torch.rand(2, embedding_dim, generator=x_generator)
+    res = test_model.forward(x, emb)
+    print("origin:", res[0])
+    a = res[0]
+    res = segquant_model.forward(x, emb)
+    print("modelopt:", res[0])
+    b = res[0]
+    res = segquant_model.forward(x, emb)
+    print("segquant:", res[0])
+    c = res[0]
+    print('diff1', torch.norm(a - b).item())
+    print('diff2', torch.norm(a - c).item())
+    print('diff3', torch.norm(b - c).item())
+
+
+def test_svd_int4_real():
+    test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
+    ######################################
+    config = {
+        "default": {
+            "enable": True,
+            "input_dtype": DType.INT4,
+            "weight_dtype": DType.INT4,
+            "opt": Optimum.SVD,
+            "seglinear": True,
+            "search_patterns": [],
+            "real_quant": True,
+            # "search_patterns": SegPattern.all(),
+            "input_axis": None,
+            "weight_axis": None,
+            "alpha": 0.5,
+            "low_rank": 32,
+        },
+    }
+    segquant_model = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config,
+        True,
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+    )
+    ######################################
+    x_generator = torch.Generator()
+    x_generator.manual_seed(1234)
+    x = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    emb = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    res = test_model.forward(x, emb)
+    print("origin:", res[0])
+    a = res[0]
+    res = segquant_model.forward(x, emb)
+    print("segquant:", res[0])
+    b = res[0]
+    print('diff', torch.norm(a - b).item())
 
 if __name__ == "__main__":
-    test_default_fp8()
+    test_svd_int4()

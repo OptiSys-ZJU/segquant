@@ -3,6 +3,7 @@
 #include <cuda_fp8.h>
 #include <cstdint>
 #include <torch/extension.h>
+#include <cutlass/numeric_types.h>
 
 template <typename OutputType, typename StoreType>
 __device__ __forceinline__ void store_data(StoreType* out, int idx, float scaled_val);
@@ -21,6 +22,21 @@ template <>
 __device__ __forceinline__ void store_data<int8_t, int8_t>(int8_t* out, int idx, float scaled_val) {
     float clipped = fminf(fmaxf(scaled_val, -128.0f), 127.0f);
     out[idx] = static_cast<int8_t>(rintf(clipped));
+}
+
+template <>
+__device__ __forceinline__ void store_data<cutlass::int4b_t, uint8_t>(uint8_t* out, int idx, float scaled_val) {
+    float clipped = fminf(fmaxf(scaled_val, -8.0f), 7.0f);
+    int ivalue = static_cast<int>(rintf(clipped)) & 0xF;
+    int byte_idx = idx / 2;
+    bool is_low = (idx % 2 == 0);
+    uint8_t old = out[byte_idx];
+    if (is_low) {
+        old = (old & 0xF0) | ivalue;
+    } else {
+        old = (old & 0x0F) | (ivalue << 4);
+    }
+    out[byte_idx] = old;
 }
 
 template <typename T, typename OutputType, typename StoreType>
