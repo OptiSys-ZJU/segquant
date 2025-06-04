@@ -530,8 +530,9 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
             inputs.data_ptr<scalar_t>(), pos_scale_x, neg_scale_x, numel_x, Xp_tensor.template data_ptr<typename StoreType<T>::type>(), Xn_tensor.template data_ptr<typename StoreType<T>::type>());
     });
 
-    auto Y_p = at::empty_like(outputs, options);
-    auto Y_n = at::empty_like(outputs, options);
+    auto tmp_options = outputs.options().dtype(torch::kFloat32);
+    auto Y_p = at::empty_like(outputs, tmp_options);
+    auto Y_n = at::empty_like(outputs, tmp_options);
     std::vector<void const *> ptr_A_batched_host;
     std::vector<void const *> ptr_B_batched_host;
     std::vector<void*> ptr_C_batched_host;
@@ -561,7 +562,7 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
     ptr_B_batched.copy_from_host(ptr_B_batched_host.data());
     ptr_C_batched.copy_from_host(ptr_C_batched_host.data());
 
-    AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_array_gemm_scaled", [&] {
+    AT_DISPATCH_FLOATING_TYPES(Y_p.scalar_type(), "launch_array_gemm_scaled", [&] {
         launch_array_gemm_scaled<T, scalar_t>(
             reinterpret_cast<const T**>(ptr_A_batched.get()),
             reinterpret_cast<const T**>(ptr_B_batched.get()),
@@ -575,8 +576,8 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
     size_t numel_y = outputs.numel();
     AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_dual_scaled_kernel", [&] {
         real_dequantize_dual_scaled_kernel<scalar_t><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-            Y_p.data_ptr<scalar_t>(), 
-            Y_n.data_ptr<scalar_t>(), 
+            Y_p.data_ptr<float>(), 
+            Y_n.data_ptr<float>(), 
             outputs.data_ptr<scalar_t>(), 
             pos_scale_x * scale_w, 
             neg_scale_x * scale_w, 
