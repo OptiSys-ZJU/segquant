@@ -109,7 +109,7 @@ class GPTQCalibrator(BaseCalibrator):
         assert data_type == 'weight', 'Only weight calibrator can be used to GPTQ.'
         super().__init__(data_type, quant_type, quant_args)
         self.nsamples = 0
-        self.H = torch.zeros((self.columns, self.columns), device=self.dev)
+        self.H = None
         self.weight = None
 
         self.blocksize = blocksize
@@ -143,6 +143,10 @@ class GPTQCalibrator(BaseCalibrator):
             input_data = input_data.reshape((-1, input_data.shape[-1]))
             this_batch = input_data.shape[0]
         input_data = input_data.t() #(b, in) -> (in, b)
+
+        if self.H is None:
+            self.H = torch.zeros((self.weight.shape[1], self.weight.shape[1]), device=self.weight.device)
+
         self.H *= self.nsamples / (self.nsamples + this_batch)
         self.nsamples += this_batch
         input_data = math.sqrt(2 / self.nsamples) * input_data.float()

@@ -7,7 +7,7 @@ from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 
-embedding_dim = 1536
+embedding_dim = 16
 
 class RandomTensorDataset:
     def __init__(self, num_batches=6, seed=42):
@@ -606,5 +606,89 @@ def test_svd_int4_real():
     print('diff2', torch.norm(a - c).item())
     print('diff3', torch.norm(b - c).item())
 
+def test_gptq():
+    test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
+    ######################################
+    config = {
+        "default": {
+            "enable": True,
+            "seglinear": True,
+            "search_patterns": [],
+            "real_quant": False,
+            "opt": {
+                "type": Optimum.DEFAULT,
+                "alpha": 0.5,
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+        },
+    }
+    segquant_model = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config,
+        True,
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+    )
+    ######################################
+    config_gptq = {
+        "default": {
+            "enable": True,
+            "seglinear": True,
+            "search_patterns": [],
+            "real_quant": False,
+            "opt": {
+                "type": Optimum.DEFAULT,
+                "alpha": 0.5,
+            },
+            "calib": {
+                "type": Calibrate.GPTQ,
+            },
+            "input_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+        },
+    }
+    segquant_model_gptq = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config_gptq,
+        True,
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+    )
+    ######################################
+    x_generator = torch.Generator()
+    x_generator.manual_seed(1234)
+    x = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    emb = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    res = test_model.forward(x, emb)
+    print("origin:", res)
+    a = res[0]
+    res = segquant_model.forward(x, emb)
+    print("amax:", res)
+    b = res[0]
+    res = segquant_model_gptq.forward(x, emb)
+    print("gptq:", res)
+    c = res[0]
+
+    print('diff1', torch.norm(a - b).item())
+    print('diff2', torch.norm(a - c).item())
+    print('diff3', torch.norm(b - c).item())
+
+
 if __name__ == "__main__":
-    test_svd_int4_real()
+    test_gptq()
