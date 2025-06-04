@@ -468,9 +468,7 @@ class FloatQuantizer(BaseQuantizer):
     def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
         return self._fake_quantize(x)
 
-    def quantize(self, x: torch.Tensor, force_fake=False) -> torch.Tensor:
-        if force_fake:
-            return self._fake_quantize(x)
+    def quantize(self, x: torch.Tensor) -> torch.Tensor:
         if self.real_quant:
             # when real quantization is enabled, only weights are quantized
             ext = load_real_quant_fp8_ext(required=False)

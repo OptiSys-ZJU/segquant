@@ -5,6 +5,7 @@ linear layers and pattern detection for advanced quantization techniques.
 """
 
 import fnmatch
+import gc
 import torch
 from torch import nn
 from tqdm import tqdm
@@ -27,8 +28,17 @@ def _replace_linears(model, to_replace_linears: dict):
         parts = layer_name.split(".")
         module = model
         for part in parts[:-1]:
-            module = module[int(part)] if part.isdigit() else getattr(module, part)
+            if isinstance(module, nn.ModuleList) and part.isdigit():
+                module = module[int(part)]
+            else:
+                module = getattr(module, part)
+
+        old_linear = getattr(module, parts[-1])
         setattr(module, parts[-1], new_linear)
+        del old_linear
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 def _get_all_linears(model: nn.Module, default, config):
     disable_patterns = [
@@ -107,6 +117,7 @@ def _create_linear(
     )
 
     new_linear = new_linear.to(device).to(old_dtype)
+    del old_linear
     return new_linear
 
 def _smooth_linears(
@@ -174,8 +185,13 @@ def _calib_linears(
     for h in hooks:
         h.remove()
 
+    if torch.cuda.is_available():
+        print(torch.cuda.memory_summary(device=None, abbreviated=False))
     for l in to_calib_linears.values():
         l.finish_calibrate()
+    print('--------------------------')
+    if torch.cuda.is_available():
+        print(torch.cuda.memory_summary(device=None, abbreviated=False))
 
 
 def quantize(

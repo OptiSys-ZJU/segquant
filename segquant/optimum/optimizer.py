@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from segquant.layers import ext_dict
 
 
-class BaseOptimizer(nn.Module):
+class BaseOptimizer:
     def __init__(
         self,
         chunks,
@@ -34,7 +34,7 @@ class BaseOptimizer(nn.Module):
         else:
             self.func_name = 'gemm_scaled_fn'
 
-    def _get_funcs(self, input_indices):
+    def _get_funcs(self, input_indices, weight_indices):
         if self.real_quant:
             if self.dual_scale:
                 funcs = [
@@ -42,7 +42,7 @@ class BaseOptimizer(nn.Module):
                         ext_dict[self.kernel_type][self.func_name],
                         pos_scale_x=self.input_calibrators[input_indices[i]].quantizer.pos_scale,
                         neg_scale_x=self.input_calibrators[input_indices[i]].quantizer.neg_scale,
-                        scale_w=self.weight_calibrators[i].quantizer.scale,
+                        scale_w=self.weight_calibrators[weight_indices[i]].quantizer.scale,
                     )
                     for i in range(self.chunks)
                 ]
@@ -51,7 +51,7 @@ class BaseOptimizer(nn.Module):
                     partial(
                         ext_dict[self.kernel_type][self.func_name],
                         scale_x=self.input_calibrators[input_indices[i]].quantizer.scale,
-                        scale_w=self.weight_calibrators[i].quantizer.scale,
+                        scale_w=self.weight_calibrators[weight_indices[i]].quantizer.scale,
                     )
                     for i in range(self.chunks)
                 ]
@@ -141,6 +141,16 @@ class DefaultOptimizer(BaseOptimizer):
         assert len(input_calibrators) == 1 or len(weight_calibrators) == 1, \
             "Either input_calibrators or weight_calibrators must have a length of 1."
         super().__init__(chunks, chunksizes, weight_chunks, input_calibrators, weight_calibrators, real_quant, dual_scale, kernel_type)
+        
+        if len(input_calibrators) == 1 and len(weight_calibrators) != 1:
+            self.input_indices = [0] * self.chunks
+            self.weight_indices = range(self.chunks)
+        elif len(input_calibrators) != 1 and len(weight_calibrators) == 1:
+            self.input_indices = range(self.chunks)
+            self.weight_indices = [0] * chunks
+        else:
+            self.input_indices = range(self.chunks)
+            self.weight_indices = range(self.chunks)
 
     def __repr__(self):
         if self.real_quant:
@@ -184,18 +194,16 @@ class DefaultOptimizer(BaseOptimizer):
         super().finish_calibrate()
         if len(self.weight_chunks) == 1 and len(self.input_calibrators) != 1:
             self.weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
+            self.weight_indices = [0] * self.chunks
+        else:
+            self.weight_indices = range(self.chunks)
 
     def forward(self, input_chunks):
-        if len(input_chunks) == 1:
-            input_indices = [0] * self.chunks
-        else:
-            input_indices = range(self.chunks)
-
-        funcs = self._get_funcs(input_indices)
+        funcs = self._get_funcs(self.input_indices, self.weight_indices)
         quantized_output_chunks = [
             funcs[i](
-                input_chunks[input_indices[i]],
-                self.weight_chunks[i],
+                input_chunks[self.input_indices[i]],
+                self.weight_chunks[self.weight_indices[i]],
             )
             for i in range(self.chunks)
         ]
@@ -235,6 +243,9 @@ class SmoothOptimizer(BaseOptimizer):
         self.max_x = []
         self.s = [None] * self.chunks
         self.has_smoothed = False
+
+        self.input_indices = range(self.chunks)
+        self.weight_indices = range(self.chunks)
 
         self._trace_max_w(self.weight_chunks)
 
@@ -363,7 +374,7 @@ class SmoothOptimizer(BaseOptimizer):
         super().calibrate(smoothed_input_chunks)
 
     def forward(self, input_chunks):
-        funcs = self._get_funcs(range(self.chunks))
+        funcs = self._get_funcs(self.input_indices, self.weight_indices)
         smooth_input_chunks = self._smooth_x(input_chunks)
         quantized_output_chunks = [
             funcs[i](
@@ -408,6 +419,9 @@ class SVDOptimizer(SmoothOptimizer):
         self.l2s = [None] * self.chunks
         self.has_svd = False
 
+        self.input_indices = range(self.chunks)
+        self.weight_indices = range(self.chunks)
+
     def _svd_w(self, smooth_weight_chunks: List[torch.Tensor]):
         assert self.has_smoothed, 'SVDOptimizer: linear is not smoothed'
 
@@ -451,7 +465,7 @@ class SVDOptimizer(SmoothOptimizer):
         super().calibrate(input_chunks)
 
     def forward(self, input_chunks):
-        funcs = self._get_funcs(range(self.chunks))
+        funcs = self._get_funcs(self.input_indices, self.weight_indices)
         smooth_input_chunks = self._smooth_x(input_chunks)
         quantized_output_chunks = [
             smooth_input_chunks[i] @ self.l1s[i] @ self.l2s[i] +
