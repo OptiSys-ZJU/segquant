@@ -5,13 +5,14 @@ import cv2
 import torch
 from transformers import DPTFeatureExtractor, DPTForDepthEstimation
 
-
+# TODO: Add self.cn_type to control the control map type
+# Then check the relative imports of this processor in benchmark
 class ControlNetPreprocessor:
     """
     A class to preprocess images for ControlNet input (Canny edges, Depth maps).
     """
 
-    def __init__(self, enable_blur, blur_kernel_size, device=None):
+    def __init__(self, enable_blur=True, blur_kernel_size=3, cn_type="canny", device=None):
         """
         Initializes the preprocessor, loading necessary models.
         Args:
@@ -19,6 +20,7 @@ class ControlNetPreprocessor:
                                     Defaults to 'cuda' if available, else 'cpu'.
         """
         print("Initializing ControlNetPreprocessor...")
+        self.cn_type = cn_type
         # --- Device Setup ---
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -27,39 +29,42 @@ class ControlNetPreprocessor:
         print(f"Using device: {self.device}")
 
         # --- Canny Edge Setup ---
-        self.canny_low_threshold = 100
-        self.canny_high_threshold = 200
-        self.canny_blur_kernel_size = blur_kernel_size  # Must be odd
-        self.enable_blur = enable_blur
+        if self.cn_type == "canny":
 
-        assert (
-            self.canny_blur_kernel_size % 2 != 0
-        ), "Warning: Blur kernel size must be odd."
-        print("Canny edge detector configured.")
+            self.canny_low_threshold = 100
+            self.canny_high_threshold = 200
+            self.canny_blur_kernel_size = blur_kernel_size  # Must be odd
+            self.enable_blur = enable_blur
 
+            assert (
+                self.canny_blur_kernel_size % 2 != 0
+            ), "Warning: Blur kernel size must be odd."
+            print("Canny edge detector configured.")
+        
         # --- Depth Estimation Setup ---
         # Using Intel's DPT model (Dense Prediction Transformer) via Hugging Face
-        depth_model_name = "Intel/dpt-large"  # Or try "Intel/dpt-hybrid-midas" for potentially faster/different results
-        print(f"Loading depth estimation model: {depth_model_name}...")
-        start_time = time.time()
-        try:
-            self.depth_feature_extractor = DPTFeatureExtractor.from_pretrained(
-                depth_model_name
-            )
-            self.depth_model = DPTForDepthEstimation.from_pretrained(depth_model_name)
-            self.depth_model.to(self.device)
-            self.depth_model.eval()  # Set model to evaluation mode
-            print(
-                f"Depth model loaded to {self.device} in {time.time() - start_time:.2f} seconds."
-            )
-        except Exception as e:
-            print(f"Error loading depth model: {e}")
-            print("Please ensure 'transformers' and 'torch' are installed correctly.")
-            # Optionally handle the error, e.g., disable depth processing
-            self.depth_model = None
-            self.depth_feature_extractor = None
+        elif self.cn_type == "depth":
+            depth_model_name = "Intel/dpt-large"  # Or try "Intel/dpt-hybrid-midas" for potentially faster/different results
+            print(f"Loading depth estimation model: {depth_model_name}...")
+            start_time = time.time()
+            try:
+                self.depth_feature_extractor = DPTFeatureExtractor.from_pretrained(
+                    depth_model_name
+                )
+                self.depth_model = DPTForDepthEstimation.from_pretrained(depth_model_name)
+                self.depth_model.to(self.device)
+                self.depth_model.eval()  # Set model to evaluation mode
+                print(
+                    f"Depth model loaded to {self.device} in {time.time() - start_time:.2f} seconds."
+                )
+            except Exception as e:
+                print(f"Error loading depth model: {e}")
+                print("Please ensure 'transformers' and 'torch' are installed correctly.")
+                # Optionally handle the error, e.g., disable depth processing
+                self.depth_model = None
+                self.depth_feature_extractor = None
 
-        print("Preprocessor initialization complete.")
+            print("Preprocessor initialization complete.")
 
     def _to_numpy(self, image: Image.Image) -> np.ndarray:
         """Converts PIL Image to NumPy array (RGB)."""
@@ -145,7 +150,7 @@ class ControlNetPreprocessor:
         return depth_map_image
 
     def process(
-        self, cn_type, image: Image.Image
+        self, image: Image.Image
     ) -> tuple[Image.Image | None, Image.Image | None]:
         """
         Generates both Canny edge map and depth map for the input image.
@@ -154,9 +159,9 @@ class ControlNetPreprocessor:
         Returns:
             tuple[Image.Image | None, Image.Image | None]: (canny_map, depth_map)
         """
-        if cn_type == "canny":
+        if self.cn_type == "canny":
             res_map = self.get_canny_map(image)
-        elif cn_type == "depth":
+        elif self.cn_type == "depth":
             res_map = self.get_depth_map(image)
         else:
             print("Type does not exist")

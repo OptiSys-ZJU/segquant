@@ -4,12 +4,12 @@ MJHQDataset = CaptionControlDataset
 
 if __name__ == "__main__":
     dataset = MJHQDataset(
-        path="../dataset/controlnet_datasets/mjhq_canny", cache_size=16
+        path="../dataset/controlnet_datasets/MJHQ-30K-canny", cache_size=16
     )
-    data_loader = dataset.get_dataloader(batch_size=2)
+    data_loader = dataset.get_dataloader(batch_size=1)
 
     for i, batch in enumerate(data_loader):
-        prompt, image, control = batch[1]
+        prompt, image, control = batch[0]
         print("prompt:", prompt)
         print("image:", image)
         print("control:", control)

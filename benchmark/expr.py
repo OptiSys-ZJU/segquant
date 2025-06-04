@@ -3,7 +3,7 @@ import argparse
 import torch
 from torch import nn
 from benchmark import trace_pic
-from benchmark.config import BenchmarkConfig,CalibrationConfig,AffineConfig,QuantizationConfigs
+from benchmark.config import BenchmarkConfig,CalibrationConfig,AffineConfig,QuantizationConfigs,QUANT_METHOD_CHOICES,DATASET_TYPE_CHOICES
 from segquant.torch.affiner import process_affiner
 from segquant.sample.sampler import QDiffusionSampler, model_map
 from segquant.torch.calibrate_set import generate_calibrate_set
@@ -128,11 +128,15 @@ def run_module(benchmark, affine_config, calibration_config):
     # Need to quant
     # set up parameters
     quant_config = QuantizationConfigs.get_config(benchmark.quant_method)
-    affine = quant_config["affine"]
+    affine = quant_config["default"]["affine"]
     # setting up model path
     quant_layer_type="dit" if quant_config["default"]["dit"] else "controlnet"
+    # to see if model_quant_path have "affine" keywords
+    if "affine" in benchmark.quant_method: # if have affine, delete affine from quant_method
+        benchmark.quant_method = benchmark.quant_method.replace("_affine", "")
     model_quant_path = f"model/{quant_layer_type}/model_quant_{benchmark.quant_method}.pt"
     model_quant_path = os.path.join(benchmark.res_dir, model_quant_path)
+    
     # quantize or load model
     model_quant = quant_or_load(model_quant_path, quant_config, benchmark.dataset, calibration_config, benchmark.gpu_id)
     # affine or not, different process
@@ -188,10 +192,7 @@ def parse_args():
     parser.add_argument(
         "-q", "--quant_method", 
         type=str,
-        choices=["int8smooth", "int8smooth_seg", "int8smooth_dual", 
-                 "int8smooth_affine", "int8smooth_seg_dual", "int8smooth_seg_dual_affine", 
-                 "fp8", "fp8_seg", "fp8_dual", "fp8_affine", 
-                 "fp8_seg_dual", "fp8_seg_dual_affine"],  # 根据你的QuantMethod调整
+        choices=QUANT_METHOD_CHOICES,  # 根据你的QuantMethod调整
         default="int8smooth",
         help="Quantization method"
     )
@@ -199,7 +200,7 @@ def parse_args():
     parser.add_argument(
         "-d", "--dataset_type",
         type=str, 
-        choices=["COCO", "MJHQ", "DCI"],  # 根据你的BenchmarkType调整
+        choices=DATASET_TYPE_CHOICES,  # 根据你的BenchmarkType调整
         default="COCO",
         help="Dataset type"
     )

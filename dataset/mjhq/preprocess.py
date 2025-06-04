@@ -1,116 +1,153 @@
-import time
-
 from tqdm import tqdm  # To measure processing time
-from backend.torch.utils import load_image
 from dataset.processor import ControlNetPreprocessor
+from datasets import load_dataset
+from PIL import Image
+import os
+import json
+import random
+import shutil
 
 
 def create_dataset(
-    preprocessor, dataset, output_dir, cn_type="canny", enable_no_prompt=False
+    preprocessor,
+    cn_type,
+    input_dir,
+    output_dir,
+    samples_per_category=500,
 ):
     """
-    Creates a ControlNet dataset by processing images from a source dataset.
-    
+    Create a dataset for ControlNet from the specified dataset directory.
     Args:
-        preprocessor: The ControlNetPreprocessor instance
-        dataset: The source dataset (e.g., COCO)
-        output_dir: Directory to save the processed dataset
-        cn_type: Type of control map ('canny' or 'depth')
-        limit: Maximum number of samples to process (None for all)
-    
+        input_dir (str): Path to the input dataset directory.
+        output_dir (str): Path to the output directory containing images and metadata.
     Returns:
-        Path to the created dataset
+        str: Path to the created dataset directory.
     """
-    import os
-    import json
-
+    ORIGINAL_METADATA_FILE = "meta_data.json"
+    CATEGORIES = [
+        'animals', 'art', 'fashion', 'food', 'indoor',
+        'landscape', 'logo', 'people', 'plants', 'vehicles'
+    ]
     # Create output directories
-    dataset_dir = os.path.join(output_dir, f"mjhq_{cn_type}")
-    images_dir = os.path.join(dataset_dir, "images")
-    controls_dir = os.path.join(dataset_dir, "controls")
+    images_output_dir = os.path.join(output_dir, "images")
+    controls_output_dir = os.path.join(output_dir, "controls")
 
-    os.makedirs(dataset_dir, exist_ok=True)
-    os.makedirs(images_dir, exist_ok=True)
-    os.makedirs(controls_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(images_output_dir, exist_ok=True)
+    os.makedirs(controls_output_dir, exist_ok=True)
 
     # Prepare metadata
     metadata = []
 
-    origin_data = os.path.join(dataset, "meta_data.json")
-    with open(origin_data, "r") as file:
-        orig = json.load(file)
+    # read metainfo from dataset_dir
+    try:
+        with open(os.path.join(input_dir, ORIGINAL_METADATA_FILE), 'r', encoding='utf-8') as f:
+                original_metadata = json.load(f)
+    except FileNotFoundError:
+        print(f"ERROR: Original metadata file not found at {os.path.join(input_dir, ORIGINAL_METADATA_FILE)}")
+        print("Please ensure the path is correct and the file exists.")
+        return
+    except json.JSONDecodeError:
+        print(f"ERROR: Could not decode JSON from {os.path.join(input_dir, ORIGINAL_METADATA_FILE)}. Is it a valid JSON file?")
+        return
+    
+    # Iterate through categories to sample and copy images
+    id = 0
+    for category in CATEGORIES:
+        print(f"\nProcessing category: {category}...")
 
-    total_samples = len(orig)
-    print(f"Processing {total_samples} samples for ControlNet {cn_type} dataset...")
+        original_category_path = os.path.join(input_dir, category)
 
-    for i, (k, v) in enumerate(
-        tqdm(orig.items(), total=total_samples, desc="Processing samples"), 1
-    ):
-        if "category" not in v:
-            raise KeyError()
-
-        input_image = load_image(os.path.join(dataset, v["category"], f"{k}.jpg"))
-        prompt = v.get("prompt", None)
-
-        if prompt is None:
-            if enable_no_prompt:
-                prompt = ""
-            else:
-                continue
-
-        try:
-            control_map = preprocessor.process(cn_type=cn_type, image=input_image)
-
-            # Save original image and control map
-            image_filename = f"image_{i:06d}.png"
-            control_filename = f"control_{i:06d}.png"
-
-            input_image.save(os.path.join(images_dir, image_filename))
-            control_map.save(os.path.join(controls_dir, control_filename))
-
-            # Add to metadata
-            metadata.append(
-                {
-                    "id": i,
-                    "prompt": prompt,
-                    "image": f"images/{image_filename}",
-                    "control": f"controls/{control_filename}",
-                }
-            )
-        except Exception as e:
-            print(f"Error processing sample {i}: {e}")
+        if not os.path.isdir(original_category_path):
+            print(f"  WARNING: Original category folder not found: {original_category_path}. Skipping.")
             continue
 
+        # List all image files in the original category folder
+        try:
+            all_images_in_category = [
+                f for f in os.listdir(original_category_path)
+            ]
+        except FileNotFoundError:
+             print(f"  ERROR: Could not list files in {original_category_path}. Check permissions or path.")
+             continue
+
+        if not all_images_in_category:
+            print(f"  WARNING: No image files found in {original_category_path} for category {category}. Skipping.")
+            continue
+
+        print(f"  Found {len(all_images_in_category)} images in original '{category}' folder.")
+
+        # Randomly select SAMPLES_PER_CATEGORY image filenames
+        if len(all_images_in_category) < samples_per_category:
+            print(f"  WARNING: Category '{category}' has only {len(all_images_in_category)} images, "
+                  f"which is less than the required {samples_per_category}. Taking all available images.")
+            sampled_image_filenames_with_ext = all_images_in_category
+        else:
+            sampled_image_filenames_with_ext = random.sample(all_images_in_category, samples_per_category)
+
+        print(f"  Sampling {len(sampled_image_filenames_with_ext)} images for '{category}'.")
+        
+        for img_filename_with_ext in sampled_image_filenames_with_ext:
+            img_base_filename = os.path.splitext(img_filename_with_ext)[0]
+            if img_base_filename in original_metadata:
+                image_filename = f"image_{id:06d}.jpg"
+                src_img_path = os.path.join(original_category_path, img_filename_with_ext)
+                dst_img_path = os.path.join(images_output_dir, image_filename) # Destination is now the shared folder
+                
+                # Copy the image file to the single 'images' folder
+                try:
+                    shutil.copy2(src_img_path, dst_img_path) # copy2 preserves metadata
+                except Exception as e:
+                    print(f"    ERROR copying {src_img_path} to {dst_img_path}: {e}")
+                    continue # Skip this image if copying fails
+                
+                # Save original image and control map
+                control_map = preprocessor.process(image=Image.open(dst_img_path))
+                control_filename = f"control_{id:06d}.jpg"
+                control_map.save(os.path.join(controls_output_dir, control_filename))
+                
+                # Get the prompt from original metadata
+                prompt = original_metadata[img_base_filename].get("prompt", "")
+                
+                # Add to metadata
+                metadata.append(
+                    {
+                        "id": id,
+                        "prompt": prompt,
+                        "image": f"images/{image_filename}",
+                        "control": f"controls/{control_filename}",
+                    }
+                )
+                id += 1
+            else:
+                print(f"  WARNING: Metadata key '{img_base_filename}' (from file '{img_filename_with_ext}') "
+                      f"not found in original_metadata.json. Skipping this image.")
+
+    # 4. Save new metadata
     # Save metadata
-    metadata_path = os.path.join(dataset_dir, "metadata.json")
+    metadata_path = os.path.join(output_dir, "metadata.json")
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
-
-    print(f"Dataset created at: {dataset_dir}")
+    print(f"Dataset created at: {output_dir}")
     print(f"Total processed samples: {len(metadata)}")
-    return dataset_dir
 
+    return output_dir
 
-if __name__ == "__main__":
+def create_control_dataset(preprocessor, anno_dataset_dir, cn_type="canny"):
+    controls_dir = os.path.join(anno_dataset_dir, "controls")
+    os.makedirs(controls_dir, exist_ok=True)
+    pass
+    
+def parse_args():
     import argparse
-
     # Set up command line arguments
-    parser = argparse.ArgumentParser(description="Create ControlNet dataset from COCO")
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="./controlnet_datasets",
-        help="Directory to save the processed dataset",
-    )
+    parser = argparse.ArgumentParser(description="Create ControlNet dataset from datasets")
     parser.add_argument(
         "--cn_type",
         type=str,
         default="canny",
         choices=["canny", "depth"],
         help="Type of control map to generate",
-    )
-    parser.add_argument(
-        "--limit", type=int, default=None, help="Maximum number of samples to process"
     )
     parser.add_argument(
         "--enable_blur",
@@ -124,30 +161,43 @@ if __name__ == "__main__":
         help="Dataset to use (default: MJHQ-30K)",
     )
     parser.add_argument(
+        "--dataset_dir",
+        type=str,
+        default="../dataset",
+        help="Dataset to use (default: COCO-Caption2017)",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="../dataset/controlnet_datasets",
+        help="Directory to save the processed dataset",
+    )
+
+    parser.add_argument(
         "--blur_kernel_size",
         type=int,
         default=3,
         help="Kernel size used to blur the image before Canny edge detection (must be odd)",
     )
     parser.add_argument("--enable_no_prompt", action="store_true")
-    args = parser.parse_args()
+    return parser.parse_args()
+ 
 
-    print("Loading dataset...")
-    start_time = time.time()
 
+if __name__ == "__main__":
+    args = parse_args()
     # Initialize preprocessor
     preprocessor = ControlNetPreprocessor(
-        enable_blur=args.enable_blur, blur_kernel_size=args.blur_kernel_size
+        enable_blur=args.enable_blur, blur_kernel_size=args.blur_kernel_size,cn_type=args.cn_type
     )
-
-    # Create ControlNet dataset
-    dataset_dir = create_dataset(
+    # Create anno dataset
+    control_dataset_dir = create_dataset(
         preprocessor=preprocessor,
-        dataset=args.dataset,
-        output_dir=args.output_dir,
         cn_type=args.cn_type,
-        enable_no_prompt=args.enable_no_prompt,
+        input_dir=os.path.join(args.dataset_dir, args.dataset),
+        output_dir=os.path.join(args.output_dir, f"{args.dataset}-{args.cn_type}"),
+        samples_per_category=500,  # Number of samples per category
     )
 
-    print(f"\nControlNet dataset created at: {dataset_dir}")
+    print(f"\nControlNet dataset created at: {control_dataset_dir}")
     print("Done!")

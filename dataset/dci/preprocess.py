@@ -1,8 +1,9 @@
 import time
-import re
+import os
+
 from tqdm import tqdm  # To measure processing time
-from backend.torch.utils import load_image
 from dataset.processor import ControlNetPreprocessor
+from datasets import load_dataset
 
 
 def create_dataset(
@@ -10,8 +11,8 @@ def create_dataset(
     dataset,
     output_dir,
     cn_type="canny",
+    limit=None,
     enable_no_prompt=False,
-    enable_extra_caption=True,
 ):
     """
     Creates a ControlNet dataset by processing images from a source dataset.
@@ -30,7 +31,7 @@ def create_dataset(
     import json
 
     # Create output directories
-    dataset_dir = os.path.join(output_dir, f"dci_{cn_type}")
+    dataset_dir = os.path.join(output_dir, f"{dataset.name}-{cn_type}")
     images_dir = os.path.join(dataset_dir, "images")
     controls_dir = os.path.join(dataset_dir, "controls")
 
@@ -41,32 +42,21 @@ def create_dataset(
     # Prepare metadata
     metadata = []
 
-    def list_matching_file_paths_regex(folder_path, pattern):
-        regex = re.compile(pattern)
-        return [
-            os.path.join(folder_path, f)
-            for f in os.listdir(folder_path)
-            if os.path.isfile(os.path.join(folder_path, f)) and regex.fullmatch(f)
-        ]
-
-    origin_data = list_matching_file_paths_regex(
-        os.path.join(dataset, "annotations"), r".*\.json"
-    )
-
-    total_samples = len(origin_data)
+    # Determine how many samples to process
+    total_samples = len(dataset) if limit is None else min(limit, len(dataset))
     print(f"Processing {total_samples} samples for ControlNet {cn_type} dataset...")
 
-    for i, orig in enumerate(
-        tqdm(origin_data, total=total_samples, desc="Processing samples"), 1
+    # Process each sample
+    for i, sample in enumerate(
+        tqdm(dataset, total=total_samples, desc="Processing samples")
     ):
-        with open(orig, "r") as file:
-            d = json.load(file)
-
-        if "image" not in d:
-            raise KeyError()
-
-        input_image = load_image(os.path.join(dataset, "photos", d["image"]))
-        prompt = d.get("short_caption", None)
+        input_image = sample["image"]
+        if "answer" in sample and sample["answer"]:
+            prompt = sample["answer"][0]
+        elif "caption" in sample:
+            prompt = sample["caption"]
+        else:
+            prompt = None
 
         if prompt is None:
             if enable_no_prompt:
@@ -74,15 +64,13 @@ def create_dataset(
             else:
                 continue
 
-        if enable_extra_caption and "extra_caption" in d:
-            prompt = prompt + " " + d["extra_caption"]
-
+        # Process image with ControlNet preprocessor
         try:
-            control_map = preprocessor.process(cn_type=cn_type, image=input_image)
+            control_map = preprocessor.process(image=input_image)
 
             # Save original image and control map
-            image_filename = f"image_{i:06d}.png"
-            control_filename = f"control_{i:06d}.png"
+            image_filename = f"image_{i:06d}.jpg"
+            control_filename = f"control_{i:06d}.jpg"
 
             input_image.save(os.path.join(images_dir, image_filename))
             control_map.save(os.path.join(controls_dir, control_filename))
@@ -109,16 +97,14 @@ def create_dataset(
     print(f"Total processed samples: {len(metadata)}")
     return dataset_dir
 
-
-if __name__ == "__main__":
+def parse_args():
     import argparse
-
     # Set up command line arguments
     parser = argparse.ArgumentParser(description="Create ControlNet dataset from COCO")
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./controlnet_datasets",
+        default="../dataset/controlnet_datasets",
         help="Directory to save the processed dataset",
     )
     parser.add_argument(
@@ -139,8 +125,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        default="densely_captioned_images",
-        help="Dataset to use (default: densely_captioned_images)",
+        default="COCO-Caption2017",
+        help="Dataset to use (default: COCO-Caption2017)",
+    )
+    parser.add_argument(
+        "--split", type=str, default="val", help="Dataset split to use (default: val)"
     )
     parser.add_argument(
         "--blur_kernel_size",
@@ -149,25 +138,39 @@ if __name__ == "__main__":
         help="Kernel size used to blur the image before Canny edge detection (must be odd)",
     )
     parser.add_argument("--enable_no_prompt", action="store_true")
-    parser.add_argument("--disable_extra_caption", action="store_true")
-    args = parser.parse_args()
+    return parser.parse_args()
+
+if __name__ == "__main__":
+    args = parse_args()
 
     print("Loading dataset...")
-    start_time = time.time()
+
+    # Load the dataset
+    try:
+        dataset = load_dataset(os.path.join("../dataset",args.dataset), split=args.split, trust_remote_code=True)
+        dataset.name = args.dataset
+        print(f"Number of examples: {len(dataset)}")
+        print("Dataset features:", dataset.features)
+    except Exception as e:
+        print(f"Error loading dataset: {e}")
+        print(
+            "Please ensure you have an internet connection and the dataset name is correct."
+        )
+        exit()
 
     # Initialize preprocessor
     preprocessor = ControlNetPreprocessor(
-        enable_blur=args.enable_blur, blur_kernel_size=args.blur_kernel_size
+        enable_blur=args.enable_blur, blur_kernel_size=args.blur_kernel_size, cn_type=args.cn_type
     )
 
     # Create ControlNet dataset
     dataset_dir = create_dataset(
         preprocessor=preprocessor,
-        dataset=args.dataset,
+        dataset=dataset,
         output_dir=args.output_dir,
         cn_type=args.cn_type,
+        limit=args.limit,
         enable_no_prompt=args.enable_no_prompt,
-        enable_extra_caption=(not args.disable_extra_caption),
     )
 
     print(f"\nControlNet dataset created at: {dataset_dir}")

@@ -2,6 +2,12 @@ from segquant.config import DType, Optimum, SegPattern
 from enum import Enum
 import torch
 
+QUANT_METHOD_CHOICES = ["int8smooth", "int8smooth_seg", "int8smooth_dual", 
+                        "int8smooth_affine", "int8smooth_seg_dual", "int8smooth_seg_dual_affine", 
+                        "fp8", "fp8_seg", "fp8_dual", "fp8_affine", 
+                        "fp8_seg_dual", "fp8_seg_dual_affine"]
+
+DATASET_TYPE_CHOICES = ["COCO", "MJHQ", "DCI"]
 
 class CalibrationConfig:
     MAX_TIMESTEP = 50
@@ -47,29 +53,29 @@ class QuantizationConfigs:
         "controlnet": False,
     }
 
-    INT8SMOOTH_DEFAULT_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": False, "search_patterns": []}, "affine": False}
+    INT8SMOOTH_DEFAULT_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": False, "search_patterns": [],"affine": False}}
 
-    INT8SMOOTH_AFFINE_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": False, "search_patterns": []}, "affine": True}
+    INT8SMOOTH_AFFINE_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": False, "search_patterns": [],"affine": True}}
 
-    INT8SMOOTH_SEG_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.seg()}, "affine": False}
+    INT8SMOOTH_SEG_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.seg(),"affine": False}}
     
-    INT8SMOOTH_DUAL_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": True, "search_patterns": [SegPattern.ACTIVATION2LINEAR]}, "affine": False}
+    INT8SMOOTH_DUAL_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": True, "search_patterns": [SegPattern.ACTIVATION2LINEAR],"affine": False}}
 
-    INT8SMOOTH_SEG_DUAL_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.all()}, "affine": False}
+    INT8SMOOTH_SEG_DUAL_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.all(),"affine": False}}
 
-    INT8SMOOTH_SEG_DUAL_AFFINE_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.all()}, "affine": True}
+    INT8SMOOTH_SEG_DUAL_AFFINE_CONFIG = {"default": {**INT8SMOOTH_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.all(),"affine": True}}
 
-    FP8_DEFAULT_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": False, "search_patterns": []}, "affine": False}
+    FP8_DEFAULT_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": False, "search_patterns": [],"affine": False}}
     
-    FP8_AFFINE_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": False, "search_patterns": []}, "affine": True}
+    FP8_AFFINE_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": False, "search_patterns": [],"affine": True}}
     
-    FP8_SEG_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.seg()}, "affine": False}
+    FP8_SEG_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.seg(),"affine": False}}
     
-    FP8_DUAL_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": True, "search_patterns": [SegPattern.ACTIVATION2LINEAR]}, "affine": False}
+    FP8_DUAL_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": True, "search_patterns": [SegPattern.ACTIVATION2LINEAR],"affine": False}}
     
-    FP8_SEG_DUAL_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.all()}, "affine": False}
+    FP8_SEG_DUAL_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.all(),"affine": False}}
 
-    FP8_SEG_DUAL_AFFINE_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.all()}, "affine": True}
+    FP8_SEG_DUAL_AFFINE_CONFIG = {"default": {**FP8_BASE_CONFIG, "seglinear": True, "search_patterns": SegPattern.all(),"affine": True}}
 
     METHOD_CONFIG = {
         "int8smooth": INT8SMOOTH_DEFAULT_CONFIG,
@@ -130,10 +136,12 @@ class AffineConfig:
         }
 
 class BenchmarkConfig:
+    # TODO: add cn_type to control the control map type
+    # Currently, only canny is supported
     DATASET_PATH = {
-        "COCO": "../dataset/controlnet_datasets/coco_canny",
-        "MJHQ": "../dataset/MJGQ-30K",
-        "DCI": "../dataset/densely_captioned_images",
+        "COCO": "../dataset/controlnet_datasets/COCO-Caption2017-canny",
+        "MJHQ": "../dataset/controlnet_datasets/MJHQ-30K-canny",
+        "DCI": "../dataset/controlnet_datasets/densely_captioned_images-canny",
     }
     
     def __init__(self, 

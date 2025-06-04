@@ -1,4 +1,5 @@
 import os
+import json
 import torch
 from tqdm import tqdm
 import lpips
@@ -8,6 +9,7 @@ from PIL import Image
 from pytorch_fid import fid_score
 from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import structural_similarity as ssim
+from benchmark.config import QUANT_METHOD_CHOICES,DATASET_TYPE_CHOICES
 
 lpips_model = lpips.LPIPS(net="alex")
 
@@ -81,8 +83,13 @@ def generate_metric(path1, path2):
 
 
 if __name__ == "__main__":
-    for i in range(4, 28, 1):
-        print(generate_metric(f"affine_pics/1/{i}/real", f"affine_pics/1/{i}/quant"))
-        print(
-            generate_metric(f"affine_pics/1/{i}/real", f"affine_pics/1/{i}/blockaffine")
-        )
+    result = {}
+    for dataset in DATASET_TYPE_CHOICES:
+        for method in QUANT_METHOD_CHOICES:
+            real_dir = f"../segquant/benchmark_record/{dataset}/run_real_module/pics/real"
+            quant_dir = f"../segquant/benchmark_record/{dataset}/run_{method}_module/pics/quant_{method}"
+            if os.path.exists(real_dir) and os.path.exists(quant_dir):
+                result[f"{dataset}_{method}"] = generate_metric(real_dir, quant_dir)
+    with open("metric.json", "w") as f:
+        json.dump(result, f)
+
