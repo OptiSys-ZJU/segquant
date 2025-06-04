@@ -1,8 +1,10 @@
+from functools import partial
 from typing import List
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from segquant.layers import ext_dict
 
 
 class BaseOptimizer(nn.Module):
@@ -14,6 +16,8 @@ class BaseOptimizer(nn.Module):
         input_calibrators,
         weight_calibrators,
         real_quant=False,
+        dual_scale=False,
+        kernel_type=None,
     ):
         super().__init__()
         self.chunks = chunks
@@ -22,6 +26,60 @@ class BaseOptimizer(nn.Module):
         self.input_calibrators = input_calibrators
         self.weight_calibrators = weight_calibrators
         self.real_quant = real_quant
+        self.kernel_type = kernel_type
+
+        self.dual_scale = dual_scale
+        if self.real_quant and dual_scale:
+            self.func_name = 'gemm_dual_scaled_fn'
+        else:
+            self.func_name = 'gemm_scaled_fn'
+
+    def _get_funcs(self, input_indices):
+        if self.real_quant:
+            if self.dual_scale:
+                funcs = [
+                    partial(
+                        ext_dict[self.kernel_type][self.func_name],
+                        pos_scale_x=self.input_calibrators[input_indices[i]].quantizer.pos_scale,
+                        neg_scale_x=self.input_calibrators[input_indices[i]].quantizer.neg_scale,
+                        scale_w=self.weight_calibrators[i].quantizer.scale,
+                    )
+                    for i in range(self.chunks)
+                ]
+            else:
+                funcs = [
+                    partial(
+                        ext_dict[self.kernel_type][self.func_name],
+                        scale_x=self.input_calibrators[input_indices[i]].quantizer.scale,
+                        scale_w=self.weight_calibrators[i].quantizer.scale,
+                    )
+                    for i in range(self.chunks)
+                ]
+        else:
+            def quantize_input_decorator(quantizer):
+                def decorator(func):
+                    from functools import wraps
+                    @wraps(func)
+                    def wrapper(input_tensor, weight_tensor, *args, **kwargs):
+                        processed_input = quantizer.quantize(input_tensor)
+                        return func(processed_input, weight_tensor, *args, **kwargs)
+                    return wrapper
+                return decorator
+
+            def _create_wrapped_linear_func(q):
+                @quantize_input_decorator(q)
+                def wrapped_linear(input, weight, bias=None):
+                    return F.linear(input, weight, bias)
+                return wrapped_linear
+
+            funcs = [
+                _create_wrapped_linear_func(
+                    self.input_calibrators[input_indices[i]].quantizer
+                )
+                for i in range(self.chunks)
+            ]
+
+        return funcs
 
     def _calibrate_weights(self, input_chunks):
         for weight_calibrator, weight_chunk, input_copy_or_chunk in zip(
@@ -76,16 +134,23 @@ class DefaultOptimizer(BaseOptimizer):
         input_calibrators,
         weight_calibrators,
         real_quant=False,
+        dual_scale=False,
+        kernel_type=None,
         **kwargs,
     ):
         assert len(input_calibrators) == 1 or len(weight_calibrators) == 1, \
             "Either input_calibrators or weight_calibrators must have a length of 1."
-        super().__init__(chunks, chunksizes, weight_chunks, input_calibrators, weight_calibrators, real_quant)
+        super().__init__(chunks, chunksizes, weight_chunks, input_calibrators, weight_calibrators, real_quant, dual_scale, kernel_type)
 
     def __repr__(self):
-        base = (
-            f"DefaultOptimizer(\n"
-        )
+        if self.real_quant:
+            base = (
+                f"DefaultOptimizer(type={self.kernel_type}\n"
+            )
+        else:
+            base = (
+                "DefaultOptimizer(\n"
+            )
         input_q = ",\n    ".join(repr(i) for i in self.input_calibrators)
         weight_q = ",\n    ".join(repr(w) for w in self.weight_calibrators)
 
@@ -122,18 +187,14 @@ class DefaultOptimizer(BaseOptimizer):
 
     def forward(self, input_chunks):
         if len(input_chunks) == 1:
-            indices = [0] * self.chunks
+            input_indices = [0] * self.chunks
         else:
-            indices = range(self.chunks)
+            input_indices = range(self.chunks)
 
-        if self.real_quant:
-            func = None
-        else:
-            func = F.linear
-
+        funcs = self._get_funcs(input_indices)
         quantized_output_chunks = [
-            func(
-                self.input_calibrators[indices[i]].quantizer.quantize(input_chunks[indices[i]]),
+            funcs[i](
+                input_chunks[input_indices[i]],
                 self.weight_chunks[i],
             )
             for i in range(self.chunks)
@@ -151,6 +212,8 @@ class SmoothOptimizer(BaseOptimizer):
         input_calibrators,
         weight_calibrators,
         real_quant=False,
+        dual_scale=False,
+        kernel_type=None,
         alpha=0.5,
         **kwargs,
     ):
@@ -165,7 +228,7 @@ class SmoothOptimizer(BaseOptimizer):
             f"Lengths mismatch: input_calibrators={len(input_calibrators)}, " \
             f"weight_calibrators={len(weight_calibrators)}, " \
             f"weight_chunks={len(weight_chunks)}"
-        super().__init__(chunks, chunksizes, weight_chunks, input_calibrators, weight_calibrators, real_quant)
+        super().__init__(chunks, chunksizes, weight_chunks, input_calibrators, weight_calibrators, real_quant, dual_scale, kernel_type)
 
         self.alpha = alpha
         self.max_w = []
@@ -176,9 +239,14 @@ class SmoothOptimizer(BaseOptimizer):
         self._trace_max_w(self.weight_chunks)
 
     def __repr__(self):
-        base = (
-            f"SmoothOptimizer(alpha={self.alpha},\n"
-        )
+        if self.real_quant:
+            base = (
+                f"SmoothOptimizer(alpha={self.alpha},kernel={self.kernel_type}\n"
+            )
+        else:
+            base = (
+                f"SmoothOptimizer(alpha={self.alpha}\n"
+            )
         input_q = ",\n      ".join(repr(i) for i in self.input_calibrators)
         weight_q = ",\n      ".join(repr(w) for w in self.weight_calibrators)
 
@@ -295,15 +363,11 @@ class SmoothOptimizer(BaseOptimizer):
         super().calibrate(smoothed_input_chunks)
 
     def forward(self, input_chunks):
-        if self.real_quant:
-            func = None
-        else:
-            func = F.linear
-
+        funcs = self._get_funcs(range(self.chunks))
         smooth_input_chunks = self._smooth_x(input_chunks)
         quantized_output_chunks = [
-            func(
-                self.input_calibrators[i].quantizer.quantize(smooth_input_chunks[i]),
+            funcs[i](
+                smooth_input_chunks[i],
                 self.weight_chunks[i],
             )
             for i in range(self.chunks)
@@ -321,6 +385,8 @@ class SVDOptimizer(SmoothOptimizer):
         input_calibrators,
         weight_calibrators,
         real_quant=False,
+        dual_scale=False,
+        kernel_type=None,
         alpha=0.5,
         low_rank=32,
         **kwargs,
@@ -332,6 +398,8 @@ class SVDOptimizer(SmoothOptimizer):
             input_calibrators,
             weight_calibrators,
             real_quant,
+            dual_scale,
+            kernel_type,
             alpha,
         )
 
@@ -383,16 +451,12 @@ class SVDOptimizer(SmoothOptimizer):
         super().calibrate(input_chunks)
 
     def forward(self, input_chunks):
-        if self.real_quant:
-            func = None
-        else:
-            func = F.linear
-
+        funcs = self._get_funcs(range(self.chunks))
         smooth_input_chunks = self._smooth_x(input_chunks)
         quantized_output_chunks = [
             smooth_input_chunks[i] @ self.l1s[i] @ self.l2s[i] +
-            func(
-                self.input_calibrators[i].quantizer.quantize(smooth_input_chunks[i]),
+            funcs[i](
+                smooth_input_chunks[i],
                 self.weight_chunks[i],
             )
             for i in range(self.chunks)

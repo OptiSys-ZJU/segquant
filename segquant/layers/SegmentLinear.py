@@ -4,9 +4,9 @@ import torch
 import torch.nn as nn
 from segquant.calibrator.calibrator import CalibratorRegistry
 from segquant.config import Calibrate, DType, Optimum
-from segquant.layers import ext_dict
 from segquant.layers.splitter import BaseSplitter
 from segquant.optimum.optimizer import OptimizerRegistry
+from segquant.layers import ext_dict
 
 class SegmentLinear(nn.Module):
     def __init__(
@@ -68,20 +68,18 @@ class SegmentLinear(nn.Module):
 
         self.splitter = BaseSplitter(self.chunksizes, seg_mode)
 
+        real_quant = False
+        dual_scale = False
         if input_quant_type is not None:
             if 'real_quant' in input_quant_args:
-                self.real_quant = input_quant_args['real_quant']
-            else:
-                self.real_quant = False
+                real_quant = input_quant_args['real_quant']
             if 'dual_scale' in input_quant_args:
-                self.dual_scale = input_quant_args['dual_scale']
-            else:
-                self.dual_scale = False
+                dual_scale = input_quant_args['dual_scale']
 
         if weight_quant_type is not None:
             if 'real_quant' in weight_quant_args:
-                assert self.real_quant == weight_quant_args['real_quant'], \
-                    f"Mismatch: self.real_quant={self.real_quant}, " \
+                assert real_quant == weight_quant_args['real_quant'], \
+                    f"Mismatch: real_quant={real_quant}, " \
                     f"weight_quant_args['real_quant']={weight_quant_args['real_quant']}"
 
             if 'dual_scale' in weight_quant_args:
@@ -89,20 +87,18 @@ class SegmentLinear(nn.Module):
                     "Dual scale is not supported for weight quantizer in DefaultSegmentLinear."
                 )
 
-        if self.real_quant:
-            assert input_quant_type == weight_quant_type, \
-                "For real quantization, input and weight quantizers must be the same type."
-            self.this_type = input_quant_type
-            if self.this_type not in ext_dict:
-                self.real_quant = False
-            else:
-                if ext_dict[self.this_type]['gemm_scaled_fn'] is None or \
-                    ext_dict[self.this_type]['gemm_dual_scaled_fn'] is None:
-                    self.real_quant = False
+        kernel_type = f'W{weight_quant_type}A{input_quant_type}'
 
-        input_quant_args['real_quant'] = self.real_quant
-        weight_quant_args['real_quant'] = self.real_quant
-        opt_kwargs['real_quant'] = self.real_quant
+        if real_quant:
+            if kernel_type not in ext_dict:
+                real_quant = False
+            else:
+                if ext_dict[kernel_type]['gemm_scaled_fn'] is None or \
+                    ext_dict[kernel_type]['gemm_dual_scaled_fn'] is None:
+                    real_quant = False
+
+        input_quant_args['real_quant'] = real_quant
+        weight_quant_args['real_quant'] = real_quant
 
         input_len = self.chunks
         weight_len = self.chunks
@@ -158,6 +154,9 @@ class SegmentLinear(nn.Module):
                 )
                 for _ in range(weight_len)
             ],
+            real_quant=real_quant,
+            dual_scale=dual_scale,
+            kernel_type=kernel_type,
             **opt_kwargs,
         )
 
@@ -166,8 +165,6 @@ class SegmentLinear(nn.Module):
             f"  in_features={self.in_features}, out_features={self.out_features}, seg_mode={self.seg_mode}",
             f"  chunks={self.chunks}, chunksize={self.chunksizes}",
         ]
-        if self.real_quant:
-            lines.append(f"  type={self.this_type}")
         lines.append(f"  opt={repr(self.optimizer)}")
         inner_content = ",\n".join(lines)
         base = f"SegmentLinear(\n{inner_content}\n)"

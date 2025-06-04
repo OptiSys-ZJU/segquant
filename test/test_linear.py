@@ -7,7 +7,7 @@ from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 
-embedding_dim = 16
+embedding_dim = 1536
 
 class RandomTensorDataset:
     def __init__(self, num_batches=6, seed=42):
@@ -155,19 +155,30 @@ def test_default_fp8():
     print('diff3', torch.norm(b - c).item())
 
 def test_default_fp8_real():
-    test_model = TestModel().to(torch.device("cuda:0"))
+    test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
     ######################################
     config = {
         "default": {
             "enable": True,
-            "input_dtype": DType.FP8E4M3,
-            "weight_dtype": DType.FP8E4M3,
-            "opt": Optimum.DEFAULT,
             "seglinear": True,
-            "search_patterns": SegPattern.all(),
+            "search_patterns": [],
+            # "search_patterns": SegPattern.all(),
             "real_quant": False,
-            "input_axis": None,
-            "weight_axis": None,
+            "opt": {
+                "type": Optimum.DEFAULT,
+                "alpha": 0.5,
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.FP8E4M3,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.FP8E4M3,
+                "axis": None,
+            },
         },
     }
     segquant_model = quantize(
@@ -175,21 +186,32 @@ def test_default_fp8_real():
         seg_data_loader,
         config,
         True,
-        example=(torch.rand(2, 16), torch.rand(2, 16)),
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
 
     ######################################
     config_real = {
         "default": {
             "enable": True,
-            "input_dtype": DType.FP8E4M3,
-            "weight_dtype": DType.FP8E4M3,
-            "opt": Optimum.DEFAULT,
             "seglinear": True,
-            "search_patterns": SegPattern.all(),
+            "search_patterns": [],
+            # "search_patterns": SegPattern.all(),
             "real_quant": True,
-            "input_axis": None,
-            "weight_axis": None,
+            "opt": {
+                "type": Optimum.DEFAULT,
+                "alpha": 0.5,
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.FP8E4M3,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.FP8E4M3,
+                "axis": None,
+            },
         },
     }
     segquant_model_real = quantize(
@@ -197,19 +219,26 @@ def test_default_fp8_real():
         seg_data_loader,
         config_real,
         True,
-        example=(torch.rand(2, 16), torch.rand(2, 16)),
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
     x_generator = torch.Generator()
     x_generator.manual_seed(1234)
-    x = torch.rand(2, 16, generator=x_generator).to(torch.device("cuda:0"))
-    emb = torch.rand(2, 16, generator=x_generator).to(torch.device("cuda:0"))
+    x = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    emb = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
     res = test_model.forward(x, emb)
     print("origin:", res)
+    a = res[0]
     res = segquant_model.forward(x, emb)
-    print("segquant(fake):", res)
+    print("fake:", res)
+    b = res[0]
     res = segquant_model_real.forward(x, emb)
-    print("segquant(real):", res)
+    print("real:", res)
+    c = res[0]
+
+    print('diff1', torch.norm(a - b).item())
+    print('diff2', torch.norm(a - c).item())
+    print('diff3', torch.norm(b - c).item())
 
 def test_default_int8():
     test_model =TestModel(embedding_dim)
@@ -338,20 +367,30 @@ def test_smooth_int8():
     print('diff3', torch.norm(b - c).item())
 
 def test_smooth_int8_real():
-    test_model = TestModel().to(torch.device("cuda:0"))
+    test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
     ######################################
     config = {
         "default": {
             "enable": True,
-            "input_dtype": DType.INT8,
-            "weight_dtype": DType.INT8,
-            "opt": Optimum.SMOOTH,
             "seglinear": True,
-            "real_quant": False,
+            # "search_patterns": [],
             "search_patterns": SegPattern.all(),
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 0.5,
+            "real_quant": False,
+            "opt": {
+                "type": Optimum.SMOOTH,
+                "alpha": 0.5,
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
         },
     }
     segquant_model = quantize(
@@ -359,21 +398,31 @@ def test_smooth_int8_real():
         seg_data_loader,
         config,
         True,
-        example=(torch.rand(2, 16), torch.rand(2, 16)),
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
     config_real = {
         "default": {
             "enable": True,
-            "input_dtype": DType.INT8,
-            "weight_dtype": DType.INT8,
-            "opt": Optimum.SMOOTH,
             "seglinear": True,
-            "real_quant": True,
+            # "search_patterns": [],
             "search_patterns": SegPattern.all(),
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 0.5,
+            "real_quant": True,
+            "opt": {
+                "type": Optimum.SMOOTH,
+                "alpha": 0.5,
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
         },
     }
     segquant_model_real = quantize(
@@ -381,19 +430,26 @@ def test_smooth_int8_real():
         seg_data_loader,
         config_real,
         True,
-        example=(torch.rand(2, 16), torch.rand(2, 16)),
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
     x_generator = torch.Generator()
     x_generator.manual_seed(1234)
-    x = torch.rand(2, 16, generator=x_generator).to(torch.device("cuda:0"))
-    emb = torch.rand(2, 16, generator=x_generator).to(torch.device("cuda:0"))
+    x = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    emb = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
     res = test_model.forward(x, emb)
-    print("origin:", res[0])
+    print("origin:", res)
+    a = res[0]
     res = segquant_model.forward(x, emb)
-    print("segquant:", res[0])
+    print("fake:", res)
+    b = res[0]
     res = segquant_model_real.forward(x, emb)
-    print("segquant_real:", res[0])
+    print("real:", res)
+    c = res[0]
+
+    print('diff1', torch.norm(a - b).item())
+    print('diff2', torch.norm(a - c).item())
+    print('diff3', torch.norm(b - c).item())
 
 def test_svd_int4():
     test_model = TestModel(embedding_dim)
@@ -416,17 +472,26 @@ def test_svd_int4():
     config = {
         "default": {
             "enable": True,
-            "input_dtype": DType.INT4,
-            "weight_dtype": DType.INT4,
-            "opt": Optimum.SVD,
             "seglinear": True,
-            "real_quant": False,
             "search_patterns": [],
             # "search_patterns": SegPattern.all(),
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 0.5,
-            "low_rank": 32,
+            "real_quant": False,
+            "opt": {
+                "type": Optimum.SVD,
+                "alpha": 0.5,
+                "low_rank": 32,
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.INT4,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.INT4,
+                "axis": None,
+            },
         },
     }
     segquant_model = quantize(
@@ -460,17 +525,26 @@ def test_svd_int4_real():
     config = {
         "default": {
             "enable": True,
-            "input_dtype": DType.INT4,
-            "weight_dtype": DType.INT4,
-            "opt": Optimum.SVD,
             "seglinear": True,
-            "search_patterns": [],
-            "real_quant": True,
-            # "search_patterns": SegPattern.all(),
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 0.5,
-            "low_rank": 32,
+            # "search_patterns": [],
+            "search_patterns": SegPattern.all(),
+            "real_quant": False,
+            "opt": {
+                "type": Optimum.SVD,
+                "alpha": 0.5,
+                "low_rank": 32,
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.INT4,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.INT4,
+                "axis": None,
+            },
         },
     }
     segquant_model = quantize(
@@ -481,17 +555,56 @@ def test_svd_int4_real():
         example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
+    config_real = {
+        "default": {
+            "enable": True,
+            "seglinear": True,
+            # "search_patterns": [],
+            "search_patterns": SegPattern.all(),
+            "real_quant": True,
+            "opt": {
+                "type": Optimum.SVD,
+                "alpha": 0.5,
+                "low_rank": 32,
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.INT4,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.INT4,
+                "axis": None,
+            },
+        },
+    }
+    segquant_model_real = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config_real,
+        True,
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+    )
+    ######################################
     x_generator = torch.Generator()
     x_generator.manual_seed(1234)
     x = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
     emb = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
     res = test_model.forward(x, emb)
-    print("origin:", res[0])
+    print("origin:", res)
     a = res[0]
     res = segquant_model.forward(x, emb)
-    print("segquant:", res[0])
+    print("fake:", res)
     b = res[0]
-    print('diff', torch.norm(a - b).item())
+    res = segquant_model_real.forward(x, emb)
+    print("real:", res)
+    c = res[0]
+
+    print('diff1', torch.norm(a - b).item())
+    print('diff2', torch.norm(a - c).item())
+    print('diff3', torch.norm(b - c).item())
 
 if __name__ == "__main__":
-    test_default_fp8()
+    test_svd_int4_real()
