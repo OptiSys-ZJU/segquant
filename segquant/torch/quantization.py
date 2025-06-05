@@ -9,8 +9,8 @@ import gc
 import torch
 from torch import nn
 from tqdm import tqdm
-from segquant.config import DType, Optimum, default_quantize_config
-from segquant.layers.SegmentLinear import create_segment_linear
+from segquant.config import default_quantize_config
+from segquant.layers.SegmentLinear import create_segment_linear, SegmentLinear
 from segquant.pattern_detector import SegQuantPatternDetector
 
 
@@ -36,9 +36,6 @@ def _replace_linears(model, to_replace_linears: dict):
         old_linear = getattr(module, parts[-1])
         setattr(module, parts[-1], new_linear)
         del old_linear
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
 
 def _get_all_linears(model: nn.Module, default, config):
     disable_patterns = [
@@ -113,7 +110,7 @@ def _create_linear(
             "chunks", len(seg_linear_config.get("chunksizes", []))
         ),
         chunksizes=seg_linear_config.get("chunksizes"),
-        custom_weight_tensor=old_linear.weight,
+        custom_weight_tensor=old_linear.weight.data,
     )
 
     new_linear = new_linear.to(device).to(old_dtype)
@@ -128,7 +125,7 @@ def _smooth_linears(
 ):
     hooks = []
     for name, module in model.named_modules():
-        if isinstance(module, nn.Linear) and name in to_calib_linears:
+        if isinstance(module, SegmentLinear) and name in to_calib_linears:
 
             def get_hook(n):
                 def hook_fn(_mod, inp, _out, n=n):
@@ -163,7 +160,7 @@ def _calib_linears(
 ):
     hooks = []
     for name, module in model.named_modules():
-        if isinstance(module, nn.Linear) and name in to_calib_linears:
+        if isinstance(module, SegmentLinear) and name in to_calib_linears:
 
             def get_hook(n):
                 def hook_fn(_mod, inp, _out, n=n):
@@ -185,14 +182,8 @@ def _calib_linears(
     for h in hooks:
         h.remove()
 
-    if torch.cuda.is_available():
-        print(torch.cuda.memory_summary(device=None, abbreviated=False))
     for l in to_calib_linears.values():
         l.finish_calibrate()
-    print('--------------------------')
-    if torch.cuda.is_available():
-        print(torch.cuda.memory_summary(device=None, abbreviated=False))
-
 
 def quantize(
     model: nn.Module,
@@ -279,16 +270,24 @@ def quantize(
             final_config,
             dual_scale=(name in dual_scale_linears),
         )
-    if hasattr(list(to_calib_linears.values())[0], 'smooth'):
-        if verbose:
-            print("start smooth ...")
-        _smooth_linears(model, to_calib_linears, calib_data_loader, device)
-    if verbose:
-        print("start calibrate ...")
-    _calib_linears(model, to_calib_linears, calib_data_loader, device)
+    del linears
+
     if verbose:
         print("start replace ...")
     _replace_linears(model, to_calib_linears)
+
+    to_smooth_linears = {
+        k: v for k, v in to_calib_linears.items()
+        if hasattr(v, 'smooth')
+    }
+    if to_smooth_linears:
+        if verbose:
+            print("start smooth ...")
+        _smooth_linears(model, to_smooth_linears, calib_data_loader, device)
+
+    if verbose:
+        print("start calibrate ...")
+    _calib_linears(model, to_calib_linears, calib_data_loader, device)
 
     if verbose:
         print(model)

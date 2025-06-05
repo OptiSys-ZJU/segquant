@@ -3,9 +3,9 @@
 #include <cutlass/numeric_types.h>
 
 template<typename T>
-at::Tensor real_quantized_quantize_weights(at::Tensor weights, float scale_w);
+void real_quantized_quantize_weights(at::Tensor weights, at::Tensor outputs, float scale_w);
 template<>
-at::Tensor real_quantized_quantize_weights<cutlass::int4b_t>(at::Tensor weights, float scale_w);
+void real_quantized_quantize_weights<cutlass::int4b_t>(at::Tensor weights, at::Tensor outputs, float scale_w);
 
 template<typename T>
 at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
@@ -19,13 +19,19 @@ at::Tensor real_quantized_gemm_dual_scaled<cutlass::int4b_t>(at::Tensor inputs, 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("real_quantized_quantize_weights",
-        [](at::Tensor weights, float scale_w) {
+        [](at::Tensor weights, at::Tensor outputs, float scale_w) {
+            TORCH_CHECK(weights.is_contiguous(), "weights must be contiguous");
             TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
             TORCH_CHECK(weights.numel() % 2 == 0, "Quantization to int4 requires the number of elements to be even");
-            return real_quantized_quantize_weights<cutlass::int4b_t>(weights, scale_w);
+            TORCH_CHECK(outputs.is_contiguous(), "output must be contiguous");
+            TORCH_CHECK(outputs.is_cuda(), "output must be a CUDA tensor");
+            TORCH_CHECK(outputs.dtype() == at::kByte, "output must be uint8");
+            TORCH_CHECK(outputs.numel() * 2 == weights.numel(), "output numel must be half of weight");
+            real_quantized_quantize_weights<cutlass::int4b_t>(weights, outputs, scale_w);
         },
         "Quantize weights to int4 format",
         py::arg("weights"),
+        py::arg("outputs"),
         py::arg("scale_w")
     );
 

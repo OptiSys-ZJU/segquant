@@ -350,65 +350,45 @@ void launch_array_gemm_scaled(
 }
 
 template<typename T>
-at::Tensor real_quantized_quantize_weights(at::Tensor weights, float scale_w);
+void real_quantized_quantize_weights(at::Tensor weights, at::Tensor outputs, float scale_w);
 
 template <>
-at::Tensor real_quantized_quantize_weights<__nv_fp8_e4m3>(at::Tensor weights, float scale_w) {
-    // use uint8 to store quantized weights
-    auto options = weights.options().dtype(at::kByte);
-    auto quantized_weights = at::empty(weights.sizes(), options);
-
+void real_quantized_quantize_weights<__nv_fp8_e4m3>(at::Tensor weights, at::Tensor outputs, float scale_w) {
     size_t numel = weights.numel();
     auto stream = c10::cuda::getCurrentCUDAStream();
 
     AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "real_quantize_scaled_kernel", [&] {
         real_quantize_scaled_kernel<scalar_t, __nv_fp8_e4m3, uint8_t><<<numel / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
             weights.data_ptr<scalar_t>(), scale_w, numel, 
-            quantized_weights.data_ptr<uint8_t>()
+            outputs.data_ptr<uint8_t>()
         );
     });
-
-    return quantized_weights;
 }
 
 template <>
-at::Tensor real_quantized_quantize_weights<int8_t>(at::Tensor weights, float scale_w) {
-    auto options = weights.options().dtype(at::kChar);
-    auto quantized_weights = at::empty(weights.sizes(), options);
-
+void real_quantized_quantize_weights<int8_t>(at::Tensor weights, at::Tensor outputs, float scale_w) {
     size_t numel = weights.numel();
     auto stream = c10::cuda::getCurrentCUDAStream();
 
     AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "real_quantize_scaled_kernel", [&] {
         real_quantize_scaled_kernel<scalar_t, int8_t, int8_t><<<numel / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
             weights.data_ptr<scalar_t>(), scale_w, numel, 
-            quantized_weights.data_ptr<int8_t>()
+            outputs.data_ptr<int8_t>()
         );
     });
-
-    return quantized_weights;
 }
 
 template <>
-at::Tensor real_quantized_quantize_weights<cutlass::int4b_t>(at::Tensor weights, float scale_w) {
-    // use uint8 to store quantized weights
-    auto options = weights.options().dtype(at::kByte);
-
-    int64_t num_elements = weights.numel();
-    int64_t num_bytes = (num_elements + 1) / 2;
-    auto quantized_weights = at::empty({num_bytes}, options);
-
+void real_quantized_quantize_weights<cutlass::int4b_t>(at::Tensor weights, at::Tensor outputs, float scale_w) {
     size_t numel = weights.numel();
     auto stream = c10::cuda::getCurrentCUDAStream();
 
     AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "real_quantize_scaled_kernel", [&] {
         real_quantize_scaled_kernel<scalar_t, cutlass::int4b_t, uint8_t><<<numel / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
             weights.data_ptr<scalar_t>(), scale_w, numel, 
-            quantized_weights.data_ptr<uint8_t>()
+            outputs.data_ptr<uint8_t>()
         );
     });
-
-    return quantized_weights;
 }
 
 template<typename T>

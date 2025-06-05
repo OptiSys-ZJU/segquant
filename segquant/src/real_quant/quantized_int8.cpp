@@ -2,9 +2,9 @@
 #include <torch/extension.h>
 
 template<typename T>
-at::Tensor real_quantized_quantize_weights(at::Tensor weights, float scale_w);
+void real_quantized_quantize_weights(at::Tensor weights, at::Tensor outputs, float scale_w);
 template<>
-at::Tensor real_quantized_quantize_weights<int8_t>(at::Tensor weights, float scale_w);
+void real_quantized_quantize_weights<int8_t>(at::Tensor weights, at::Tensor outputs, float scale_w);
 
 template<typename T>
 at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
@@ -18,12 +18,17 @@ at::Tensor real_quantized_gemm_dual_scaled<int8_t>(at::Tensor inputs, at::Tensor
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("real_quantized_quantize_weights",
-        [](at::Tensor weights, float scale_w) {
+        [](at::Tensor weights, at::Tensor outputs, float scale_w) {
+            TORCH_CHECK(weights.is_contiguous(), "weights must be contiguous");
             TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
-            return real_quantized_quantize_weights<int8_t>(weights, scale_w);
+            TORCH_CHECK(outputs.is_contiguous(), "output must be contiguous");
+            TORCH_CHECK(outputs.is_cuda(), "output must be a CUDA tensor");
+            TORCH_CHECK(outputs.dtype() == at::kChar, "output must be int8");
+            real_quantized_quantize_weights<int8_t>(weights, outputs, scale_w);
         },
         "Quantize weights to int8 format",
         py::arg("weights"),
+        py::arg("outputs"),
         py::arg("scale_w")
     );
 

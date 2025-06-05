@@ -2,7 +2,7 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 import copy
-import modelopt.torch.quantization as mtq
+# import modelopt.torch.quantization as mtq
 from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
@@ -306,15 +306,15 @@ def test_default_int8():
 def test_smooth_int8():
     test_model = TestModel(embedding_dim)
     ######################################
-    CFG = {
-        "quant_cfg": {
-            "*weight_quantizer": {"num_bits": 8, "axis": None},
-            "*input_quantizer": {"num_bits": 8, "axis": -1},
-        },
-        "algorithm": {"method": "smoothquant", "alpha": 0.5},
-    }
-    modelopt_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
-    mtq.print_quant_summary(modelopt_model)
+    # CFG = {
+    #     "quant_cfg": {
+    #         "*weight_quantizer": {"num_bits": 8, "axis": None},
+    #         "*input_quantizer": {"num_bits": 8, "axis": -1},
+    #     },
+    #     "algorithm": {"method": "smoothquant", "alpha": 0.5},
+    # }
+    # modelopt_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
+    # mtq.print_quant_summary(modelopt_model)
     ######################################
     config = {
         "default": {
@@ -355,8 +355,8 @@ def test_smooth_int8():
     res = test_model.forward(x, emb)
     print("origin:", res)
     a = res[0]
-    res = modelopt_model.forward(x, emb)
-    print("modelopt:", res)
+    # res = modelopt_model.forward(x, emb)
+    # print("modelopt:", res)
     b = res[0]
     res = segquant_model.forward(x, emb)
     print("segquant:", res)
@@ -691,4 +691,4 @@ def test_gptq():
 
 
 if __name__ == "__main__":
-    test_gptq()
+    test_smooth_int8()

@@ -246,14 +246,18 @@ class IntQuantizer(BaseQuantizer):
         if self.real_quant:
             # when real quantization is enabled, only weights are quantized
             assert not self.dual_scale, "Weight quantization does not support dual scale."
+            ext = None
             if self.num_bits == 8:
                 ext = load_real_quant_int8_ext(required=False)
-                if ext is not None:
-                    return ext.real_quantized_quantize_weights(x, self.scale)
             elif self.num_bits == 4:
                 ext = load_real_quant_int4_ext(required=False)
-                if ext is not None:
-                    return ext.real_quantized_quantize_weights(x, self.scale)
+
+            if ext is not None:
+                res = ext.create_quantized_weights(x)
+                ext.real_quantized_quantize_weights(
+                    x.contiguous(), res, self.scale
+                )
+                return res
 
         # fake quantization
         return self._fake_quantize(x)
@@ -474,7 +478,11 @@ class FloatQuantizer(BaseQuantizer):
             ext = load_real_quant_fp8_ext(required=False)
             if ext is not None:
                 assert not self.dual_scale, "Weight quantization does not support dual scale."
-                return ext.real_quantized_quantize_weights(x, self.scale)
+                res = ext.create_quantized_weights(x)
+                ext.real_quantized_quantize_weights(
+                    x.contiguous(), res, self.scale
+                )
+                return res
 
         # fake quantization
         return self._fake_quantize(x)

@@ -68,7 +68,6 @@ class AMaxCalibrator(BaseCalibrator):
     def __init__(self, data_type, quant_type, quant_args, **kwargs,):
         super().__init__(data_type, quant_type, quant_args)
         self.has_calibrated = False
-        self.weight = None
 
     def __repr__(self):
         base = (
@@ -77,20 +76,15 @@ class AMaxCalibrator(BaseCalibrator):
         return base
 
     def calibrate(self, x, **kwargs):
-        if self.data_type == 'weight':
-            if self.has_calibrated:
-                return
-            self.weight = x
+        if self.data_type == 'weight' and self.has_calibrated:
+            return
         self.quantizer.calibrate(x)
         self.has_calibrated = True
 
-    def finish_calibrate(self):
+    def finish_calibrate(self, weight_data=None):
         if self.data_type == 'weight':
-            assert self.weight is not None, "weight is None"
-            self.weight = self.quantizer.quantize(self.weight)
-
-    def get_quantized_weight(self):
-        return self.weight
+            return self.quantizer.quantize(weight_data)
+        return None
 
 @CalibratorRegistry.register("gptq")
 class GPTQCalibrator(BaseCalibrator):
@@ -117,16 +111,13 @@ class GPTQCalibrator(BaseCalibrator):
         self.groupsize = groupsize
         self.actorder = actorder
         self.static_groups = static_groups
+        self.err = None
 
     def __repr__(self):
         base = (
-            f"GPTQCalibrator(\n"
-            f"  blocksize={self.blocksize},\n"
-            f"  percdamp={self.percdamp},\n"
-            f"  groupsize={self.groupsize},\n"
-            f"  actorder={self.actorder},\n"
-            f"  static_groups={self.static_groups},\n"
-            f"  quantizer={repr(self.quantizer)})"
+            f"GPTQCalibrator(blocksize={self.blocksize}, percdamp={self.percdamp}, groupsize={self.groupsize}, actorder={self.actorder}, static_groups={self.static_groups},\n"
+            f"      err={self.err:4f}\n"
+            f"      quantizer={repr(self.quantizer)})"
         )
         return base
 
@@ -142,15 +133,24 @@ class GPTQCalibrator(BaseCalibrator):
         else:
             input_data = input_data.reshape((-1, input_data.shape[-1]))
             this_batch = input_data.shape[0]
-        input_data = input_data.t() #(b, in) -> (in, b)
+
+        input_data = input_data.t()  # (b, in) -> (in, b)
 
         if self.H is None:
-            self.H = torch.zeros((self.weight.shape[1], self.weight.shape[1]), device=self.weight.device)
+            self.H = torch.zeros(
+                (self.weight.shape[1], self.weight.shape[1]),
+                device=self.weight.device,
+                dtype=torch.float32
+            )
 
-        self.H *= self.nsamples / (self.nsamples + this_batch)
+        self.H.mul_(self.nsamples / (self.nsamples + this_batch))
         self.nsamples += this_batch
-        input_data = math.sqrt(2 / self.nsamples) * input_data.float()
-        self.H += input_data @ input_data.t() # (in, b) @ (b, in) -> (in, in)
+
+        if input_data.dtype != torch.float32:
+            input_data = input_data.to(dtype=torch.float32)
+
+        input_data.mul_(math.sqrt(2 / self.nsamples))
+        self.H.addmm_(input_data, input_data.t(), beta=1.0, alpha=1.0)
 
     def finish_calibrate(self):
         blocksize = self.blocksize
@@ -158,6 +158,7 @@ class GPTQCalibrator(BaseCalibrator):
         groupsize = self.groupsize
         actorder = self.actorder
         static_groups = self.static_groups
+        dtype = self.weight.dtype
 
         W = self.weight.clone()
         W = W.float()
@@ -174,7 +175,7 @@ class GPTQCalibrator(BaseCalibrator):
         if static_groups:
             import copy
             groups = []
-            for i in range(0, self.columns, groupsize):
+            for i in range(0, column, groupsize):
                 quantizer = copy.deepcopy(self.quantizer)
                 self.quantizer.calibrate(W[:, i:(i + groupsize)])
                 groups.append(quantizer)
@@ -196,8 +197,8 @@ class GPTQCalibrator(BaseCalibrator):
         H = torch.linalg.cholesky(H, upper=True)
         Hinv = H
 
-        for i1 in range(0, self.columns, blocksize):
-            i2 = min(i1 + blocksize, self.columns)
+        for i1 in range(0, column, blocksize):
+            i2 = min(i1 + blocksize, column)
             count = i2 - i1
 
             W1 = W[:, i1:i2].clone()
@@ -219,9 +220,9 @@ class GPTQCalibrator(BaseCalibrator):
                             idx = perm[idx]
                         self.quantizer = groups[idx // groupsize]
 
-                q = self.quantizer.fake_quantize(w).flatten() # (out,)
-                real_q = self.quantizer.quantize(w) # (out, 1)
-                if real_q is None:
+                q = self.quantizer.fake_quantize(w) # (out,)
+                real_q = self.quantizer.quantize(w.unsqueeze(1).to(dtype)) # (out, 1)
+                if Q is None:
                     Q = real_q
                 else:
                     Q = torch.hstack((Q, real_q))
@@ -235,13 +236,14 @@ class GPTQCalibrator(BaseCalibrator):
 
             W[:, i2:] -= Err1.matmul(Hinv[i1:i2, i2:])
 
-        torch.cuda.synchronize()
-        print('error', torch.sum(Losses).item())
-
         if actorder:
             Q = Q[:, invperm]
 
         self.weight = Q
+        self.err = torch.sum(Losses).item()
+        print(
+            f"GPTQCalibrator: finish_calibrate [{self.weight.shape[0]}, {self.weight.shape[1]}], error [{self.err:4f}]"
+        )
 
     def get_quantized_weight(self):
         return self.weight

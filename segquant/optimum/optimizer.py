@@ -2,7 +2,6 @@ from functools import partial
 from typing import List
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from segquant.layers import ext_dict
 
@@ -33,6 +32,8 @@ class BaseOptimizer:
             self.func_name = 'gemm_dual_scaled_fn'
         else:
             self.func_name = 'gemm_scaled_fn'
+  
+        self.has_calibrated = False
 
     def _get_funcs(self, input_indices, weight_indices):
         if self.real_quant:
@@ -40,9 +41,9 @@ class BaseOptimizer:
                 funcs = [
                     partial(
                         ext_dict[self.kernel_type][self.func_name],
-                        pos_scale_x=self.input_calibrators[input_indices[i]].quantizer.pos_scale,
-                        neg_scale_x=self.input_calibrators[input_indices[i]].quantizer.neg_scale,
-                        scale_w=self.weight_calibrators[weight_indices[i]].quantizer.scale,
+                        pos_scale_x=self.input_calibrators[input_indices[i]].pos_scale,
+                        neg_scale_x=self.input_calibrators[input_indices[i]].neg_scale,
+                        scale_w=self.weight_calibrators[weight_indices[i]].scale,
                     )
                     for i in range(self.chunks)
                 ]
@@ -50,8 +51,8 @@ class BaseOptimizer:
                 funcs = [
                     partial(
                         ext_dict[self.kernel_type][self.func_name],
-                        scale_x=self.input_calibrators[input_indices[i]].quantizer.scale,
-                        scale_w=self.weight_calibrators[weight_indices[i]].quantizer.scale,
+                        scale_x=self.input_calibrators[input_indices[i]].scale,
+                        scale_w=self.weight_calibrators[weight_indices[i]].scale,
                     )
                     for i in range(self.chunks)
                 ]
@@ -74,7 +75,7 @@ class BaseOptimizer:
 
             funcs = [
                 _create_wrapped_linear_func(
-                    self.input_calibrators[input_indices[i]].quantizer
+                    self.input_calibrators[input_indices[i]]
                 )
                 for i in range(self.chunks)
             ]
@@ -95,12 +96,18 @@ class BaseOptimizer:
         self._calibrate_weights(input_chunks)
 
     def finish_calibrate(self):
-        _ = [input_calibrator.finish_calibrate() for input_calibrator in self.input_calibrators]
-        _ = [weight_calibrator.finish_calibrate() for weight_calibrator in self.weight_calibrators]
-        self.weight_chunks = [
-            weight_calibrator.get_quantized_weight()
-            for weight_calibrator in self.weight_calibrators
-        ]
+        for i, input_calibrator in enumerate(self.input_calibrators):
+            input_calibrator.finish_calibrate()
+            self.input_calibrators[i] = input_calibrator.quantizer
+
+        for i, weight_calibrator in enumerate(self.weight_calibrators):
+            self.weight_chunks[i] = weight_calibrator.finish_calibrate(self.weight_chunks[i])
+            self.weight_calibrators[i] = weight_calibrator.quantizer
+
+        self.has_calibrated = True
+
+    def _fake_forward(self, input_chunks):
+        pass
 
 class OptimizerRegistry:
     _registry = {}
@@ -166,13 +173,13 @@ class DefaultOptimizer(BaseOptimizer):
 
         if self.chunks == 1:
             return (
-                base + f"  input_quantizer=({input_q}),\n"
-                f"  weight_quantizer=({weight_q})\n"
+                base + f"    input_quantizer=({input_q}),\n"
+                f"    weight_quantizer=({weight_q})\n"
                 f")"
             )
         return (
-            base + f"  input_quantizers=[\n    {input_q}\n  ],\n"
-            f"  weight_quantizers=[\n    {weight_q}\n  ]\n"
+            base + f"    input_quantizers=[\n    {input_q}\n  ],\n"
+            f"    weight_quantizers=[\n    {weight_q}\n  ]\n"
             f")"
         )
 
@@ -198,7 +205,20 @@ class DefaultOptimizer(BaseOptimizer):
         else:
             self.weight_indices = range(self.chunks)
 
+    def _fake_forward(self, input_chunks):
+        quantized_output_chunks = [
+            F.linear(
+                input_chunks[self.input_indices[i]],
+                self.weight_chunks[self.weight_indices[i]],
+            )
+            for i in range(self.chunks)
+        ]
+        return quantized_output_chunks
+
     def forward(self, input_chunks):
+        if not self.has_calibrated:
+            return self._fake_forward(input_chunks)
+
         funcs = self._get_funcs(self.input_indices, self.weight_indices)
         quantized_output_chunks = [
             funcs[i](
@@ -246,8 +266,6 @@ class SmoothOptimizer(BaseOptimizer):
 
         self.input_indices = range(self.chunks)
         self.weight_indices = range(self.chunks)
-
-        self._trace_max_w(self.weight_chunks)
 
     def __repr__(self):
         if self.real_quant:
@@ -324,15 +342,9 @@ class SmoothOptimizer(BaseOptimizer):
         self._trace_max_x(input_broadcast)
 
     def _smooth_w(self, weight_chunks: List[torch.Tensor]):
-        smooth_weight_chunks = []
-        weight_broadcast = self._broadcast_list(weight_chunks)
-        for weight_chunk, s in zip(weight_broadcast, self.s):
-            weight_smooth = (weight_chunk * s).to(
-                dtype=weight_chunk.dtype, device=weight_chunk.device
-            )
-            smooth_weight_chunks.append(weight_smooth)
-
-        return smooth_weight_chunks
+        for i, (weight_chunk, s) in enumerate(zip(weight_chunks, self.s)):
+            weight_chunk.mul_(s.to(weight_chunk.device))
+            weight_chunks[i] = weight_chunk
 
     def _smooth_x(self, input_chunks: List[torch.Tensor]):
         smoothed_input_chunks = []
@@ -357,28 +369,45 @@ class SmoothOptimizer(BaseOptimizer):
         where max_x is the maximum value of the input tensor chunk and max_w is
         the maximum value of the corresponding weight tensor chunk.
         """
+        self._trace_max_w(self.weight_chunks)
         max_x, max_w = self._broadcast_lists(self.max_x, self.max_w)
         for i in range(self.chunks):
             epsilon = 1.0 / (1 << 31)
             s = (max_x[i] ** self.alpha) / (max_w[i] ** (1 - self.alpha))
             s = torch.where(s <= epsilon, torch.ones_like(s), s)
             self.s[i] = torch.clamp(s.to(dtype=torch.float32), min=1e-4, max=1e4)
-
+        del self.max_w
+        del self.max_x
         # smooth weight
-        self.weight_chunks = self._smooth_w(self.weight_chunks)
+        self._smooth_w(self.weight_chunks)
         self.has_smoothed = True
 
     def calibrate(self, input_chunks):
         assert self.has_smoothed, 'SmoothOptimizer: linear is not smoothed'
-        smoothed_input_chunks = self._smooth_x(input_chunks) # len == chunks
-        super().calibrate(smoothed_input_chunks)
+        input_chunks = self._smooth_x(input_chunks) # len == chunks
+        super().calibrate(input_chunks)
+
+    def _fake_forward(self, input_chunks):
+        if self.has_smoothed:
+            input_chunks = self._smooth_x(input_chunks)
+        quantized_output_chunks = [
+            F.linear(
+                input_chunks[i],
+                self.weight_chunks[i],
+            )
+            for i in range(self.chunks)
+        ]
+        return quantized_output_chunks
 
     def forward(self, input_chunks):
+        if not self.has_calibrated:
+            return self._fake_forward(input_chunks)
+
         funcs = self._get_funcs(self.input_indices, self.weight_indices)
-        smooth_input_chunks = self._smooth_x(input_chunks)
+        input_chunks = self._smooth_x(input_chunks)
         quantized_output_chunks = [
             funcs[i](
-                smooth_input_chunks[i],
+                input_chunks[i],
                 self.weight_chunks[i],
             )
             for i in range(self.chunks)
@@ -422,6 +451,30 @@ class SVDOptimizer(SmoothOptimizer):
         self.input_indices = range(self.chunks)
         self.weight_indices = range(self.chunks)
 
+    def __repr__(self):
+        if self.real_quant:
+            base = (
+                f"SVDOptimizer(alpha={self.alpha}, low_rank={self.low_rank}, kernel={self.kernel_type}\n"
+            )
+        else:
+            base = (
+                f"SVDOptimizer(alpha={self.alpha}, low_rank={self.low_rank}\n"
+            )
+        input_q = ",\n      ".join(repr(i) for i in self.input_calibrators)
+        weight_q = ",\n      ".join(repr(w) for w in self.weight_calibrators)
+
+        if self.chunks == 1:
+            return (
+                base + f"    input_quantizer=({input_q}),\n"
+                f"    weight_quantizer=({weight_q})\n"
+                f")"
+            )
+        return (
+            base + f"    input_quantizers=[\n      {input_q}\n  ],\n"
+            f"    weight_quantizers=[\n      {weight_q}\n  ]\n"
+            f")"
+        )
+
     def _svd_w(self, smooth_weight_chunks: List[torch.Tensor]):
         assert self.has_smoothed, 'SVDOptimizer: linear is not smoothed'
 
@@ -457,20 +510,44 @@ class SVDOptimizer(SmoothOptimizer):
 
     def smooth(self):
         super().smooth()
-        self._svd_w(self.weight_chunks)
+        self.weight_chunks = self._svd_w(self.weight_chunks)
         self.has_svd = True
 
     def calibrate(self, input_chunks):
         assert self.has_svd, 'SVDOptimizer: linear is not svd'
         super().calibrate(input_chunks)
 
+    def _fake_forward(self, input_chunks):
+        if self.has_svd:
+            input_chunks = self._smooth_x(input_chunks)
+            quantized_output_chunks = [
+                input_chunks[i] @ self.l1s[i] @ self.l2s[i] +
+                F.linear(
+                    input_chunks[self.input_indices[i]],
+                    self.weight_chunks[self.weight_indices[i]],
+                )
+                for i in range(self.chunks)
+            ]
+        else:
+            quantized_output_chunks = [
+                F.linear(
+                    input_chunks[self.input_indices[i]],
+                    self.weight_chunks[self.weight_indices[i]],
+                )
+                for i in range(self.chunks)
+            ]
+        return quantized_output_chunks
+
     def forward(self, input_chunks):
+        if not self.has_calibrated:
+            return self._fake_forward(input_chunks)
+
         funcs = self._get_funcs(self.input_indices, self.weight_indices)
-        smooth_input_chunks = self._smooth_x(input_chunks)
+        input_chunks = self._smooth_x(input_chunks)
         quantized_output_chunks = [
-            smooth_input_chunks[i] @ self.l1s[i] @ self.l2s[i] +
+            input_chunks[i] @ self.l1s[i] @ self.l2s[i] +
             funcs[i](
-                smooth_input_chunks[i],
+                input_chunks[i],
                 self.weight_chunks[i],
             )
             for i in range(self.chunks)
