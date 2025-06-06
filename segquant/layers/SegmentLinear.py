@@ -1,4 +1,3 @@
-import types
 from typing import Literal
 import torch
 import torch.nn as nn
@@ -102,6 +101,7 @@ class SegmentLinear(nn.Module):
 
         input_len = self.chunks
         weight_len = self.chunks
+        self.opt_type = opt_type
         if opt_type == 'default':
             if seg_mode == 'input':
                 weight_len = 1
@@ -109,16 +109,8 @@ class SegmentLinear(nn.Module):
                 input_len = 1
             else:
                 raise ValueError("seg_mode not found")
-        elif opt_type == 'smooth' or opt_type == 'svd':
-            def trace(self, input_data):
-                input_chunks = self._chunk_x(input_data)
-                self.optimizer.trace(input_chunks)
-
-            def smooth(self):
-                self.optimizer.smooth()
-
-            self.trace = types.MethodType(trace, self)
-            self.smooth = types.MethodType(smooth, self)
+        elif opt_type in ('smooth', 'svd'):
+            pass
         else:
             raise ValueError("opt_type not found")
 
@@ -160,6 +152,13 @@ class SegmentLinear(nn.Module):
             kernel_type=kernel_type,
             **opt_kwargs,
         )
+
+    def trace(self, input_data):
+        input_chunks = self._chunk_x(input_data)
+        self.optimizer.trace(input_chunks)
+
+    def smooth(self):
+        self.optimizer.smooth()
 
     def __repr__(self):
         lines = [

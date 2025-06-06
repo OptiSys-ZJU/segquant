@@ -278,9 +278,14 @@ def quantize(
         print("start replace ...")
     _replace_linears(model, to_calib_linears)
 
+
+    # torch.save(model, 'tmp.pt')
+    # torch.cuda.empty_cache()
+    # model = torch.load('tmp.pt', weights_only=False)
+
     to_smooth_linears = {
         k: v for k, v in to_calib_linears.items()
-        if hasattr(v, 'smooth')
+        if v.opt_type in ('smooth', 'svd')
     }
     if to_smooth_linears:
         if verbose:

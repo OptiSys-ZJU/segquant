@@ -98,6 +98,7 @@ class GPTQCalibrator(BaseCalibrator):
         groupsize=-1,
         actorder=False,
         static_groups=False,
+        cpu_storage=True,
         **kwargs,
     ):
         assert data_type == 'weight', 'Only weight calibrator can be used to GPTQ.'
@@ -111,6 +112,8 @@ class GPTQCalibrator(BaseCalibrator):
         self.actorder = actorder
         self.static_groups = static_groups
         self.err = None
+
+        self.cpu_storage = cpu_storage
 
     def __repr__(self):
         base = (
@@ -132,21 +135,29 @@ class GPTQCalibrator(BaseCalibrator):
 
         input_data = input_data.t()  # (b, in) -> (in, b)
 
+        device = x.device
+
         if self.H is None:
             self.H = torch.zeros(
                 (x.shape[1], x.shape[1]),
-                device=x.device,
-                dtype=torch.float32
+                device='cpu' if self.cpu_storage else device,
+                dtype=torch.float32,
             )
 
-        self.H.mul_(self.nsamples / (self.nsamples + this_batch))
-        self.nsamples += this_batch
+        H = self.H.to(device=device) if self.cpu_storage else self.H
 
         if input_data.dtype != torch.float32:
             input_data = input_data.to(dtype=torch.float32)
 
+        input_data = input_data.to(device)
+        H.mul_(self.nsamples / (self.nsamples + this_batch))
+        self.nsamples += this_batch
+
         input_data.mul_(math.sqrt(2 / self.nsamples))
-        self.H.addmm_(input_data, input_data.t(), beta=1.0, alpha=1.0)
+        H.addmm_(input_data, input_data.t(), beta=1.0, alpha=1.0)
+
+        if self.cpu_storage:
+            self.H.copy_(H.to(device='cpu'))
 
     def finish_calibrate(self, weight_data=None):
         blocksize = self.blocksize
@@ -156,13 +167,13 @@ class GPTQCalibrator(BaseCalibrator):
         static_groups = self.static_groups
         dtype = weight_data.dtype
 
-        W = weight_data.clone()
+        W = weight_data
         W = W.float()
         column = W.shape[1]
 
         self.quantizer.calibrate(W)
 
-        H = self.H
+        H = self.H.to(dtype=torch.float32, device=weight_data.device) if self.cpu_storage else self.H
         del self.H
         dead = torch.diag(H) == 0
         H[dead, dead] = 1
