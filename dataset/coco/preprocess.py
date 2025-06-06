@@ -1,6 +1,6 @@
 import time
 import os
-
+import random
 from tqdm import tqdm  # To measure processing time
 from dataset.processor import ControlNetPreprocessor
 from datasets import load_dataset
@@ -11,7 +11,6 @@ def create_dataset(
     dataset,
     output_dir,
     cn_type="canny",
-    limit=None,
     enable_no_prompt=False,
 ):
     """
@@ -42,10 +41,8 @@ def create_dataset(
     # Prepare metadata
     metadata = []
 
-    # Determine how many samples to process
-    total_samples = len(dataset) if limit is None else min(limit, len(dataset))
-    print(f"Processing {total_samples} samples for ControlNet {cn_type} dataset...")
-
+    total_samples = len(dataset)
+    print(f"Processing {total_samples} samples for ControlNet {preprocessor.cn_type} dataset...")
     # Process each sample
     for i, sample in enumerate(
         tqdm(dataset, total=total_samples, desc="Processing samples")
@@ -115,7 +112,7 @@ def parse_args():
         help="Type of control map to generate",
     )
     parser.add_argument(
-        "--limit", type=int, default=None, help="Maximum number of samples to process"
+        "--sample_size", type=int, default=5000, help="Maximum number of samples to process"
     )
     parser.add_argument(
         "--enable_blur",
@@ -147,7 +144,12 @@ if __name__ == "__main__":
 
     # Load the dataset
     try:
-        dataset = load_dataset(os.path.join("../dataset",args.dataset), split=args.split, trust_remote_code=True)
+        # determine the total number of samples
+        dataset = load_dataset(os.path.join("../dataset", args.dataset), split=args.split, trust_remote_code=True)
+        if args.sample_size is not None:
+            total_samples = min(args.sample_size, len(dataset))
+            indices = random.sample(range(len(dataset)), total_samples)
+            dataset = dataset.select(indices)  # HuggingFace way
         dataset.name = args.dataset
         print(f"Number of examples: {len(dataset)}")
         print("Dataset features:", dataset.features)
@@ -167,9 +169,7 @@ if __name__ == "__main__":
     dataset_dir = create_dataset(
         preprocessor=preprocessor,
         dataset=dataset,
-        output_dir=args.output_dir,
-        cn_type=args.cn_type,
-        limit=args.limit,
+        output_dir=os.path.join(args.output_dir, f"{args.dataset}-{args.cn_type}"),
         enable_no_prompt=args.enable_no_prompt,
     )
 

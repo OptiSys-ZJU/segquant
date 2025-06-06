@@ -10,7 +10,6 @@ import shutil
 
 def create_dataset(
     preprocessor,
-    cn_type,
     input_dir,
     output_dir,
     samples_per_category=500,
@@ -132,11 +131,6 @@ def create_dataset(
     print(f"Total processed samples: {len(metadata)}")
 
     return output_dir
-
-def create_control_dataset(preprocessor, anno_dataset_dir, cn_type="canny"):
-    controls_dir = os.path.join(anno_dataset_dir, "controls")
-    os.makedirs(controls_dir, exist_ok=True)
-    pass
     
 def parse_args():
     import argparse
@@ -172,7 +166,6 @@ def parse_args():
         default="../dataset/controlnet_datasets",
         help="Directory to save the processed dataset",
     )
-
     parser.add_argument(
         "--blur_kernel_size",
         type=int,
@@ -193,7 +186,6 @@ if __name__ == "__main__":
     # Create anno dataset
     control_dataset_dir = create_dataset(
         preprocessor=preprocessor,
-        cn_type=args.cn_type,
         input_dir=os.path.join(args.dataset_dir, args.dataset),
         output_dir=os.path.join(args.output_dir, f"{args.dataset}-{args.cn_type}"),
         samples_per_category=500,  # Number of samples per category

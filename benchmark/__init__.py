@@ -13,14 +13,17 @@ def trace_pic(model, path, data_loader, latents=None, max_num=None, **kwargs):
     
     # Get model device to ensure inputs are on the same device
     model_device = next(model.parameters()).device
-    
+
+
+    #id = 0 # testcode for debug
     for batch in data_loader:
         for b in batch:
             if max_num is not None and count >= max_num:
                 pbar.close()
                 return
             prompt, _, control = b
-            
+            #print(f"id: {id}, prompt: {prompt}") # testcode for debug
+            #id += 1 # testcode for debug
             # Ensure control image is on the correct device
             if hasattr(control, 'to'):
                 # It's already a tensor

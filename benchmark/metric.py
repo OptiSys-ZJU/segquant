@@ -90,6 +90,7 @@ if __name__ == "__main__":
             quant_dir = f"../segquant/benchmark_record/{dataset}/run_{method}_module/pics/quant_{method}"
             if os.path.exists(real_dir) and os.path.exists(quant_dir):
                 result[f"{dataset}_{method}"] = generate_metric(real_dir, quant_dir)
-    with open("metric.json", "w") as f:
+    print(result)
+    with open("../segquant/benchmark_record/metric.json", "w") as f:
         json.dump(result, f)
 
