@@ -131,6 +131,7 @@ class SegmentLinear(nn.Module):
 
         self.optimizer = OptimizerRegistry.create(
             opt_type,
+            seg_mode=seg_mode,
             chunks=self.chunks,
             chunksizes=self.chunksizes,
             weight_chunks=weight_chunks,

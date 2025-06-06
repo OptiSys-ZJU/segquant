@@ -8,17 +8,17 @@ def build_ext_dict():
         "gemm_dual_scaled_fn": getattr(ext_fp8, "real_quantized_gemm_dual_scaled", None),
     }
 
-    ext_int8 = load_real_quant_int8_ext(required=False)
-    d["Wint8Aint8"] = {
-        "gemm_scaled_fn": getattr(ext_int8, "real_quantized_gemm_scaled", None),
-        "gemm_dual_scaled_fn": getattr(ext_int8, "real_quantized_gemm_dual_scaled", None),
-    }
+    # ext_int8 = load_real_quant_int8_ext(required=False)
+    # d["Wint8Aint8"] = {
+    #     "gemm_scaled_fn": getattr(ext_int8, "real_quantized_gemm_scaled", None),
+    #     "gemm_dual_scaled_fn": getattr(ext_int8, "real_quantized_gemm_dual_scaled", None),
+    # }
 
-    ext_int4 = load_real_quant_int4_ext(required=False)
-    d["Wint4Aint4"] = {
-        "gemm_scaled_fn": getattr(ext_int4, "real_quantized_gemm_scaled", None),
-        "gemm_dual_scaled_fn": getattr(ext_int4, "real_quantized_gemm_dual_scaled", None),
-    }
+    # ext_int4 = load_real_quant_int4_ext(required=False)
+    # d["Wint4Aint4"] = {
+    #     "gemm_scaled_fn": getattr(ext_int4, "real_quantized_gemm_scaled", None),
+    #     "gemm_dual_scaled_fn": getattr(ext_int4, "real_quantized_gemm_dual_scaled", None),
+    # }
 
     return d
 

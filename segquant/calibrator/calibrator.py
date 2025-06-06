@@ -104,7 +104,6 @@ class GPTQCalibrator(BaseCalibrator):
         super().__init__(data_type, quant_type, quant_args)
         self.nsamples = 0
         self.H = None
-        self.weight = None
 
         self.blocksize = blocksize
         self.percdamp = percdamp
@@ -122,9 +121,6 @@ class GPTQCalibrator(BaseCalibrator):
         return base
 
     def calibrate(self, x, input_data):
-        if self.weight is None:
-            self.weight = x
-
         if len(input_data.shape) == 2:
             this_batch = 1
         elif len(input_data.shape) == 1:
@@ -138,8 +134,8 @@ class GPTQCalibrator(BaseCalibrator):
 
         if self.H is None:
             self.H = torch.zeros(
-                (self.weight.shape[1], self.weight.shape[1]),
-                device=self.weight.device,
+                (x.shape[1], x.shape[1]),
+                device=x.device,
                 dtype=torch.float32
             )
 
@@ -152,19 +148,19 @@ class GPTQCalibrator(BaseCalibrator):
         input_data.mul_(math.sqrt(2 / self.nsamples))
         self.H.addmm_(input_data, input_data.t(), beta=1.0, alpha=1.0)
 
-    def finish_calibrate(self):
+    def finish_calibrate(self, weight_data=None):
         blocksize = self.blocksize
         percdamp = self.percdamp
         groupsize = self.groupsize
         actorder = self.actorder
         static_groups = self.static_groups
-        dtype = self.weight.dtype
+        dtype = weight_data.dtype
 
-        W = self.weight.clone()
+        W = weight_data.clone()
         W = W.float()
         column = W.shape[1]
 
-        self.quantizer.calibrate(self.weight)
+        self.quantizer.calibrate(W)
 
         H = self.H
         del self.H
@@ -239,11 +235,11 @@ class GPTQCalibrator(BaseCalibrator):
         if actorder:
             Q = Q[:, invperm]
 
-        self.weight = Q
-        self.err = torch.sum(Losses).item()
-        print(
-            f"GPTQCalibrator: finish_calibrate [{self.weight.shape[0]}, {self.weight.shape[1]}], error [{self.err:4f}]"
-        )
+        if self.data_type == 'weight':
+            self.err = torch.sum(Losses).item()
+            print(
+                f"GPTQCalibrator: finish_calibrate [{W.shape[0]}, {W.shape[1]}], error [{self.err:4f}]"
+            )
+            return Q
 
-    def get_quantized_weight(self):
-        return self.weight
+        return None

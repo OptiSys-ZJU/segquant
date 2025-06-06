@@ -5,7 +5,6 @@ linear layers and pattern detection for advanced quantization techniques.
 """
 
 import fnmatch
-import gc
 import torch
 from torch import nn
 from tqdm import tqdm
@@ -184,6 +183,9 @@ def _calib_linears(
 
     for l in to_calib_linears.values():
         l.finish_calibrate()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 def quantize(
     model: nn.Module,
