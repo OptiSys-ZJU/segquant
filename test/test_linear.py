@@ -2,12 +2,12 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 import copy
-# import modelopt.torch.quantization as mtq
+import modelopt.torch.quantization as mtq
 from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 
-embedding_dim = 16
+embedding_dim = 1536
 
 class RandomTensorDataset:
     def __init__(self, num_batches=6, seed=42):
@@ -478,7 +478,7 @@ def test_svd_int4():
             "real_quant": False,
             "opt": {
                 "type": Optimum.SVD,
-                "alpha": 0.5,
+                "alpha": 0,
                 "low_rank": 32,
             },
             "calib": {
@@ -506,15 +506,15 @@ def test_svd_int4():
     x_generator.manual_seed(1234)
     x = torch.rand(2, embedding_dim, generator=x_generator)
     emb = torch.rand(2, embedding_dim, generator=x_generator)
-    res = test_model.forward(x, emb)
-    print("origin:", res[0])
-    a = res[0]
-    res = segquant_model.forward(x, emb)
-    print("modelopt:", res[0])
-    b = res[0]
-    res = segquant_model.forward(x, emb)
-    print("segquant:", res[0])
-    c = res[0]
+    res = test_model.forward(x.clone(), emb.clone())[0].clone()
+    print("origin:", res)
+    a = res.clone()
+    res = modelopt_model.forward(x.clone(), emb.clone())[0].clone()
+    print("modelopt:", res)
+    b = res.clone()
+    res = segquant_model.forward(x.clone(), emb.clone())[0].clone()
+    print("segquant:", res)
+    c = res.clone()
     print('diff1', torch.norm(a - b).item())
     print('diff2', torch.norm(a - c).item())
     print('diff3', torch.norm(b - c).item())
@@ -691,4 +691,4 @@ def test_gptq():
 
 
 if __name__ == "__main__":
-    test_smooth_int8()
+    test_svd_int4()

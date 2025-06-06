@@ -547,10 +547,10 @@ class SVDOptimizer(SmoothOptimizer):
                 vt = vt[:self.low_rank] # Vt[:r, :] → (r, n)
                 device = smooth_weight_chunk.device
                 dtype = smooth_weight_chunk.dtype
-                l1 = us.to(device).to(dtype) # (m, r)
-                l2 = vt.to(device).to(dtype) # (r, n)
-                weight_svd = smooth_weight_chunk.t() - l1 @ l2
-                weight_svd = weight_svd.t()
+                l1 = us.to(device).to(dtype) # (in, rank)
+                l2 = vt.to(device).to(dtype) # (rank, out)
+                weight_svd = smooth_weight_chunk.t() - l1 @ l2 # (in, out)
+                weight_svd = weight_svd.t() # (out, in)
                 self.l1s[idx] = l1
                 self.l2s[idx] = l2
 

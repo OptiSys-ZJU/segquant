@@ -98,7 +98,7 @@ class GPTQCalibrator(BaseCalibrator):
         groupsize=-1,
         actorder=False,
         static_groups=False,
-        cpu_storage=True,
+        cpu_storage=False,
         **kwargs,
     ):
         assert data_type == 'weight', 'Only weight calibrator can be used to GPTQ.'

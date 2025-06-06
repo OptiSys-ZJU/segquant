@@ -30,19 +30,20 @@ quant_config = {
         "search_patterns": [],
         "real_quant": True,
         "opt": {
-            "type": Optimum.SMOOTH,
-            "alpha": 0.5,
-            "low_rank": 16,
+            "type": Optimum.SVD,
+            "alpha": 0,
+            "low_rank": 32,
         },
         "calib": {
             "type": Calibrate.GPTQ,
+            "cpu_storage": True,
         },
         "input_quant": {
-            "type": DType.INT8,
+            "type": DType.INT4,
             "axis": None,
         },
         "weight_quant": {
-            "type": DType.INT8,
+            "type": DType.INT4,
             "axis": None,
         },
     },
@@ -166,6 +167,7 @@ def run_seg_module():
                 os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
                 torch.save(target_model.transformer, model_target_path)
                 print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
+                exit(0)
             else:
                 print(f"[INFO] {model_target_path} found, start loading...")
                 # target_model = StableDiffusion3ControlNetModel.from_repo(
