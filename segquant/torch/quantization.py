@@ -138,7 +138,7 @@ def _smooth_linears(
     model.eval()
     with torch.no_grad():
         for batch in tqdm(
-            calib_data_loader, desc="[Smooth Linears] Running model on calibration data"
+            calib_data_loader, desc="[Trace Linears] Running model on calibration data"
         ):
             this_input_tuple = _move_to_device(batch[0], device)
             _ = model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(
@@ -147,7 +147,7 @@ def _smooth_linears(
     for h in hooks:
         h.remove()
 
-    for l in to_calib_linears.values():
+    for l in tqdm(to_calib_linears.values(), desc="[Smoothing linears]"):
         if hasattr(l, "smooth"):
             l.smooth()
 
@@ -277,11 +277,6 @@ def quantize(
     if verbose:
         print("start replace ...")
     _replace_linears(model, to_calib_linears)
-
-
-    # torch.save(model, 'tmp.pt')
-    # torch.cuda.empty_cache()
-    # model = torch.load('tmp.pt', weights_only=False)
 
     to_smooth_linears = {
         k: v for k, v in to_calib_linears.items()

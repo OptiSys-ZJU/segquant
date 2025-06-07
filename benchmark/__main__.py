@@ -33,6 +33,7 @@ quant_config = {
             "type": Optimum.SVD,
             "alpha": 0,
             "low_rank": 32,
+            "cpu_storage": True,
         },
         "calib": {
             "type": Calibrate.GPTQ,

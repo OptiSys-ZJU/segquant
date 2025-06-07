@@ -482,6 +482,7 @@ class SVDOptimizer(SmoothOptimizer):
         kernel_type=None,
         alpha=0.5,
         low_rank=32,
+        cpu_storage=False,
         **kwargs,
     ):
         super().__init__(
@@ -501,6 +502,8 @@ class SVDOptimizer(SmoothOptimizer):
         self.l1s = [None] * self.chunks
         self.l2s = [None] * self.chunks
         self.has_svd = False
+        self.device = self.weight_chunks[0].device
+        self.cpu_storage = cpu_storage
 
     def __repr__(self):
         if self.real_quant:
@@ -551,8 +554,13 @@ class SVDOptimizer(SmoothOptimizer):
                 l2 = vt.to(device).to(dtype) # (rank, out)
                 weight_svd = smooth_weight_chunk.t() - l1 @ l2 # (in, out)
                 weight_svd = weight_svd.t() # (out, in)
-                self.l1s[idx] = l1
-                self.l2s[idx] = l2
+
+                if self.cpu_storage:
+                    self.l1s[idx] = l1.cpu()
+                    self.l2s[idx] = l2.cpu()
+                else:
+                    self.l1s[idx] = l1
+                    self.l2s[idx] = l2
 
             svd_weight_chunk.append(weight_svd)
 
@@ -566,6 +574,14 @@ class SVDOptimizer(SmoothOptimizer):
     def calibrate(self, input_chunks):
         assert self.has_svd, 'SVDOptimizer: linear is not svd'
         super().calibrate(input_chunks)
+
+    def finish_calibrate(self):
+        super().finish_calibrate()
+        if self.cpu_storage:
+            for idx in self.l1s:
+                self.l1s[idx] = self.l1s[idx].to(self.device)
+                self.l2s[idx] = self.l2s[idx].to(self.device)
+
 
     def _fake_forward(self, input_chunks):
         if self.has_svd:
