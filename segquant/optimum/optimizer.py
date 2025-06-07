@@ -504,6 +504,8 @@ class SVDOptimizer(SmoothOptimizer):
         self.has_svd = False
         self.device = self.weight_chunks[0].device
         self.cpu_storage = cpu_storage
+        if self.cpu_storage:
+            print('[Warning] SVDOptimizer set CPU Storage.')
 
     def __repr__(self):
         if self.real_quant:
@@ -531,36 +533,51 @@ class SVDOptimizer(SmoothOptimizer):
 
     def _svd_w(self, smooth_weight_chunks: List[torch.Tensor]):
         assert self.has_smoothed, 'SVDOptimizer: linear is not smoothed'
-        assert len(smooth_weight_chunks) == self.chunks, f'SVDOptimizer: weight chunks must equal to chunks but get [{len(smooth_weight_chunks)}]'
+        assert len(smooth_weight_chunks) == self.chunks, \
+            f'SVDOptimizer: weight chunks must equal to chunks but get [{len(smooth_weight_chunks)}]'
 
         svd_weight_chunk = []
+
         for idx, smooth_weight_chunk in enumerate(smooth_weight_chunks):
-            print(
-                f"torch.linalg.svd: calibrating weight {idx} with shape {smooth_weight_chunk.shape}"
-            )
-            u, s, vt = torch.linalg.svd(smooth_weight_chunk.t().double())
+            print(f"torch.linalg.svd: calibrating weight {idx} with shape {smooth_weight_chunk.shape}")
+
+            if self.cpu_storage:
+                this_weight = smooth_weight_chunk.to('cpu')
+                high_pre = this_weight.t().float()
+            else:
+                this_weight = smooth_weight_chunk
+                high_pre = this_weight.t().float()
+
+            u, s, vt = torch.linalg.svd(high_pre)
+
             if u.shape[1] < self.low_rank or vt.shape[0] < self.low_rank:
                 raise ValueError(
                     f"Low-rank dimension {self.low_rank} exceeds layer "
                     f"dimensions {u.shape[1]} and {vt.shape[0]}."
                 )
+
+            us = u[:, :self.low_rank] * s[:self.low_rank]  # (m, r)
+            vt = vt[:self.low_rank, :]                      # (r, n)
+
+            if self.cpu_storage:
+                # us, vt are on CPU now → move to device and store
+                device = self.device
+                dtype = smooth_weight_chunk.dtype
+                l1 = us.to(device=device, dtype=dtype)
+                l2 = vt.to(device=device, dtype=dtype)
+                self.l1s[idx] = l1
+                self.l2s[idx] = l2
+                weight_svd = this_weight.t() - us @ vt  # still on CPU
+                weight_svd = weight_svd.t().to(device=device, dtype=dtype)
             else:
-                # low-rank approximation
-                us = u[:, :self.low_rank] * s[:self.low_rank] # U[:, :r] * s[:r] → (m, r)
-                vt = vt[:self.low_rank] # Vt[:r, :] → (r, n)
                 device = smooth_weight_chunk.device
                 dtype = smooth_weight_chunk.dtype
-                l1 = us.to(device).to(dtype) # (in, rank)
-                l2 = vt.to(device).to(dtype) # (rank, out)
-                weight_svd = smooth_weight_chunk.t() - l1 @ l2 # (in, out)
-                weight_svd = weight_svd.t() # (out, in)
-
-                if self.cpu_storage:
-                    self.l1s[idx] = l1.cpu()
-                    self.l2s[idx] = l2.cpu()
-                else:
-                    self.l1s[idx] = l1
-                    self.l2s[idx] = l2
+                l1 = us.to(device=device, dtype=dtype)
+                l2 = vt.to(device=device, dtype=dtype)
+                self.l1s[idx] = l1
+                self.l2s[idx] = l2
+                weight_svd = this_weight.t() - l1 @ l2
+                weight_svd = weight_svd.t()
 
             svd_weight_chunk.append(weight_svd)
 
@@ -577,11 +594,6 @@ class SVDOptimizer(SmoothOptimizer):
 
     def finish_calibrate(self):
         super().finish_calibrate()
-        if self.cpu_storage:
-            for idx in self.l1s:
-                self.l1s[idx] = self.l1s[idx].to(self.device)
-                self.l2s[idx] = self.l2s[idx].to(self.device)
-
 
     def _fake_forward(self, input_chunks):
         if self.has_svd:

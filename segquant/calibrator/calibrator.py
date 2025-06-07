@@ -114,6 +114,8 @@ class GPTQCalibrator(BaseCalibrator):
         self.err = None
 
         self.cpu_storage = cpu_storage
+        if self.cpu_storage:
+            print('[Warning] GPTQCalibrator set CPU Storage.')
 
     def __repr__(self):
         base = (
