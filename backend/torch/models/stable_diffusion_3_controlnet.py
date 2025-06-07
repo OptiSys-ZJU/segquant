@@ -176,17 +176,20 @@ class StableDiffusion3ControlNetModel(nn.Module):
             "SD3-Controlnet-Canny",
         ),
         device="cuda:0",
+        controlnet=None,
+        transformer=None,
     ):
         main_repo, control_net_repo = repo
 
-        transformer = (
-            SD3Transformer2DModel.from_config(
-                f"{main_repo}/transformer/config.json",
-                f"{main_repo}/transformer/diffusion_pytorch_model.safetensors",
+        if transformer is None:
+            transformer = (
+                SD3Transformer2DModel.from_config(
+                    f"{main_repo}/transformer/config.json",
+                    f"{main_repo}/transformer/diffusion_pytorch_model.safetensors",
+                )
+                .half()
+                .to(device)
             )
-            .half()
-            .to(device)
-        )
         scheduler = FlowMatchEulerDiscreteScheduler.from_config(
             f"{main_repo}/scheduler/scheduler_config.json"
         )
@@ -210,14 +213,15 @@ class StableDiffusion3ControlNetModel(nn.Module):
         text_encoder_3 = T5EncoderModel.from_pretrained(f"{main_repo}/text_encoder_3")
         tokenizer_3 = T5TokenizerFast.from_pretrained(f"{main_repo}/tokenizer_3")
 
-        controlnet = (
-            SD3ControlNetModel.from_config(
-                f"{control_net_repo}/config.json",
-                f"{control_net_repo}/diffusion_pytorch_model.safetensors",
+        if controlnet is None:
+            controlnet = (
+                SD3ControlNetModel.from_config(
+                    f"{control_net_repo}/config.json",
+                    f"{control_net_repo}/diffusion_pytorch_model.safetensors",
+                )
+                .half()
+                .to(device)
             )
-            .half()
-            .to(device)
-        )
 
         return (
             cls(
