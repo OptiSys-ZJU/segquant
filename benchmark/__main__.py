@@ -33,8 +33,8 @@ quant_config = {
         "real_quant": True,
         "opt": {
             "type": Optimum.SVD,
-            "alpha": 0,
-            "low_rank": 32,
+            "alpha": 0.5,
+            "low_rank": 16,
             "cpu_storage": False,
         },
         "calib": {

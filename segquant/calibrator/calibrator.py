@@ -175,11 +175,17 @@ class GPTQCalibrator(BaseCalibrator):
 
         self.quantizer.calibrate(W)
 
-        H = self.H.to(dtype=torch.float32, device=weight_data.device) if self.cpu_storage else self.H
+        H = (
+            self.H.to(dtype=torch.float32, device=weight_data.device)
+            if self.cpu_storage
+            else self.H
+        )
         del self.H
-        dead = torch.diag(H) == 0
-        H[dead, dead] = 1
-        W[:, dead] = 0
+
+        diag_H = torch.diag(H)
+        dead = diag_H < 1e-8
+        H[dead, dead] = 1.0
+        W[:, dead] = 0.0
 
         if static_groups:
             import copy
@@ -198,13 +204,23 @@ class GPTQCalibrator(BaseCalibrator):
         Losses = torch.zeros_like(W)
         Q = None
 
-        damp = percdamp * torch.mean(torch.diag(H))
-        diag = torch.arange(column, device=W.device)
-        H[diag, diag] += damp
-        H = torch.linalg.cholesky(H)
-        H = torch.cholesky_inverse(H)
-        H = torch.linalg.cholesky(H, upper=True)
-        Hinv = H
+        H = (H + H.T) / 2
+        damp = percdamp * torch.mean(torch.diag(H)).item()
+        identity = torch.eye(column, device=W.device)
+
+        for i in range(10):
+            try:
+                H_damped = H + identity * damp
+                chol = torch.linalg.cholesky(H_damped)
+                break
+            except torch._C._LinAlgError:
+                damp *= 10
+        else:
+            print(
+                "[Warning] GPTQCalibrator: Cholesky failed after multiple damping attempts. H may be ill-conditioned, disable GPTQ"
+            )
+            return self.quantizer.quantize(W.to(dtype))
+        Hinv = torch.cholesky_inverse(chol)
 
         for i1 in range(0, column, blocksize):
             i2 = min(i1 + blocksize, column)
