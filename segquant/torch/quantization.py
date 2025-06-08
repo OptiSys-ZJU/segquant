@@ -181,7 +181,7 @@ def _calib_linears(
     for h in hooks:
         h.remove()
 
-    for l in to_calib_linears.values():
+    for l in tqdm(to_calib_linears.values(), desc="[Finishing Calibrate Linears]"):
         l.finish_calibrate()
 
     if torch.cuda.is_available():

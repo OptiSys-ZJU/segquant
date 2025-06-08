@@ -543,10 +543,10 @@ class SVDOptimizer(SmoothOptimizer):
 
             if self.cpu_storage:
                 this_weight = smooth_weight_chunk.to('cpu')
-                high_pre = this_weight.t().float()
+                high_pre = this_weight.t().double()
             else:
                 this_weight = smooth_weight_chunk
-                high_pre = this_weight.t().float()
+                high_pre = this_weight.t().double()
 
             u, s, vt = torch.linalg.svd(high_pre)
 

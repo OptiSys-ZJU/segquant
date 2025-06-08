@@ -35,18 +35,18 @@ quant_config = {
             "type": Optimum.SVD,
             "alpha": 0,
             "low_rank": 32,
-            "cpu_storage": True,
+            "cpu_storage": False,
         },
         "calib": {
             "type": Calibrate.GPTQ,
-            "cpu_storage": True,
+            "cpu_storage": False,
         },
         "input_quant": {
-            "type": DType.INT4,
+            "type": DType.INT8,
             "axis": None,
         },
         "weight_quant": {
-            "type": DType.INT4,
+            "type": DType.INT8,
             "axis": None,
         },
     },
@@ -162,7 +162,7 @@ def run_any_module():
             return quantized_model
 
         ### 1
-        model_type = 'flux'
+        model_type = 'sd3'
         quant_layer = 'dit'
         
         if model_type == 'flux':
