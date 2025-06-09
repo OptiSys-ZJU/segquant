@@ -30,11 +30,14 @@ quant_config = {
         "enable": True,
         "seglinear": True,
         "search_patterns": [],
-        "real_quant": True,
+        "real_quant": False,
         "opt": {
             "type": Optimum.SVD,
             "alpha": 0.5,
-            "low_rank": 16,
+            "search": False,
+            "step": 0.0,
+            "end": 1,
+            "low_rank": 32,
             "cpu_storage": False,
         },
         "calib": {
@@ -46,8 +49,8 @@ quant_config = {
             "axis": None,
         },
         "weight_quant": {
-            "type": DType.INT8,
-            "axis": None,
+            "type": DType.INT4,
+            "axis": -1,
         },
     },
 }

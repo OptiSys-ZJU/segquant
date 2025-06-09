@@ -187,6 +187,17 @@ class SegmentLinear(nn.Module):
     def finish_calibrate(self):
         self.optimizer.finish_calibrate()
 
+    def fake_forward(self, x):
+        input_chunks = self._chunk_x(x)
+        quantized_output_chunks = self.optimizer.fake_forward(input_chunks)
+        if self.seg_mode == "weight":
+            res = self.splitter.concat_output(quantized_output_chunks)
+        elif self.seg_mode == "input":
+            res = sum(quantized_output_chunks)
+        else:
+            raise ValueError("seg_mode not found")
+        return (res + self.bias_data if self.bias else res)
+
     def forward(self, x):
         input_chunks = self._chunk_x(x)
         quantized_output_chunks = self.optimizer.forward(input_chunks)

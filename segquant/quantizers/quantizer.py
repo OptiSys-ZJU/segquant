@@ -111,6 +111,13 @@ class IntQuantizer(BaseQuantizer):
         if self.real_quant:
             assert self.axis is None, "Real quantization does not support axis."
 
+    def reset(self):
+        self.amax = None
+        self.amin = None
+
+        self.neg_amax = None
+        self.pos_amax = None
+
     def calibrate(self, x: torch.Tensor):
         epsilon = 1.0 / (1 << 24)
 
@@ -334,6 +341,11 @@ class FloatQuantizer(BaseQuantizer):
         self.real_quant = real_quant
         if self.real_quant:
             assert self.axis is None, "Real quantization does not support axis."
+
+    def reset(self):
+        self.neg_amax = None
+        self.pos_amax = None
+        self.amax = None
 
     def calibrate(self, x: torch.Tensor):
         epsilon = 1.0 / (1 << 24)

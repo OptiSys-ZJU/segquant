@@ -306,15 +306,15 @@ def test_default_int8():
 def test_smooth_int8():
     test_model = TestModel(embedding_dim)
     ######################################
-    # CFG = {
-    #     "quant_cfg": {
-    #         "*weight_quantizer": {"num_bits": 8, "axis": None},
-    #         "*input_quantizer": {"num_bits": 8, "axis": -1},
-    #     },
-    #     "algorithm": {"method": "smoothquant", "alpha": 0.5},
-    # }
-    # modelopt_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
-    # mtq.print_quant_summary(modelopt_model)
+    CFG = {
+        "quant_cfg": {
+            "*weight_quantizer": {"num_bits": 8, "axis": None},
+            "*input_quantizer": {"num_bits": 8, "axis": -1},
+        },
+        "algorithm": {"method": "smoothquant", "alpha": 0.5},
+    }
+    modelopt_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
+    mtq.print_quant_summary(modelopt_model)
     ######################################
     config = {
         "default": {
@@ -325,7 +325,10 @@ def test_smooth_int8():
             "real_quant": False,
             "opt": {
                 "type": Optimum.SMOOTH,
-                "alpha": 0.5,
+                "alpha": 0.2,
+                "search": True,
+                "step": 0.1,
+                "end": 0.8
             },
             "calib": {
                 "type": Calibrate.AMAX,
@@ -355,16 +358,15 @@ def test_smooth_int8():
     res = test_model.forward(x, emb)
     print("origin:", res)
     a = res[0]
-    # res = modelopt_model.forward(x, emb)
-    # print("modelopt:", res)
+    res = modelopt_model.forward(x, emb)
+    print("modelopt:", res)
     b = res[0]
     res = segquant_model.forward(x, emb)
     print("segquant:", res)
     c = res[0]
 
-    print('diff1', torch.norm(a - b).item())
-    print('diff2', torch.norm(a - c).item())
-    print('diff3', torch.norm(b - c).item())
+    print('origin-modelopt', torch.norm(a - b).item())
+    print('origin-segquant', torch.norm(a - c).item())
 
 def test_smooth_int8_real():
     test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
@@ -456,19 +458,67 @@ def test_svd_int4():
     ######################################
     CFG = {
         "quant_cfg": {
-            "*weight_quantizer": {"num_bits": 4, "axis": None},
-            "*input_quantizer": {"num_bits": 4, "axis": -1},
+            "*weight_quantizer": {"num_bits": 8, "axis": None},
+            "*input_quantizer": {"num_bits": 8, "axis": -1},
             # "linear.weight_quantizer": {
             #     "num_bits": 8,
             #     "block_sizes": {0: 10},
             #     "enable": True,
             # },
         },
-        "algorithm": {"method": "svdquant", "lowrank": 32},
+        "algorithm": {"method": "svdquant", "lowrank": 16},
     }
     modelopt_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
     mtq.print_quant_summary(modelopt_model)
-     ######################################
+    ######################################
+    CFG = {
+        "quant_cfg": {
+            "*weight_quantizer": {"num_bits": 8, "axis": None},
+            "*input_quantizer": {"num_bits": 8, "axis": -1},
+            # "linear.weight_quantizer": {
+            #     "num_bits": 8,
+            #     "block_sizes": {0: 10},
+            #     "enable": True,
+            # },
+        },
+        "algorithm": {"method": "smoothquant", "alpha": 0.5},
+    }
+    modelopt_smooth_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
+    mtq.print_quant_summary(modelopt_smooth_model)
+    ######################################
+    smooth_config = {
+        "default": {
+            "enable": True,
+            "seglinear": True,
+            "search_patterns": [],
+            # "search_patterns": SegPattern.all(),
+            "real_quant": False,
+            "opt": {
+                "type": Optimum.SMOOTH,
+                "alpha": 0.5,
+                "low_rank": 16,
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+        },
+    }
+    smooth_model = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        smooth_config,
+        True,
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+    )
+    ######################################
     config = {
         "default": {
             "enable": True,
@@ -478,18 +528,18 @@ def test_svd_int4():
             "real_quant": False,
             "opt": {
                 "type": Optimum.SVD,
-                "alpha": 0,
-                "low_rank": 32,
+                "alpha": 0.5,
+                "low_rank": 16,
             },
             "calib": {
                 "type": Calibrate.AMAX,
             },
             "input_quant": {
-                "type": DType.INT4,
+                "type": DType.INT8,
                 "axis": None,
             },
             "weight_quant": {
-                "type": DType.INT4,
+                "type": DType.INT8,
                 "axis": None,
             },
         },
@@ -515,9 +565,19 @@ def test_svd_int4():
     res = segquant_model.forward(x.clone(), emb.clone())[0].clone()
     print("segquant:", res)
     c = res.clone()
-    print('diff1', torch.norm(a - b).item())
-    print('diff2', torch.norm(a - c).item())
-    print('diff3', torch.norm(b - c).item())
+
+    res = modelopt_smooth_model.forward(x.clone(), emb.clone())[0].clone()
+    print("segquant-smooth:", res)
+    d = res.clone()
+    res = smooth_model.forward(x.clone(), emb.clone())[0].clone()
+    print("smooth:", res)
+    e = res.clone()
+    print('origin-modelopt-svd', torch.norm(a - b).item())
+    print('origin-segquant-svd', torch.norm(a - c).item())
+
+    print('origin-modelopt-smooth', torch.norm(a - d).item())
+    print('origin-segquant-smooth', torch.norm(a - e).item())
+
 
 def test_svd_int4_real():
     test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
@@ -691,4 +751,4 @@ def test_gptq():
 
 
 if __name__ == "__main__":
-    test_svd_int4()
+    test_smooth_int8()

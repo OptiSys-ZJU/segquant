@@ -116,20 +116,20 @@ def _create_linear(
     del old_linear
     return new_linear
 
-def _smooth_linears(
+def _trace_linears(
     model: nn.Module,
-    to_calib_linears: dict,
+    to_smooth_linears: dict,
     calib_data_loader: torch.utils.data.DataLoader,
     device,
 ):
     hooks = []
     for name, module in model.named_modules():
-        if isinstance(module, SegmentLinear) and name in to_calib_linears:
+        if isinstance(module, SegmentLinear) and name in to_smooth_linears:
 
             def get_hook(n):
                 def hook_fn(_mod, inp, _out, n=n):
-                    if hasattr(to_calib_linears[n], "trace"):
-                        to_calib_linears[n].trace(inp[0])
+                    if hasattr(to_smooth_linears[n], "trace"):
+                        to_smooth_linears[n].trace(inp[0])
 
                 return hook_fn
 
@@ -147,7 +147,8 @@ def _smooth_linears(
     for h in hooks:
         h.remove()
 
-    for l in tqdm(to_calib_linears.values(), desc="[Smoothing linears]"):
+def _smooth_linears(to_smooth_linears: dict):
+    for l in tqdm(to_smooth_linears.values(), desc="[Smoothing linears]"):
         if hasattr(l, "smooth"):
             l.smooth()
 
@@ -181,11 +182,43 @@ def _calib_linears(
     for h in hooks:
         h.remove()
 
-    for l in tqdm(to_calib_linears.values(), desc="[Finishing Calibrate Linears]"):
-        l.finish_calibrate()
+def _search_linears(
+    model: nn.Module,
+    to_search_linears: dict,
+    calib_data_loader: torch.utils.data.DataLoader,
+    device,
+):
+    hooks = []
+    err_map = {k: 0 for k in to_search_linears}
+    for name, module in model.named_modules():
+        if isinstance(module, SegmentLinear) and name in to_search_linears:
 
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+            def get_hook(n):
+                def hook_fn(_mod, inp, _out, n=n):
+                    if n in to_search_linears:
+                        real = to_search_linears[n].fake_forward(inp[0])
+                        cur = to_search_linears[n].forward(inp[0])
+                        err_map[n] += torch.norm(real - cur).item()
+
+                return hook_fn
+
+            hooks.append(module.register_forward_hook(get_hook(name)))
+
+    model.eval()
+    with torch.no_grad():
+        for batch in tqdm(
+            calib_data_loader, desc="[Search Linears] Running model on calibration data"
+        ):
+            this_input_tuple = _move_to_device(batch[0], device)
+            _ = model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(
+                **this_input_tuple
+            )
+    for h in hooks:
+        h.remove()
+
+    for n in list(to_search_linears):
+        if to_search_linears[n].optimizer.process_step(err_map[n]):
+            del to_search_linears[n]
 
 def quantize(
     model: nn.Module,
@@ -284,12 +317,41 @@ def quantize(
     }
     if to_smooth_linears:
         if verbose:
-            print("start smooth ...")
-        _smooth_linears(model, to_smooth_linears, calib_data_loader, device)
+            print("start trace ...")
+        _trace_linears(model, to_smooth_linears, calib_data_loader, device)
 
+    ####################################################################
+    to_search_linears = {
+        k: v for k, v in to_calib_linears.items()
+        if getattr(v.optimizer, "search", False)
+    }
+
+    i = 0
+    while to_search_linears:
+        if verbose:
+            print(f"process search [{i}] ...")
+        if to_smooth_linears:
+            _smooth_linears(to_smooth_linears)
+        _calib_linears(model, to_calib_linears, calib_data_loader, device)
+        for l in tqdm(to_calib_linears.values(), desc="[Finishing Calibrate Linears]"):
+            l.finish_calibrate()
+        if to_search_linears:
+            _search_linears(model, to_search_linears, calib_data_loader, device)
+        i += 1
+
+    if to_smooth_linears:
+        if verbose:
+            print("start smooth ...")
+        _smooth_linears(to_smooth_linears)
     if verbose:
         print("start calibrate ...")
     _calib_linears(model, to_calib_linears, calib_data_loader, device)
+
+    for l in tqdm(to_calib_linears.values(), desc="[Finishing Calibrate Linears]"):
+        l.finish_calibrate()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     if verbose:
         print(model)

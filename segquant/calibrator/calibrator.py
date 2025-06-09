@@ -38,6 +38,10 @@ class BaseCalibrator:
         self.quantizer = QuantizerRegistry.create(
             quant_type, **(quant_args or {})
         )
+    
+    def quantize(self, x):
+        return self.quantizer.quantize(x)
+
     def __repr__(self):
         return repr(self.quantizer)
 
@@ -74,6 +78,10 @@ class AMaxCalibrator(BaseCalibrator):
             f"AMaxCalibrator(quantizer={repr(self.quantizer)})"
         )
         return base
+    
+    def reset(self):
+        self.has_calibrated = False
+        self.quantizer.reset()
 
     def calibrate(self, x, **kwargs):
         if self.data_type == 'weight' and self.has_calibrated:
@@ -111,7 +119,7 @@ class GPTQCalibrator(BaseCalibrator):
         self.groupsize = groupsize
         self.actorder = actorder
         self.static_groups = static_groups
-        self.err = None
+        self.err = 0
 
         self.cpu_storage = cpu_storage
         if self.cpu_storage:
@@ -124,6 +132,12 @@ class GPTQCalibrator(BaseCalibrator):
             f"      quantizer={repr(self.quantizer)})"
         )
         return base
+
+    def reset(self):
+        self.nsamples = 0
+        self.H = None
+        self.err = 0
+        self.quantizer.reset()
 
     def calibrate(self, x, input_data):
         if len(input_data.shape) == 2:
