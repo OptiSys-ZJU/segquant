@@ -25,6 +25,23 @@ class BaseQuantizer(ABC):
         This method can be used to compute scale and zero-point values based on the input data.
         """
 
+    def broadcast_scale_like(self, x: torch.Tensor, scale: torch.Tensor, axis: int) -> torch.Tensor:
+        axis = axis if axis >= 0 else x.dim() + axis
+        shape = list(scale.shape)
+        for _ in range(x.dim() - scale.dim()):
+            shape.insert(axis, 1)
+        return scale.view(*shape)
+
+    def repr_amax(self, t):
+        if isinstance(t, torch.Tensor):
+            amin = t.min().item()
+            amax = t.max().item()
+            amax_str = f"[{amin:.4f}, {amax:.4f}]"
+        else:
+            amax_str = f"{t:.4f}"
+        
+        return amax_str
+
 
 class QuantizerRegistry:
     """Registry for quantizers.
@@ -211,10 +228,8 @@ class IntQuantizer(BaseQuantizer):
     def _fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
         if self.symmetric and self.dual_scale:
             if self.axis is not None:
-                shape = [1] * x.dim()
-                shape[self.axis] = -1
-                pos_scale = self.pos_scale.view(shape)
-                neg_scale = self.neg_scale.view(shape)
+                pos_scale = self.broadcast_scale_like(x, self.pos_scale, self.axis)
+                neg_scale = self.broadcast_scale_like(x, self.neg_scale, self.axis)
             else:
                 pos_scale = self.pos_scale
                 neg_scale = self.neg_scale
@@ -228,15 +243,11 @@ class IntQuantizer(BaseQuantizer):
             return x_dequant.to(x.dtype)
 
         if self.axis is not None:
-            shape = [1] * x.dim()
-            shape[self.axis] = -1
-            scale = self.scale.view(shape)
-            zero_point = (
-                self.zero_point.view(shape)
-                if isinstance(self.zero_point, torch.Tensor)
-                else self.zero_point
-            )
-            scale = scale.T
+            scale = self.broadcast_scale_like(x, self.scale, self.axis)
+            if isinstance(self.zero_point, torch.Tensor):
+                zero_point = self.broadcast_scale_like(x, self.zero_point, self.axis)
+            else:
+                zero_point = self.zero_point
         else:
             scale = self.scale
             zero_point = self.zero_point
@@ -244,6 +255,7 @@ class IntQuantizer(BaseQuantizer):
         x_int = torch.round(x * scale) + zero_point
         x_int = torch.clamp(x_int, self.qmin, self.qmax)
         x_dequant = (x_int - zero_point) / scale
+        assert x.shape == x_dequant.shape, f"Shape mismatch: x {x.shape}, x_dequant {x_dequant.shape}"
         return x_dequant.to(x.dtype)
 
     def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
@@ -276,23 +288,13 @@ class IntQuantizer(BaseQuantizer):
                     f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
                     f"real_quant={self.real_quant}, "
                     f"dual_scale=True, axis={self.axis}, "
-                    f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})"
-                )
-            if isinstance(self.amax, torch.Tensor):
-                amin = self.amax.min().item()
-                amax = self.amax.max().item()
-                amax_str = f"[{amin:.4f}, {amax:.4f}]"
-                return (
-                    f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
-                    f"real_quant={self.real_quant}, "
-                    f"dual_scale=False, axis={self.axis}, "
-                    f"amax=[{amax_str}])"
+                    f"neg_amax={self.repr_amax(self.neg_amax)}, pos_amax={self.repr_amax(self.pos_amax)})"
                 )
             return (
                 f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
                 f"real_quant={self.real_quant}, "
                 f"dual_scale=False, axis={self.axis}, "
-                f"amax={self.amax:.4f})"
+                f"amax={self.repr_amax(self.amax)})"
             )
         return (
             f"IntQuantizer(num_bits={self.num_bits}, symmetric=False, axis={self.axis}, "
@@ -439,10 +441,8 @@ class FloatQuantizer(BaseQuantizer):
 
         if self.dual_scale:
             if self.axis is not None:
-                shape = [1] * x.dim()
-                shape[self.axis] = -1
-                pos_scale = self.pos_scale.view(shape)
-                neg_scale = self.neg_scale.view(shape)
+                pos_scale = self.broadcast_scale_like(x, self.pos_scale, self.axis)
+                neg_scale = self.broadcast_scale_like(x, self.neg_scale, self.axis)
             else:
                 pos_scale = self.pos_scale
                 neg_scale = self.neg_scale
@@ -461,9 +461,7 @@ class FloatQuantizer(BaseQuantizer):
             x_dequant = torch.where(x >= 0, x_quant / pos_scale, x_quant / neg_scale)
         else:
             if self.axis is not None:
-                shape = [1] * x.dim()
-                shape[self.axis] = -1
-                scale = self.scale.view(shape)
+                scale = self.broadcast_scale_like(x, self.scale, self.axis)
             else:
                 scale = self.scale
 
@@ -479,6 +477,9 @@ class FloatQuantizer(BaseQuantizer):
             x_dequant = x_quant / scale
 
         x_dequant[zero_mask] = 0.0
+        assert (
+            x.shape == x_dequant.shape
+        ), f"Shape mismatch: x {x.shape}, x_dequant {x_dequant.shape}"
         return x_dequant.to(x.dtype)
 
     def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
@@ -505,13 +506,13 @@ class FloatQuantizer(BaseQuantizer):
                 f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
                 f"real_quant={self.real_quant}, "
                 f"axis={self.axis}, dual_scale=True, "
-                f"neg_amax={self.neg_amax:.4f}, pos_amax={self.pos_amax:.4f})"
+                f"neg_amax={self.repr_amax(self.neg_amax)}, pos_amax={self.repr_amax(self.pos_amax)})"
             )
         return (
             f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
             f"real_quant={self.real_quant}, "
             f"axis={self.axis}, dual_scale=False, "
-            f"amax={self.amax:.4f})"
+            f"amax={self.repr_amax(self.amax)})"
         )
 
 

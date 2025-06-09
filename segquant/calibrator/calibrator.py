@@ -259,7 +259,7 @@ class GPTQCalibrator(BaseCalibrator):
                             idx = perm[idx]
                         self.quantizer = groups[idx // groupsize]
 
-                q = self.quantizer.fake_quantize(w) # (out,)
+                q = self.quantizer.fake_quantize(w.unsqueeze(1)).squeeze(1) # (out, 1)
                 real_q = self.quantizer.quantize(w.unsqueeze(1).to(dtype)) # (out, 1)
                 if Q is None:
                     Q = real_q

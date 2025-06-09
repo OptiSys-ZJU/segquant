@@ -29,10 +29,10 @@ quant_config = {
     "default": {
         "enable": True,
         "seglinear": True,
-        "search_patterns": [],
+        "search_patterns": SegPattern.all(),
         "real_quant": False,
         "opt": {
-            "type": Optimum.SVD,
+            "type": Optimum.SMOOTH,
             "alpha": 0.5,
             "search": False,
             "step": 0.0,
@@ -46,11 +46,11 @@ quant_config = {
         },
         "input_quant": {
             "type": DType.INT8,
-            "axis": None,
+            "axis": -1, # per-token, input shape (..., in)
         },
         "weight_quant": {
-            "type": DType.INT4,
-            "axis": -1,
+            "type": DType.INT6,
+            "axis": 1, # per-channel, weight shape (out, in)
         },
     },
 }
