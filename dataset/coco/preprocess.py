@@ -10,7 +10,6 @@ def create_dataset(
     preprocessor,
     dataset,
     output_dir,
-    cn_type="canny",
     enable_no_prompt=False,
 ):
     """
@@ -30,7 +29,7 @@ def create_dataset(
     import json
 
     # Create output directories
-    dataset_dir = os.path.join(output_dir, f"{dataset.name}-{cn_type}")
+    dataset_dir = output_dir
     images_dir = os.path.join(dataset_dir, "images")
     controls_dir = os.path.join(dataset_dir, "controls")
 
@@ -49,7 +48,9 @@ def create_dataset(
     ):
         input_image = sample["image"]
         if "answer" in sample and sample["answer"]:
-            prompt = sample["answer"][0]
+            prompt = ""
+            for ans in sample["answer"]: 
+                prompt += ans
         elif "caption" in sample:
             prompt = sample["caption"]
         else:
@@ -135,6 +136,7 @@ def parse_args():
         help="Kernel size used to blur the image before Canny edge detection (must be odd)",
     )
     parser.add_argument("--enable_no_prompt", action="store_true")
+    parser.add_argument("--random_sample", action="store_true")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -146,10 +148,14 @@ if __name__ == "__main__":
     try:
         # determine the total number of samples
         dataset = load_dataset(os.path.join("../dataset", args.dataset), split=args.split, trust_remote_code=True)
-        if args.sample_size is not None:
+        # random sample
+        if args.sample_size is not None and args.random_sample:
             total_samples = min(args.sample_size, len(dataset))
             indices = random.sample(range(len(dataset)), total_samples)
             dataset = dataset.select(indices)  # HuggingFace way
+        elif args.sample_size is not None:
+            dataset = dataset.select(range(args.sample_size))
+            
         dataset.name = args.dataset
         print(f"Number of examples: {len(dataset)}")
         print("Dataset features:", dataset.features)

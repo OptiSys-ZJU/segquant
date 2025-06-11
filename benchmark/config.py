@@ -34,6 +34,7 @@ class QuantizationConfigs:
         "input_dtype": DType.INT8,
         "weight_dtype": DType.INT8,
         "opt": Optimum.SMOOTH,
+        "real_quant": True,
         "input_axis": None,
         "weight_axis": None,
         "alpha": 0.5,
@@ -46,6 +47,7 @@ class QuantizationConfigs:
         "input_dtype": DType.FP8E4M3,
         "weight_dtype": DType.FP8E5M2,
         "opt": Optimum.DEFAULT,
+        "real_quant": True,
         "input_axis": None,
         "weight_axis": None,
         "alpha": 0.5,
@@ -141,7 +143,7 @@ class BenchmarkConfig:
     DATASET_PATH = {
         "COCO": "../dataset/controlnet_datasets/COCO-Caption2017-canny",
         "MJHQ": "../dataset/controlnet_datasets/MJHQ-30K-canny",
-        "DCI": "../dataset/controlnet_datasets/densely_captioned_images-canny",
+        "DCI": "../dataset/controlnet_datasets/DCI-30K-canny",
     }
     
     def __init__(self, 

@@ -83,14 +83,18 @@ def generate_metric(path1, path2):
 
 
 if __name__ == "__main__":
-    result = {}
+    result = json.load(open("../segquant/benchmark_record/metric.json"))
     for dataset in DATASET_TYPE_CHOICES:
         for method in QUANT_METHOD_CHOICES:
             real_dir = f"../segquant/benchmark_record/{dataset}/run_real_module/pics/real"
             quant_dir = f"../segquant/benchmark_record/{dataset}/run_{method}_module/pics/quant_{method}"
             if os.path.exists(real_dir) and os.path.exists(quant_dir):
-                result[f"{dataset}_{method}"] = generate_metric(real_dir, quant_dir)
+                if f"{dataset}_{method}" not in result:
+                    print(f"Updating {dataset}_{method} to metric.json")
+                    result[f"{dataset}_{method}"] = generate_metric(real_dir, quant_dir)
+                else:
+                    print(f"{dataset}_{method} already in metric.json")
     print(result)
     with open("../segquant/benchmark_record/metric.json", "w") as f:
         json.dump(result, f)
-
+        print("Successfully saved json file at ../segquant/benchmark_record/metric.json")

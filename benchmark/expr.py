@@ -134,8 +134,12 @@ def run_module(benchmark, affine_config, calibration_config):
     # to see if model_quant_path have "affine" keywords
     if "affine" in benchmark.quant_method: # if have affine, delete affine from quant_method
         benchmark.quant_method = benchmark.quant_method.replace("_affine", "")
+    if "affine" in benchmark.res_dir:
+        model_dir = benchmark.res_dir.replace("_affine", "")
+    else:
+        model_dir = benchmark.res_dir
     model_quant_path = f"model/{quant_layer_type}/model_quant_{benchmark.quant_method}.pt"
-    model_quant_path = os.path.join(benchmark.res_dir, model_quant_path)
+    model_quant_path = os.path.join(model_dir, model_quant_path)
     
     # quantize or load model
     model_quant = quant_or_load(model_quant_path, quant_config, benchmark.dataset, calibration_config, benchmark.gpu_id)
