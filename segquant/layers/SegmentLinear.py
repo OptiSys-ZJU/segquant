@@ -25,6 +25,8 @@ class BaseSegmentLinear(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.has_calibrated = False
+        self.real_quant = False
+        self.dual_scale = False
 
         self.linear = nn.Linear(in_features, out_features, bias=bias)
         if custom_weight_tensor is not None:
@@ -52,6 +54,31 @@ class BaseSegmentLinear(nn.Module):
 
     def __repr__(self):
         return f"BaseSegmentLinear(in={self.in_features}, out={self.out_features}, seg_mode={self.seg_mode}, chunks={self.chunks}, chunksize={self.chunksizes})"
+
+    def _ensure_backward_compatibility(self):
+        """Ensure backward compatibility for loaded models missing real_quant/dual_scale attributes"""
+        if not hasattr(self, 'real_quant'):
+            self.real_quant = False
+        if not hasattr(self, 'dual_scale'):
+            self.dual_scale = False
+        
+        # Handle old quantized models where quantized_weights might be Linear objects
+        if self.has_calibrated and hasattr(self, 'linear') and isinstance(self.linear, tuple):
+            # Check if this is SVDQuantSegmentLinear (4-tuple) or regular (2-tuple)
+            if len(self.linear) == 4:
+                # SVDQuantSegmentLinear: (quantized_weights, l1s, l2s, bias)
+                quantized_weights, l1s, l2s, bias = self.linear
+                if len(quantized_weights) > 0 and isinstance(quantized_weights[0], nn.Linear):
+                    # Old format: convert Linear objects to weight tensors
+                    new_quantized_weights = [linear_obj.weight for linear_obj in quantized_weights]
+                    self.linear = (new_quantized_weights, l1s, l2s, bias)
+            elif len(self.linear) == 2:
+                # DefaultSegmentLinear and SmoothQuantSegmentLinear: (quantized_weights, bias)
+                quantized_weights, bias = self.linear
+                if len(quantized_weights) > 0 and isinstance(quantized_weights[0], nn.Linear):
+                    # Old format: convert Linear objects to weight tensors
+                    new_quantized_weights = [linear_obj.weight for linear_obj in quantized_weights]
+                    self.linear = (new_quantized_weights, bias)
 
     def forward(self, _x):
         raise NotImplementedError("Forward method should be implemented in subclasses")
@@ -189,6 +216,7 @@ class DefaultSegmentLinear(BaseSegmentLinear):
         self.has_calibrated = True
 
     def forward(self, x):
+        self._ensure_backward_compatibility()
         if self.seg_mode == "input":
             input_chunks = self.splitter.split_input(x)
         elif self.seg_mode == "weight":
@@ -384,6 +412,7 @@ class SmoothQuantSegmentLinear(BaseSegmentLinear):
         self.has_calibrated = True
 
     def forward(self, x):
+        self._ensure_backward_compatibility()
         if self.seg_mode == "input":
             input_chunks = self.splitter.split_input(x)
         elif self.seg_mode == "weight":
@@ -586,6 +615,7 @@ class SVDQuantSegmentLinear(BaseSegmentLinear):
         self.has_calibrated = True
 
     def forward(self, x):
+        self._ensure_backward_compatibility()
         if self.seg_mode == "input":
             input_chunks = self.splitter.split_input(x)
         elif self.seg_mode == "weight":

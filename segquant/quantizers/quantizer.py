@@ -239,7 +239,13 @@ class IntQuantizer(BaseQuantizer):
         x_dequant = (x_int - zero_point) / scale
         return x_dequant.to(x.dtype)
 
+    def _ensure_backward_compatibility(self):
+        """Ensure backward compatibility for loaded models"""
+        if not hasattr(self, 'real_quant'):
+            self.real_quant = False
+
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
+        self._ensure_backward_compatibility()
         if self.real_quant:
             # when real quantization is enabled, only weights are quantized
             assert not self.dual_scale, "Weight quantization does not support dual scale."
@@ -462,7 +468,13 @@ class FloatQuantizer(BaseQuantizer):
         x_dequant[zero_mask] = 0.0
         return x_dequant.to(x.dtype)
 
+    def _ensure_backward_compatibility(self):
+        """Ensure backward compatibility for loaded models"""
+        if not hasattr(self, 'real_quant'):
+            self.real_quant = False
+
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
+        self._ensure_backward_compatibility()
         if self.real_quant:
             # when real quantization is enabled, only weights are quantized
             ext = load_real_quant_fp8_ext(required=False)

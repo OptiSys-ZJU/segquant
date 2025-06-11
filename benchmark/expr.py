@@ -234,5 +234,6 @@ if __name__ == "__main__":
         generate_real_pics=args.real, # No quant, generate real pics
         gpu_id=args.gpu_id,
     )
+    print(f"[INFO] benchmark: {benchmark}")
     run_module(benchmark, AffineConfig.to_dict(), CalibrationConfig.to_dict())
     
