@@ -61,24 +61,6 @@ class BaseSegmentLinear(nn.Module):
             self.real_quant = False
         if not hasattr(self, 'dual_scale'):
             self.dual_scale = False
-        
-        # Handle old quantized models where quantized_weights might be Linear objects
-        if self.has_calibrated and hasattr(self, 'linear') and isinstance(self.linear, tuple):
-            # Check if this is SVDQuantSegmentLinear (4-tuple) or regular (2-tuple)
-            if len(self.linear) == 4:
-                # SVDQuantSegmentLinear: (quantized_weights, l1s, l2s, bias)
-                quantized_weights, l1s, l2s, bias = self.linear
-                if len(quantized_weights) > 0 and isinstance(quantized_weights[0], nn.Linear):
-                    # Old format: convert Linear objects to weight tensors
-                    new_quantized_weights = [linear_obj.weight for linear_obj in quantized_weights]
-                    self.linear = (new_quantized_weights, l1s, l2s, bias)
-            elif len(self.linear) == 2:
-                # DefaultSegmentLinear and SmoothQuantSegmentLinear: (quantized_weights, bias)
-                quantized_weights, bias = self.linear
-                if len(quantized_weights) > 0 and isinstance(quantized_weights[0], nn.Linear):
-                    # Old format: convert Linear objects to weight tensors
-                    new_quantized_weights = [linear_obj.weight for linear_obj in quantized_weights]
-                    self.linear = (new_quantized_weights, bias)
 
     def forward(self, _x):
         raise NotImplementedError("Forward method should be implemented in subclasses")
