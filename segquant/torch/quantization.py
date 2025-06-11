@@ -319,26 +319,6 @@ def quantize(
         if verbose:
             print("start trace ...")
         _trace_linears(model, to_smooth_linears, calib_data_loader, device)
-
-    ####################################################################
-    to_search_linears = {
-        k: v for k, v in to_calib_linears.items()
-        if getattr(v.optimizer, "search", False)
-    }
-
-    i = 0
-    while to_search_linears:
-        if verbose:
-            print(f"process search [{i}] ...")
-        if to_smooth_linears:
-            _smooth_linears(to_smooth_linears)
-        _calib_linears(model, to_calib_linears, calib_data_loader, device)
-        for l in tqdm(to_calib_linears.values(), desc="[Finishing Calibrate Linears]"):
-            l.finish_calibrate()
-        if to_search_linears:
-            _search_linears(model, to_search_linears, calib_data_loader, device)
-        i += 1
-
     if to_smooth_linears:
         if verbose:
             print("start smooth ...")

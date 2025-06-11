@@ -153,7 +153,17 @@ class DefaultOptimizer(BaseOptimizer):
     ):
         assert len(input_calibrators) == 1 or len(weight_calibrators) == 1, \
             "Either input_calibrators or weight_calibrators must have a length of 1."
-        super().__init__(seg_mode, chunks, chunksizes, weight_chunks, input_calibrators, weight_calibrators, real_quant, dual_scale, kernel_type)
+        super().__init__(
+            seg_mode,
+            chunks,
+            chunksizes,
+            weight_chunks,
+            input_calibrators,
+            weight_calibrators,
+            real_quant,
+            dual_scale,
+            kernel_type,
+        )
 
         if seg_mode == 'weight':
             self.input_quantized_indices = [0] * self.chunks
@@ -268,9 +278,6 @@ class SmoothOptimizer(BaseOptimizer):
         dual_scale=False,
         kernel_type=None,
         alpha=0.5,
-        search=False,
-        step=0,
-        end=0,
         **kwargs,
     ):
         """
@@ -289,6 +296,7 @@ class SmoothOptimizer(BaseOptimizer):
         self.max_w = []
         self.max_x = []
         self.s = [None] * self.chunks
+        self.alpha = alpha
         self.has_smoothed = False
 
         self.input_quantized_indices = range(self.chunks)
@@ -305,29 +313,17 @@ class SmoothOptimizer(BaseOptimizer):
 
         self.has_traced_w = False
 
-        # for search
-        self.finish_searching = True
-        self.search = search
-        self.step = step
-        self.opt_alpha = None
-        self.opt_err = float("inf")
-        self.cur_alpha = alpha
-        self.end = end
-
-        if self.search:
-            self.weight_backup = [t.clone().cpu() for t in self.weight_chunks]
-            self.finish_searching = False
-        else:
-            self.weight_backup = None
+        # for fake forward
+        self.fake_weight_chunks = [t.clone() for t in self.weight_chunks]
 
     def __repr__(self):
         if self.real_quant:
             base = (
-                f"SmoothOptimizer(alpha={self.cur_alpha},kernel={self.kernel_type}\n"
+                f"SmoothOptimizer(alpha={self.alpha},kernel={self.kernel_type}\n"
             )
         else:
             base = (
-                f"SmoothOptimizer(alpha={self.cur_alpha}\n"
+                f"SmoothOptimizer(alpha={self.alpha}\n"
             )
         input_q = ",\n      ".join(repr(i) for i in self.input_calibrators)
         weight_q = ",\n      ".join(repr(w) for w in self.weight_calibrators)
@@ -414,7 +410,7 @@ class SmoothOptimizer(BaseOptimizer):
         max_x, max_w = self._broadcast_lists(self.max_x, self.max_w)
         for i in range(self.chunks):
             epsilon = 1.0 / (1 << 31)
-            s = (max_x[i] ** self.cur_alpha) / (max_w[i] ** (1 - self.cur_alpha))
+            s = (max_x[i] ** self.alpha) / (max_w[i] ** (1 - self.alpha))
             s = torch.where(s <= epsilon, torch.ones_like(s), s)
             self.s[i] = torch.clamp(s.to(dtype=torch.float32), min=1e-4, max=1e4)
 
@@ -422,9 +418,9 @@ class SmoothOptimizer(BaseOptimizer):
             # weights need to be splitted when input enabled
             assert len(self.weight_chunks) == 1, "weight_chunks size not 1"
             self.weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
+            self.fake_weight_chunks = self.fake_weight_chunks[0].split(self.chunksizes, dim=-1)
         elif self.seg_mode == 'weight':
-            # input chunks must be splitted first
-            self.input_chunk_indices = range(self.chunks)
+            pass
         else:
             raise ValueError("seg_mode not found")
 
@@ -448,7 +444,9 @@ class SmoothOptimizer(BaseOptimizer):
         return smoothed_input_chunks
 
     def _reset(self):
-        self.weight_chunks = [t.clone().to(self.weight_chunks[0].device) for t in self.weight_backup]
+        self.weight_chunks = [
+            t.clone().to(self.weight_chunks[0].device) for t in self.fake_weight_chunks
+        ]
         for input_calibrator in self.input_calibrators:
             input_calibrator.reset()
         for weight_calibrator in self.weight_calibrators:
@@ -459,7 +457,6 @@ class SmoothOptimizer(BaseOptimizer):
         input_chunks = self._smooth_x(input_chunks) # len == chunks
         super().calibrate(input_chunks)
 
-
     def finish_calibrate(self):
         for i, input_calibrator in enumerate(self.input_calibrators):
             input_calibrator.finish_calibrate()
@@ -467,18 +464,17 @@ class SmoothOptimizer(BaseOptimizer):
         for i, weight_calibrator in enumerate(self.weight_calibrators):
             self.weight_chunks[i] = weight_calibrator.finish_calibrate(self.weight_chunks[i])
 
+        if self.seg_mode == 'weight':
+            # input chunks must be splitted first
+            self.input_chunk_indices = range(self.chunks)
         self.has_calibrated = True
 
-        if self.finish_searching:
-            del self.max_w
-            del self.max_x
-            del self.weight_backup
+        # clear old weights
+        del self.fake_weight_chunks
 
     def fake_forward(self, input_chunks):
         if self.has_smoothed:
-            # when calibrating, self.weight_chunks must be multiple
-            input_chunks = self._smooth_x(input_chunks)
-            weight_chunks = self.weight_chunks
+            weight_chunks = self.fake_weight_chunks
         else:
             # when tracing
             if self.seg_mode == 'input':
@@ -512,32 +508,6 @@ class SmoothOptimizer(BaseOptimizer):
         ]
 
         return quantized_output_chunks
-
-    def process_step(self, err):
-        if self.search:
-            # need to search
-            assert self.step != 0, 'Search enabled but get step == 0'
-            if self.opt_alpha is None:
-                self.opt_alpha = self.cur_alpha
-                self.opt_err = err
-            elif err < self.opt_err:
-                self.opt_alpha = self.cur_alpha
-                self.opt_err = err
-            # reset
-            self._reset()
-            print(
-                f"cur: {self.cur_alpha:.4f}/{err:.4f}  "
-                f"opt: {self.opt_alpha:.4f}/{self.opt_err:.4f}"
-            )
-            next_alpha = self.cur_alpha + self.step
-            if next_alpha < self.end or next_alpha > self.end:
-                self.cur_alpha = self.opt_alpha
-                self.finish_searching = True
-                return True
-            else:
-                self.cur_alpha = next_alpha
-                return False
-        return True
 
 @OptimizerRegistry.register("svd")
 class SVDOptimizer(SmoothOptimizer):
@@ -582,11 +552,11 @@ class SVDOptimizer(SmoothOptimizer):
     def __repr__(self):
         if self.real_quant:
             base = (
-                f"SVDOptimizer(alpha={self.cur_alpha}, low_rank={self.low_rank}, kernel={self.kernel_type}\n"
+                f"SVDOptimizer(alpha={self.alpha}, low_rank={self.low_rank}, kernel={self.kernel_type}\n"
             )
         else:
             base = (
-                f"SVDOptimizer(alpha={self.cur_alpha}, low_rank={self.low_rank}\n"
+                f"SVDOptimizer(alpha={self.alpha}, low_rank={self.low_rank}\n"
             )
         input_q = ",\n      ".join(repr(i) for i in self.input_calibrators)
         weight_q = ",\n      ".join(repr(w) for w in self.weight_calibrators)
@@ -662,21 +632,9 @@ class SVDOptimizer(SmoothOptimizer):
         assert self.has_svd, 'SVDOptimizer: linear is not svd'
         super().calibrate(input_chunks)
 
-    def finish_calibrate(self):
-        super().finish_calibrate()
-
     def fake_forward(self, input_chunks):
         if self.has_svd:
-            # when calibrating, self.weight_chunks must be multiple
-            input_chunks = self._smooth_x(input_chunks)
-            quantized_output_chunks = [
-                input_chunks[self.input_chunk_indices[i]] @ self.l1s[i] @ self.l2s[i] +
-                F.linear(
-                    input_chunks[self.input_chunk_indices[i]],
-                    self.weight_chunks[self.weight_chunk_indices[i]],
-                )
-                for i in range(self.chunks)
-            ]
+            weight_chunks = self.fake_weight_chunks
         else:
             # when tracing
             if self.seg_mode == 'input':
@@ -686,13 +644,13 @@ class SVDOptimizer(SmoothOptimizer):
             else:
                 raise ValueError("seg_mode not found")
 
-            quantized_output_chunks = [
-                F.linear(
-                    input_chunks[self.input_chunk_indices[i]],
-                    weight_chunks[self.weight_chunk_indices[i]],
-                )
-                for i in range(self.chunks)
-            ]
+        quantized_output_chunks = [
+            F.linear(
+                input_chunks[self.input_chunk_indices[i]],
+                weight_chunks[self.weight_chunk_indices[i]],
+            )
+            for i in range(self.chunks)
+        ]
         return quantized_output_chunks
 
     def forward(self, input_chunks):

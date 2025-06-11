@@ -20,9 +20,11 @@ class DType(Enum):
     INT4 = "int4"
     INT6 = "int6"
     INT8 = "int8"
+    INT16 = "int16"
     FP8E5M2 = "fpe5m2"
     FP8E4M3 = "fpe4m3"
     FP16 = "fp16"
+    BF16 = "bf16"
 
 
 class Optimum(Enum):

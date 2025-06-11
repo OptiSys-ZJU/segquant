@@ -29,14 +29,11 @@ quant_config = {
     "default": {
         "enable": True,
         "seglinear": True,
-        "search_patterns": SegPattern.all(),
+        "search_patterns": [],
         "real_quant": False,
         "opt": {
-            "type": Optimum.SMOOTH,
-            "alpha": 0.5,
-            "search": False,
-            "step": 0.0,
-            "end": 1,
+            "type": Optimum.SVD,
+            "alpha": 1,
             "low_rank": 32,
             "cpu_storage": False,
         },
@@ -46,13 +43,23 @@ quant_config = {
         },
         "input_quant": {
             "type": DType.INT8,
-            "axis": -1, # per-token, input shape (..., in)
+            "axis": None,
+            # "axis": -1, # per-token, input shape (..., in)
+            "dynamic": True,
         },
         "weight_quant": {
-            "type": DType.INT6,
-            "axis": 1, # per-channel, weight shape (out, in)
+            "type": DType.INT8,
+            "axis": None,
+            # "axis": 1, # per-channel, weight shape (out, in)
         },
     },
+
+    # "transformer_blocks.*.norm1*": {
+    #     "enable": False,
+    # },
+    # "single_transformer_blocks.*.norm*": {
+    #     "enable": False,
+    # }
 }
 
 def get_quantized_model(model_type: str, quant_layer: str, config, dataset, calibargs: dict, latents=None):

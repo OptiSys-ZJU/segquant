@@ -103,7 +103,7 @@ class IntQuantizer(BaseQuantizer):
         axis (int or None): Axis along which to compute the scale and zero-point (default: None).
         dual_scale (bool): Whether to use dual-scale quantization (default: False).
     """
-    def __init__(self, num_bits=8, symmetric=True, axis=None, dual_scale=False, real_quant=False):
+    def __init__(self, num_bits=8, symmetric=True, axis=None, dual_scale=False, real_quant=False, dynamic=False, fake=False):
         self.num_bits = num_bits
         self.symmetric = symmetric
         self.axis = axis
@@ -127,6 +127,9 @@ class IntQuantizer(BaseQuantizer):
         self.real_quant = real_quant
         if self.real_quant:
             assert self.axis is None, "Real quantization does not support axis."
+
+        self.dynamic = dynamic
+        self.fake = fake
 
     def reset(self):
         self.amax = None
@@ -262,6 +265,12 @@ class IntQuantizer(BaseQuantizer):
         return self._fake_quantize(x)
 
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
+        if self.fake:
+            return x
+        if self.dynamic:
+            self.reset()
+            self.calibrate(x)
+
         if self.real_quant:
             # when real quantization is enabled, only weights are quantized
             assert not self.dual_scale, "Weight quantization does not support dual scale."
@@ -286,19 +295,19 @@ class IntQuantizer(BaseQuantizer):
             if self.dual_scale:
                 return (
                     f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
-                    f"real_quant={self.real_quant}, "
+                    f"real_quant={self.real_quant}, enable={not self.fake}, dynamic={self.dynamic}, "
                     f"dual_scale=True, axis={self.axis}, "
                     f"neg_amax={self.repr_amax(self.neg_amax)}, pos_amax={self.repr_amax(self.pos_amax)})"
                 )
             return (
                 f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
-                f"real_quant={self.real_quant}, "
+                f"real_quant={self.real_quant}, enable={not self.fake}, dynamic={self.dynamic}, "
                 f"dual_scale=False, axis={self.axis}, "
                 f"amax={self.repr_amax(self.amax)})"
             )
         return (
             f"IntQuantizer(num_bits={self.num_bits}, symmetric=False, axis={self.axis}, "
-            f"real_quant={self.real_quant}, "
+            f"real_quant={self.real_quant}, enable={not self.fake}, dynamic={self.dynamic}, "
             f"amin={self.amin:.4f}, amax={self.amax:.4f}, zero_point={self.zero_point:.4f})"
         )
 
@@ -316,7 +325,7 @@ class FloatQuantizer(BaseQuantizer):
         axis (int or None): Axis along which to compute the scale and zero-point (default: None).
         dual_scale (bool): Whether to use dual-scale quantization (default: False).
     """
-    def __init__(self, exp_bits=4, mant_bits=3, axis=None, dual_scale=False, real_quant=False):
+    def __init__(self, exp_bits=4, mant_bits=3, axis=None, dual_scale=False, real_quant=False, dynamic=False, fake=False):
         self.exp_bits = exp_bits
         self.mant_bits = mant_bits
         self.axis = axis
@@ -343,6 +352,8 @@ class FloatQuantizer(BaseQuantizer):
         self.real_quant = real_quant
         if self.real_quant:
             assert self.axis is None, "Real quantization does not support axis."
+        self.dynamic = dynamic
+        self.fake = fake
 
     def reset(self):
         self.neg_amax = None
@@ -486,6 +497,12 @@ class FloatQuantizer(BaseQuantizer):
         return self._fake_quantize(x)
 
     def quantize(self, x: torch.Tensor) -> torch.Tensor:
+        if self.fake:
+            return x
+        if self.dynamic:
+            self.reset()
+            self.calibrate(x)
+
         if self.real_quant:
             # when real quantization is enabled, only weights are quantized
             ext = load_real_quant_fp8_ext(required=False)
@@ -504,13 +521,13 @@ class FloatQuantizer(BaseQuantizer):
         if self.dual_scale:
             return (
                 f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
-                f"real_quant={self.real_quant}, "
+                f"real_quant={self.real_quant}, enable={not self.fake}, dynamic={self.dynamic}, "
                 f"axis={self.axis}, dual_scale=True, "
                 f"neg_amax={self.repr_amax(self.neg_amax)}, pos_amax={self.repr_amax(self.pos_amax)})"
             )
         return (
             f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
-            f"real_quant={self.real_quant}, "
+            f"real_quant={self.real_quant}, enable={not self.fake}, dynamic={self.dynamic}, "
             f"axis={self.axis}, dual_scale=False, "
             f"amax={self.repr_amax(self.amax)})"
         )
@@ -538,3 +555,13 @@ def int4_factory(**kwargs):
 def fp8e5m2_factory(**kwargs):
     """Factory function for creating a FloatQuantizer with 5 exponent bits and 2 mantissa bits."""
     return FloatQuantizer(exp_bits=5, mant_bits=2, **kwargs)
+
+@QuantizerRegistry.register("fp16")
+def fp16_factory(**kwargs):
+    """Factory function for creating a FloatQuantizer with 5 exponent bits and 10 mantissa bits."""
+    return FloatQuantizer(exp_bits=5, mant_bits=10, fake=True, **kwargs)
+
+@QuantizerRegistry.register("bf16")
+def bf16_factory(**kwargs):
+    """Factory function for creating a FloatQuantizer with 8 exponent bits and 7 mantissa bits."""
+    return FloatQuantizer(exp_bits=8, mant_bits=7, fake=True, **kwargs)
