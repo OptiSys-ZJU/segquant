@@ -1,7 +1,8 @@
-from typing import Optional, Any
+from typing import Dict, Optional, Any, Tuple, Union
 import torch
 import torch.nn as nn
-from backend.torch.layers.attention_processor import Attention
+import torch.functional as F
+from backend.torch.layers.attention_processor import Attention, AttnAddedKVProcessor, AttnAddedKVProcessor2_0
 from backend.torch.layers.activations import get_activation
 from backend.torch.layers.resnet import (
     ResnetBlock2D,
@@ -9,6 +10,8 @@ from backend.torch.layers.resnet import (
     Downsample2D,
     ResnetBlockCondNorm2D,
 )
+from backend.torch.modules.dual_transformer_2d import DualTransformer2DModel
+from backend.torch.modules.transformer_2d import Transformer2DModel
 from backend.torch.utils.deprecation_utils import deprecate
 
 
@@ -381,6 +384,271 @@ class UNetMidBlock2D(nn.Module):
         return hidden_states
 
 
+class UNetMidBlock2DCrossAttn(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        temb_channels: int,
+        out_channels: Optional[int] = None,
+        dropout: float = 0.0,
+        num_layers: int = 1,
+        transformer_layers_per_block: Union[int, Tuple[int]] = 1,
+        resnet_eps: float = 1e-6,
+        resnet_time_scale_shift: str = "default",
+        resnet_act_fn: str = "swish",
+        resnet_groups: int = 32,
+        resnet_groups_out: Optional[int] = None,
+        resnet_pre_norm: bool = True,
+        num_attention_heads: int = 1,
+        output_scale_factor: float = 1.0,
+        cross_attention_dim: int = 1280,
+        dual_cross_attention: bool = False,
+        use_linear_projection: bool = False,
+        upcast_attention: bool = False,
+        attention_type: str = "default",
+    ):
+        super().__init__()
+
+        out_channels = out_channels or in_channels
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        self.has_cross_attention = True
+        self.num_attention_heads = num_attention_heads
+        resnet_groups = resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
+
+        # support for variable transformer layers per block
+        if isinstance(transformer_layers_per_block, int):
+            transformer_layers_per_block = [transformer_layers_per_block] * num_layers
+
+        resnet_groups_out = resnet_groups_out or resnet_groups
+
+        # there is always at least one resnet
+        resnets = [
+            ResnetBlock2D(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                temb_channels=temb_channels,
+                eps=resnet_eps,
+                groups=resnet_groups,
+                groups_out=resnet_groups_out,
+                dropout=dropout,
+                time_embedding_norm=resnet_time_scale_shift,
+                non_linearity=resnet_act_fn,
+                output_scale_factor=output_scale_factor,
+                pre_norm=resnet_pre_norm,
+            )
+        ]
+        attentions = []
+
+        for i in range(num_layers):
+            if not dual_cross_attention:
+                attentions.append(
+                    Transformer2DModel(
+                        num_attention_heads,
+                        out_channels // num_attention_heads,
+                        in_channels=out_channels,
+                        num_layers=transformer_layers_per_block[i],
+                        cross_attention_dim=cross_attention_dim,
+                        norm_num_groups=resnet_groups_out,
+                        use_linear_projection=use_linear_projection,
+                        upcast_attention=upcast_attention,
+                        attention_type=attention_type,
+                    )
+                )
+            else:
+                attentions.append(
+                    DualTransformer2DModel(
+                        num_attention_heads,
+                        out_channels // num_attention_heads,
+                        in_channels=out_channels,
+                        num_layers=1,
+                        cross_attention_dim=cross_attention_dim,
+                        norm_num_groups=resnet_groups,
+                    )
+                )
+            resnets.append(
+                ResnetBlock2D(
+                    in_channels=out_channels,
+                    out_channels=out_channels,
+                    temb_channels=temb_channels,
+                    eps=resnet_eps,
+                    groups=resnet_groups_out,
+                    dropout=dropout,
+                    time_embedding_norm=resnet_time_scale_shift,
+                    non_linearity=resnet_act_fn,
+                    output_scale_factor=output_scale_factor,
+                    pre_norm=resnet_pre_norm,
+                )
+            )
+
+        self.attentions = nn.ModuleList(attentions)
+        self.resnets = nn.ModuleList(resnets)
+
+        self.gradient_checkpointing = False
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        temb: Optional[torch.Tensor] = None,
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+        encoder_attention_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if cross_attention_kwargs is not None:
+            if cross_attention_kwargs.get("scale", None) is not None:
+                print("Passing `scale` to `cross_attention_kwargs` is deprecated. `scale` will be ignored.")
+
+        hidden_states = self.resnets[0](hidden_states, temb)
+        for attn, resnet in zip(self.attentions, self.resnets[1:]):
+            if torch.is_grad_enabled() and self.gradient_checkpointing:
+                hidden_states = attn(
+                    hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                    attention_mask=attention_mask,
+                    encoder_attention_mask=encoder_attention_mask,
+                    return_dict=False,
+                )[0]
+                hidden_states = self._gradient_checkpointing_func(resnet, hidden_states, temb)
+            else:
+                hidden_states = attn(
+                    hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                    attention_mask=attention_mask,
+                    encoder_attention_mask=encoder_attention_mask,
+                    return_dict=False,
+                )[0]
+                hidden_states = resnet(hidden_states, temb)
+
+        return hidden_states
+
+class UNetMidBlock2DSimpleCrossAttn(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        temb_channels: int,
+        dropout: float = 0.0,
+        num_layers: int = 1,
+        resnet_eps: float = 1e-6,
+        resnet_time_scale_shift: str = "default",
+        resnet_act_fn: str = "swish",
+        resnet_groups: int = 32,
+        resnet_pre_norm: bool = True,
+        attention_head_dim: int = 1,
+        output_scale_factor: float = 1.0,
+        cross_attention_dim: int = 1280,
+        skip_time_act: bool = False,
+        only_cross_attention: bool = False,
+        cross_attention_norm: Optional[str] = None,
+    ):
+        super().__init__()
+
+        self.has_cross_attention = True
+
+        self.attention_head_dim = attention_head_dim
+        resnet_groups = resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
+
+        self.num_heads = in_channels // self.attention_head_dim
+
+        # there is always at least one resnet
+        resnets = [
+            ResnetBlock2D(
+                in_channels=in_channels,
+                out_channels=in_channels,
+                temb_channels=temb_channels,
+                eps=resnet_eps,
+                groups=resnet_groups,
+                dropout=dropout,
+                time_embedding_norm=resnet_time_scale_shift,
+                non_linearity=resnet_act_fn,
+                output_scale_factor=output_scale_factor,
+                pre_norm=resnet_pre_norm,
+                skip_time_act=skip_time_act,
+            )
+        ]
+        attentions = []
+
+        for _ in range(num_layers):
+            processor = (
+                AttnAddedKVProcessor2_0() if hasattr(F, "scaled_dot_product_attention") else AttnAddedKVProcessor()
+            )
+
+            attentions.append(
+                Attention(
+                    query_dim=in_channels,
+                    cross_attention_dim=in_channels,
+                    heads=self.num_heads,
+                    dim_head=self.attention_head_dim,
+                    added_kv_proj_dim=cross_attention_dim,
+                    norm_num_groups=resnet_groups,
+                    bias=True,
+                    upcast_softmax=True,
+                    only_cross_attention=only_cross_attention,
+                    cross_attention_norm=cross_attention_norm,
+                    processor=processor,
+                )
+            )
+            resnets.append(
+                ResnetBlock2D(
+                    in_channels=in_channels,
+                    out_channels=in_channels,
+                    temb_channels=temb_channels,
+                    eps=resnet_eps,
+                    groups=resnet_groups,
+                    dropout=dropout,
+                    time_embedding_norm=resnet_time_scale_shift,
+                    non_linearity=resnet_act_fn,
+                    output_scale_factor=output_scale_factor,
+                    pre_norm=resnet_pre_norm,
+                    skip_time_act=skip_time_act,
+                )
+            )
+
+        self.attentions = nn.ModuleList(attentions)
+        self.resnets = nn.ModuleList(resnets)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        temb: Optional[torch.Tensor] = None,
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+        encoder_attention_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        cross_attention_kwargs = cross_attention_kwargs if cross_attention_kwargs is not None else {}
+        if cross_attention_kwargs.get("scale", None) is not None:
+            print("Passing `scale` to `cross_attention_kwargs` is deprecated. `scale` will be ignored.")
+
+        if attention_mask is None:
+            # if encoder_hidden_states is defined: we are doing cross-attn, so we should use cross-attn mask.
+            mask = None if encoder_hidden_states is None else encoder_attention_mask
+        else:
+            # when attention_mask is defined: we don't even check for encoder_attention_mask.
+            # this is to maintain compatibility with UnCLIP, which uses 'attention_mask' param for cross-attn masks.
+            # TODO: UnCLIP should express cross-attn mask via encoder_attention_mask param instead of via attention_mask.
+            #       then we can simplify this whole if/else block to:
+            #         mask = attention_mask if encoder_hidden_states is None else encoder_attention_mask
+            mask = attention_mask
+
+        hidden_states = self.resnets[0](hidden_states, temb)
+        for attn, resnet in zip(self.attentions, self.resnets[1:]):
+            # attn
+            hidden_states = attn(
+                hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                attention_mask=mask,
+                **cross_attention_kwargs,
+            )
+
+            # resnet
+            hidden_states = resnet(hidden_states, temb)
+
+        return hidden_states
+
 def get_down_block(
     down_block_type: str,
     num_layers: int,
@@ -435,6 +703,79 @@ def get_down_block(
         )
     raise ValueError(f"{down_block_type} does not exist.")
 
+def get_mid_block(
+    mid_block_type: str,
+    temb_channels: int,
+    in_channels: int,
+    resnet_eps: float,
+    resnet_act_fn: str,
+    resnet_groups: int,
+    output_scale_factor: float = 1.0,
+    transformer_layers_per_block: int = 1,
+    num_attention_heads: Optional[int] = None,
+    cross_attention_dim: Optional[int] = None,
+    dual_cross_attention: bool = False,
+    use_linear_projection: bool = False,
+    mid_block_only_cross_attention: bool = False,
+    upcast_attention: bool = False,
+    resnet_time_scale_shift: str = "default",
+    attention_type: str = "default",
+    resnet_skip_time_act: bool = False,
+    cross_attention_norm: Optional[str] = None,
+    attention_head_dim: Optional[int] = 1,
+    dropout: float = 0.0,
+):
+    if mid_block_type == "UNetMidBlock2DCrossAttn":
+        return UNetMidBlock2DCrossAttn(
+            transformer_layers_per_block=transformer_layers_per_block,
+            in_channels=in_channels,
+            temb_channels=temb_channels,
+            dropout=dropout,
+            resnet_eps=resnet_eps,
+            resnet_act_fn=resnet_act_fn,
+            output_scale_factor=output_scale_factor,
+            resnet_time_scale_shift=resnet_time_scale_shift,
+            cross_attention_dim=cross_attention_dim,
+            num_attention_heads=num_attention_heads,
+            resnet_groups=resnet_groups,
+            dual_cross_attention=dual_cross_attention,
+            use_linear_projection=use_linear_projection,
+            upcast_attention=upcast_attention,
+            attention_type=attention_type,
+        )
+    elif mid_block_type == "UNetMidBlock2DSimpleCrossAttn":
+        return UNetMidBlock2DSimpleCrossAttn(
+            in_channels=in_channels,
+            temb_channels=temb_channels,
+            dropout=dropout,
+            resnet_eps=resnet_eps,
+            resnet_act_fn=resnet_act_fn,
+            output_scale_factor=output_scale_factor,
+            cross_attention_dim=cross_attention_dim,
+            attention_head_dim=attention_head_dim,
+            resnet_groups=resnet_groups,
+            resnet_time_scale_shift=resnet_time_scale_shift,
+            skip_time_act=resnet_skip_time_act,
+            only_cross_attention=mid_block_only_cross_attention,
+            cross_attention_norm=cross_attention_norm,
+        )
+    elif mid_block_type == "UNetMidBlock2D":
+        return UNetMidBlock2D(
+            in_channels=in_channels,
+            temb_channels=temb_channels,
+            dropout=dropout,
+            num_layers=0,
+            resnet_eps=resnet_eps,
+            resnet_act_fn=resnet_act_fn,
+            output_scale_factor=output_scale_factor,
+            resnet_groups=resnet_groups,
+            resnet_time_scale_shift=resnet_time_scale_shift,
+            add_attention=False,
+        )
+    elif mid_block_type is None:
+        return None
+    else:
+        raise ValueError(f"unknown mid_block_type : {mid_block_type}")
 
 def get_up_block(
     up_block_type: str,

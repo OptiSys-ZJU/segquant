@@ -38,6 +38,8 @@ else:
 def is_torch_xla_available():
     return False
 
+def is_invisible_watermark_available():
+    return False
 
 def is_scipy_available():
     return False

@@ -337,8 +337,6 @@ class SmoothOptimizer(BaseOptimizer):
         else:
             # alpha search
             self.search_alpha = True
-            self.opt_err = [float('inf')] * self.chunks
-            self.opt_alpha = [None] * self.chunks
             alpha_range = np.arange(
                 search_alpha_config["min"],
                 search_alpha_config["max"] + 1e-8,
@@ -346,6 +344,8 @@ class SmoothOptimizer(BaseOptimizer):
             )
             self.candidate_alphas = [deque(alpha_range) for _ in range(self.chunks)]
             self.alpha = [alphas.popleft() for alphas in self.candidate_alphas]
+            self.opt_err = [float('inf')] * self.chunks
+            self.opt_alpha = [a for a in self.alpha]
 
     def __repr__(self):
         if self.real_quant:

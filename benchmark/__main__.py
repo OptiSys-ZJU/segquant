@@ -30,10 +30,10 @@ quant_config = {
     "default": {
         "enable": True,
         "seglinear": True,
-        "search_patterns": SegPattern.all(),
+        "search_patterns": [],
         "real_quant": False,
         "opt": {
-            "type": Optimum.SMOOTH,
+            "type": Optimum.SVD,
             "alpha": 0.5,
             "low_rank": 64,
             "cpu_storage": False,
@@ -43,7 +43,7 @@ quant_config = {
                 "max": 1.0,
                 "step": 0.1,
             },
-            "verbose": False,
+            "verbose": True,
         },
         "calib": {
             "type": Calibrate.GPTQ,
@@ -51,24 +51,25 @@ quant_config = {
             "verbose": False,
         },
         "input_quant": {
-            "type": DType.INT8,
+            "type": DType.FP16,
             "axis": None,
             # "axis": -1, # per-token, input shape (..., in)
             # "dynamic": True,
         },
         "weight_quant": {
-            "type": DType.INT8,
-            "axis": None,
-            # "axis": 1, # per-channel, weight shape (out, in)
+            "type": DType.INT4,
+            # "axis": None,
+            "axis": 1, # per-channel, weight shape (out, in)
         },
     },
 
-    # "transformer_blocks.*.norm1*": {
-    #     "enable": False,
-    # },
-    # "single_transformer_blocks.*.norm*": {
-    #     "enable": False,
-    # }
+    "transformer_blocks.*.norm1*": {
+        "enable": False,
+    },
+
+    "single_transformer_blocks.*.norm*": {
+        "enable": False,
+    }
 }
 
 def get_quantized_model(model_type: str, quant_layer: str, config, dataset, calibargs: dict, latents=None):
@@ -159,11 +160,11 @@ def run_any_module():
         root_dir = "tmp_test_linear"
         os.makedirs(root_dir, exist_ok=True)
 
-        dataset = COCODataset(
+        dataset = DCIDataset(
             path="../dataset/controlnet_datasets/COCO-Caption2017-canny", cache_size=16
         )
 
-        max_timestep = 50
+        max_timestep = 1
         max_num = 1
 
         def quant_or_load(model_type: str, quant_layer: str, model_target_path, quant_config, latents):
@@ -226,6 +227,8 @@ def run_any_module():
                 raise ValueError(f'[{quant_layer} not found]')
         else:
             raise ValueError(f'[{model_type} not found]')
+
+        latents = torch.load('../latents.pt')
 
         trace_pic(
             model,
