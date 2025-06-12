@@ -202,7 +202,7 @@ def _search_linears(
                     if n in to_search_linears:
                         real = to_search_linears[n].fake_forward(inp[0], chunked=True)
                         cur = to_search_linears[n].forward(inp[0], chunked=True)
-                        diff_norms = [(r - c).norm().item() for r, c in zip(real, cur)]
+                        diff_norms = [((r - c) ** 2).mean().item() for r, c in zip(real, cur)]
                         if not err_map[n]:
                             err_map[n] = diff_norms
                         else:
@@ -330,7 +330,7 @@ def quantize(
 
     to_search_linears = {
         k: v for k, v in to_calib_linears.items()
-        if v.optimizer.search_alpha
+        if hasattr(v.optimizer, 'search_alpha') and v.optimizer.search_alpha
     }
 
     while to_search_linears:

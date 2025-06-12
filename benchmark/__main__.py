@@ -10,6 +10,7 @@ from segquant.sample.sampler import QDiffusionSampler
 from segquant.torch.calibrate_set import generate_calibrate_set, load_calibrate_set
 from segquant.torch.quantization import quantize
 from dataset.coco.coco_dataset import COCODataset
+from dataset.dci.dci_dataset import DCIDataset
 from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
 from backend.torch.models.flux_controlnet import FluxControlNetModel
 from backend.torch.modules.controlnet_flux import FluxControlNetModel as ControlNetFlux

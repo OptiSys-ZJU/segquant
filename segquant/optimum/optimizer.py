@@ -223,7 +223,7 @@ class DefaultOptimizer(BaseOptimizer):
         ):
             weight_calibrator.calibrate(weight_chunk, input_data=input_copy_or_chunk)
 
-    def finish_calibrate(self):
+    def finish_calibrate(self, **kwargs):
         super().finish_calibrate()
         if self.seg_mode == 'input':
             # weights need to be splited when input enabled
