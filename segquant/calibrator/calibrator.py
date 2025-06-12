@@ -107,6 +107,7 @@ class GPTQCalibrator(BaseCalibrator):
         actorder=False,
         static_groups=False,
         cpu_storage=False,
+        verbose=False,
         **kwargs,
     ):
         assert data_type == 'weight', 'Only weight calibrator can be used to GPTQ.'
@@ -120,6 +121,7 @@ class GPTQCalibrator(BaseCalibrator):
         self.actorder = actorder
         self.static_groups = static_groups
         self.err = 0
+        self.verbose = verbose
 
         self.cpu_storage = cpu_storage
         if self.cpu_storage:
@@ -280,9 +282,10 @@ class GPTQCalibrator(BaseCalibrator):
 
         if self.data_type == 'weight':
             self.err = torch.sum(Losses).item()
-            print(
-                f"GPTQCalibrator: finish_calibrate [{W.shape[0]}, {W.shape[1]}], error [{self.err:4f}]"
-            )
+            if self.verbose:
+                print(
+                    f"GPTQCalibrator: finish_calibrate [{W.shape[0]}, {W.shape[1]}], error [{self.err:4f}]"
+                )
             return Q
 
         return None

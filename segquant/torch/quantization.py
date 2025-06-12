@@ -157,6 +157,7 @@ def _calib_linears(
     to_calib_linears: dict,
     calib_data_loader: torch.utils.data.DataLoader,
     device,
+    clear=True,
 ):
     hooks = []
     for name, module in model.named_modules():
@@ -181,6 +182,9 @@ def _calib_linears(
             )
     for h in hooks:
         h.remove()
+    
+    for l in tqdm(to_calib_linears.values(), desc="[Finishing Calibrate Linears]"):
+        l.finish_calibrate(clear=clear)
 
 def _search_linears(
     model: nn.Module,
@@ -189,16 +193,20 @@ def _search_linears(
     device,
 ):
     hooks = []
-    err_map = {k: 0 for k in to_search_linears}
+    err_map = {k: [] for k in to_search_linears}
     for name, module in model.named_modules():
         if isinstance(module, SegmentLinear) and name in to_search_linears:
 
             def get_hook(n):
                 def hook_fn(_mod, inp, _out, n=n):
                     if n in to_search_linears:
-                        real = to_search_linears[n].fake_forward(inp[0])
-                        cur = to_search_linears[n].forward(inp[0])
-                        err_map[n] += torch.norm(real - cur).item()
+                        real = to_search_linears[n].fake_forward(inp[0], chunked=True)
+                        cur = to_search_linears[n].forward(inp[0], chunked=True)
+                        diff_norms = [(r - c).norm().item() for r, c in zip(real, cur)]
+                        if not err_map[n]:
+                            err_map[n] = diff_norms
+                        else:
+                            err_map[n] = [a + b for a, b in zip(err_map[n], diff_norms)]
 
                 return hook_fn
 
@@ -217,7 +225,7 @@ def _search_linears(
         h.remove()
 
     for n in list(to_search_linears):
-        if to_search_linears[n].optimizer.process_step(err_map[n]):
+        if to_search_linears[n].optimizer.search_step(err_map[n]):
             del to_search_linears[n]
 
 def quantize(
@@ -319,6 +327,22 @@ def quantize(
         if verbose:
             print("start trace ...")
         _trace_linears(model, to_smooth_linears, calib_data_loader, device)
+
+    to_search_linears = {
+        k: v for k, v in to_calib_linears.items()
+        if v.optimizer.search_alpha
+    }
+
+    while to_search_linears:
+        if to_search_linears:
+            if verbose:
+                print("[search] start smooth ...")
+            _smooth_linears(to_search_linears)
+        if verbose:
+            print("[search] start calibrate ...")
+        _calib_linears(model, to_search_linears, calib_data_loader, device, clear=False)
+        _search_linears(model, to_search_linears, calib_data_loader, device)
+
     if to_smooth_linears:
         if verbose:
             print("start smooth ...")
@@ -327,12 +351,8 @@ def quantize(
         print("start calibrate ...")
     _calib_linears(model, to_calib_linears, calib_data_loader, device)
 
-    for l in tqdm(to_calib_linears.values(), desc="[Finishing Calibrate Linears]"):
-        l.finish_calibrate()
-
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-
     if verbose:
         print(model)
 

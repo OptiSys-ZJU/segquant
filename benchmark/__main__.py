@@ -29,23 +29,31 @@ quant_config = {
     "default": {
         "enable": True,
         "seglinear": True,
-        "search_patterns": [],
+        "search_patterns": SegPattern.all(),
         "real_quant": False,
         "opt": {
-            "type": Optimum.SVD,
-            "alpha": 1,
-            "low_rank": 32,
+            "type": Optimum.SMOOTH,
+            "alpha": 0.5,
+            "low_rank": 64,
             "cpu_storage": False,
+            "search_alpha_config": {
+                "enable": True,
+                "min": 0.0,
+                "max": 1.0,
+                "step": 0.1,
+            },
+            "verbose": False,
         },
         "calib": {
             "type": Calibrate.GPTQ,
             "cpu_storage": False,
+            "verbose": False,
         },
         "input_quant": {
             "type": DType.INT8,
             "axis": None,
             # "axis": -1, # per-token, input shape (..., in)
-            "dynamic": True,
+            # "dynamic": True,
         },
         "weight_quant": {
             "type": DType.INT8,

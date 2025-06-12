@@ -184,10 +184,10 @@ class SegmentLinear(nn.Module):
         input_chunks = self._chunk_x(input_data)
         self.optimizer.calibrate(input_chunks)
 
-    def finish_calibrate(self):
-        self.optimizer.finish_calibrate()
+    def finish_calibrate(self, **kwargs):
+        self.optimizer.finish_calibrate(**kwargs)
 
-    def fake_forward(self, x):
+    def fake_forward(self, x, chunked=False):
         input_chunks = self._chunk_x(x)
         quantized_output_chunks = self.optimizer.fake_forward(input_chunks)
         if self.seg_mode == "weight":
@@ -196,9 +196,12 @@ class SegmentLinear(nn.Module):
             res = sum(quantized_output_chunks)
         else:
             raise ValueError("seg_mode not found")
+
+        if chunked:
+            return quantized_output_chunks
         return (res + self.bias_data if self.bias else res)
 
-    def forward(self, x):
+    def forward(self, x, chunked=False):
         input_chunks = self._chunk_x(x)
         quantized_output_chunks = self.optimizer.forward(input_chunks)
         if self.seg_mode == "weight":
@@ -207,6 +210,9 @@ class SegmentLinear(nn.Module):
             res = sum(quantized_output_chunks)
         else:
             raise ValueError("seg_mode not found")
+
+        if chunked:
+            return quantized_output_chunks
         return (res + self.bias_data if self.bias else res)
 
 def create_segment_linear(

@@ -1,6 +1,8 @@
 from functools import partial
 from typing import List
+from collections import deque
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from segquant.layers import ext_dict
@@ -278,6 +280,8 @@ class SmoothOptimizer(BaseOptimizer):
         dual_scale=False,
         kernel_type=None,
         alpha=0.5,
+        search_alpha_config=None,
+        verbose=False,
         **kwargs,
     ):
         """
@@ -291,12 +295,22 @@ class SmoothOptimizer(BaseOptimizer):
             f"Lengths mismatch: input_calibrators={len(input_calibrators)}, " \
             f"weight_calibrators={len(weight_calibrators)}, " \
             f"weight_chunks={len(weight_chunks)}"
-        super().__init__(seg_mode, chunks, chunksizes, weight_chunks, input_calibrators, weight_calibrators, real_quant, dual_scale, kernel_type)
+        super().__init__(
+            seg_mode,
+            chunks,
+            chunksizes,
+            weight_chunks,
+            input_calibrators,
+            weight_calibrators,
+            real_quant,
+            dual_scale,
+            kernel_type,
+        )
 
         self.max_w = []
         self.max_x = []
         self.s = [None] * self.chunks
-        self.alpha = alpha
+        self.alpha = [alpha] * self.chunks
         self.has_smoothed = False
 
         self.input_quantized_indices = range(self.chunks)
@@ -315,6 +329,23 @@ class SmoothOptimizer(BaseOptimizer):
 
         # for fake forward
         self.fake_weight_chunks = [t.clone() for t in self.weight_chunks]
+
+        self.verbose = verbose
+
+        if search_alpha_config is None or not search_alpha_config['enable']:
+            self.search_alpha = False
+        else:
+            # alpha search
+            self.search_alpha = True
+            self.opt_err = [float('inf')] * self.chunks
+            self.opt_alpha = [None] * self.chunks
+            alpha_range = np.arange(
+                search_alpha_config["min"],
+                search_alpha_config["max"] + 1e-8,
+                search_alpha_config["step"],
+            )
+            self.candidate_alphas = [deque(alpha_range) for _ in range(self.chunks)]
+            self.alpha = [alphas.popleft() for alphas in self.candidate_alphas]
 
     def __repr__(self):
         if self.real_quant:
@@ -410,7 +441,7 @@ class SmoothOptimizer(BaseOptimizer):
         max_x, max_w = self._broadcast_lists(self.max_x, self.max_w)
         for i in range(self.chunks):
             epsilon = 1.0 / (1 << 31)
-            s = (max_x[i] ** self.alpha) / (max_w[i] ** (1 - self.alpha))
+            s = (max_x[i] ** self.alpha[i]) / (max_w[i] ** (1 - self.alpha[i]))
             s = torch.where(s <= epsilon, torch.ones_like(s), s)
             self.s[i] = torch.clamp(s.to(dtype=torch.float32), min=1e-4, max=1e4)
 
@@ -443,21 +474,12 @@ class SmoothOptimizer(BaseOptimizer):
             )
         return smoothed_input_chunks
 
-    def _reset(self):
-        self.weight_chunks = [
-            t.clone().to(self.weight_chunks[0].device) for t in self.fake_weight_chunks
-        ]
-        for input_calibrator in self.input_calibrators:
-            input_calibrator.reset()
-        for weight_calibrator in self.weight_calibrators:
-            weight_calibrator.reset()
-
     def calibrate(self, input_chunks):
         assert self.has_smoothed, 'SmoothOptimizer: linear is not smoothed'
         input_chunks = self._smooth_x(input_chunks) # len == chunks
         super().calibrate(input_chunks)
 
-    def finish_calibrate(self):
+    def finish_calibrate(self, clear=True):
         for i, input_calibrator in enumerate(self.input_calibrators):
             input_calibrator.finish_calibrate()
 
@@ -469,10 +491,16 @@ class SmoothOptimizer(BaseOptimizer):
             self.input_chunk_indices = range(self.chunks)
         self.has_calibrated = True
 
-        # clear old weights
-        del self.fake_weight_chunks
+        if clear:
+            # clear old weights
+            del self.fake_weight_chunks
 
     def fake_forward(self, input_chunks):
+        if self.has_calibrated and self.seg_mode == 'weight':
+            input_chunk_indices = [0] * self.chunks
+        else:
+            input_chunk_indices = self.input_chunk_indices
+
         if self.has_smoothed:
             weight_chunks = self.fake_weight_chunks
         else:
@@ -486,7 +514,7 @@ class SmoothOptimizer(BaseOptimizer):
 
         quantized_output_chunks = [
             F.linear(
-                input_chunks[self.input_chunk_indices[i]],
+                input_chunks[input_chunk_indices[i]],
                 weight_chunks[self.weight_chunk_indices[i]],
             )
             for i in range(self.chunks)
@@ -509,6 +537,59 @@ class SmoothOptimizer(BaseOptimizer):
 
         return quantized_output_chunks
 
+    def search_step(self, errs):
+        assert len(errs) == self.chunks, "errlist length must be chunks"
+
+        for i in range(self.chunks):
+            this_err = errs[i]
+            if self.verbose:
+                print(
+                    f"Chunk {i}: current err={this_err}, best err={self.opt_err[i]}, best alpha={self.opt_alpha[i]}"
+                )
+            if this_err < self.opt_err[i]:
+                self.opt_err[i] = this_err
+                self.opt_alpha[i] = self.alpha[i]
+                if self.verbose:
+                    print(f"Chunk {i}: Updated best err to {this_err} with alpha={self.alpha[i]}")
+
+        # iterate alpha
+        self.alpha = [alphas.popleft() for alphas in self.candidate_alphas]
+        if self.verbose:
+            print(f"Next alphas to try: {self.alpha}")
+
+        # reset optimizer
+        self._reset()
+
+        if all(len(alphas) == 0 for alphas in self.candidate_alphas):
+            self._finish_search()
+            return True
+        return False
+
+    def _finish_search(self):
+        if self.verbose:
+            print(f"Best alphas found: {self.opt_alpha}")
+        self.alpha = self.opt_alpha
+        del self.opt_alpha
+        del self.opt_err
+        del self.candidate_alphas
+
+    def _reset(self):
+        if self.seg_mode == 'input':
+            self.fake_weight_chunks = [torch.cat(self.fake_weight_chunks, dim=-1)]
+        elif self.seg_mode == 'weight':
+            self.input_chunk_indices = [0] * self.chunks
+
+        self.weight_chunks = [
+            t.clone().to(self.weight_chunks[0].device) for t in self.fake_weight_chunks
+        ]
+        for input_calibrator in self.input_calibrators:
+            input_calibrator.reset()
+        for weight_calibrator in self.weight_calibrators:
+            weight_calibrator.reset()
+        self.has_smoothed = False
+        self.has_calibrated = False
+
+
 @OptimizerRegistry.register("svd")
 class SVDOptimizer(SmoothOptimizer):
     def __init__(
@@ -525,6 +606,8 @@ class SVDOptimizer(SmoothOptimizer):
         alpha=0.5,
         low_rank=32,
         cpu_storage=False,
+        search_alpha_config=None,
+        verbose=False,
         **kwargs,
     ):
         super().__init__(
@@ -538,6 +621,8 @@ class SVDOptimizer(SmoothOptimizer):
             dual_scale,
             kernel_type,
             alpha,
+            search_alpha_config,
+            verbose,
         )
 
         self.low_rank = low_rank
@@ -605,19 +690,19 @@ class SVDOptimizer(SmoothOptimizer):
                 dtype = smooth_weight_chunk.dtype
                 l1 = us.to(device=device, dtype=dtype)
                 l2 = vt.to(device=device, dtype=dtype)
+                weight_svd = high_pre - us @ vt  # still on CPU
+                weight_svd = weight_svd.t().to(device=device, dtype=dtype)
                 self.l1s[idx] = l1
                 self.l2s[idx] = l2
-                weight_svd = this_weight.t() - us @ vt  # still on CPU
-                weight_svd = weight_svd.t().to(device=device, dtype=dtype)
             else:
                 device = smooth_weight_chunk.device
                 dtype = smooth_weight_chunk.dtype
                 l1 = us.to(device=device, dtype=dtype)
                 l2 = vt.to(device=device, dtype=dtype)
+                weight_svd = high_pre - us @ vt
+                weight_svd = weight_svd.t().to(device=device, dtype=dtype)
                 self.l1s[idx] = l1
                 self.l2s[idx] = l2
-                weight_svd = this_weight.t() - l1 @ l2
-                weight_svd = weight_svd.t()
 
             svd_weight_chunk.append(weight_svd)
 
@@ -633,6 +718,11 @@ class SVDOptimizer(SmoothOptimizer):
         super().calibrate(input_chunks)
 
     def fake_forward(self, input_chunks):
+        if self.has_calibrated and self.seg_mode == 'weight':
+            input_chunk_indices = [0] * self.chunks
+        else:
+            input_chunk_indices = self.input_chunk_indices
+
         if self.has_svd:
             weight_chunks = self.fake_weight_chunks
         else:
@@ -646,7 +736,7 @@ class SVDOptimizer(SmoothOptimizer):
 
         quantized_output_chunks = [
             F.linear(
-                input_chunks[self.input_chunk_indices[i]],
+                input_chunks[input_chunk_indices[i]],
                 weight_chunks[self.weight_chunk_indices[i]],
             )
             for i in range(self.chunks)
