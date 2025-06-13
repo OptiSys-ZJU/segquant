@@ -344,8 +344,9 @@ class BasicTransformerBlock(nn.Module):
             attn_output = gate_msa * attn_output
 
         hidden_states = attn_output + hidden_states
-        if hidden_states.ndim == 4:
-            hidden_states = hidden_states.squeeze(1)
+        if torch._C._get_tracing_state() is None and not isinstance(hidden_states, torch.fx.Proxy):
+            if hidden_states.dim() == 4:
+                hidden_states = hidden_states.squeeze(1)
 
         # 1.2 GLIGEN Control
         if gligen_kwargs is not None:
@@ -403,8 +404,9 @@ class BasicTransformerBlock(nn.Module):
             ff_output = gate_mlp * ff_output
 
         hidden_states = ff_output + hidden_states
-        if hidden_states.ndim == 4:
-            hidden_states = hidden_states.squeeze(1)
+        if torch._C._get_tracing_state() is None and not isinstance(hidden_states, torch.fx.Proxy):
+            if hidden_states.dim() == 4:
+                hidden_states = hidden_states.squeeze(1)
 
         return hidden_states
 
