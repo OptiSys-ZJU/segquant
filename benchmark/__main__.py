@@ -32,15 +32,15 @@ quant_config = {
     "default": {
         "enable": True,
         "seglinear": True,
-        "search_patterns": [],
+        "search_patterns": SegPattern.all(),
         "real_quant": False,
         "opt": {
-            "type": Optimum.SVD,
+            "type": Optimum.SMOOTH,
             "alpha": 0.5,
             "low_rank": 64,
             "cpu_storage": False,
             "search_alpha_config": {
-                "enable": True,
+                "enable": False,
                 "min": 0.0,
                 "max": 1.0,
                 "step": 0.1,
@@ -48,20 +48,20 @@ quant_config = {
             "verbose": True,
         },
         "calib": {
-            "type": Calibrate.GPTQ,
+            "type": Calibrate.AMAX,
             "cpu_storage": False,
             "verbose": False,
         },
         "input_quant": {
-            "type": DType.FP16,
+            "type": DType.INT8,
             "axis": None,
             # "axis": -1, # per-token, input shape (..., in)
             # "dynamic": True,
         },
         "weight_quant": {
-            "type": DType.INT4,
-            # "axis": None,
-            "axis": 1, # per-channel, weight shape (out, in)
+            "type": DType.INT8,
+            "axis": None,
+            # "axis": 1, # per-channel, weight shape (out, in)
         },
     },
 }
@@ -246,7 +246,7 @@ def run_real_module():
             model,
             os.path.join(root_dir, "pics/quant"),
             dataset.get_dataloader(),
-            # latents,
+            latents,
             max_num=max_num,
             controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
             guidance_scale=calib_args["guidance_scale"],
@@ -257,7 +257,7 @@ def run_real_module():
 
 def run_any_module():
     with torch.no_grad():
-        root_dir = "tmp_test_linear"
+        root_dir = "sdxl_test_linear"
         os.makedirs(root_dir, exist_ok=True)
 
         dataset = DCIDataset(
@@ -283,8 +283,8 @@ def run_any_module():
                 quantized_model = torch.load(model_target_path, weights_only=False)
             return quantized_model
 
-        model_type = 'sd3'
-        quant_layer = 'dit'
+        model_type = 'sdxl'
+        quant_layer = 'unet'
 
         latents = get_randn_latents(model_type)
         model_quant_path = os.path.join(root_dir, f"model/{model_type}/{quant_layer}/model_quant.pt")

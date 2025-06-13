@@ -1160,12 +1160,11 @@ class StableDiffusionXLModel(nn.Module):
                 if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
                     added_cond_kwargs["image_embeds"] = image_embeds
                 noise_pred = self.unet(
-                    latent_model_input,
-                    t,
+                    sample=latent_model_input,
+                    timestep=t,
                     encoder_hidden_states=prompt_embeds,
-                    timestep_cond=timestep_cond,
-                    cross_attention_kwargs=self.cross_attention_kwargs,
                     added_cond_kwargs=added_cond_kwargs,
+                    timestep_cond=timestep_cond,
                 )[0]
 
                 # perform guidance

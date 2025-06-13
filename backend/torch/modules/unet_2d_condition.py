@@ -14,6 +14,7 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.fx
 import torch.nn as nn
 import json
 from types import SimpleNamespace
@@ -48,6 +49,9 @@ from backend.torch.layers.unet import (
     get_mid_block,
     get_up_block,
 )
+
+torch.fx.wrap("len")
+torch.fx.wrap("int")
 
 class UNet2DConditionModel(nn.Module):
     r"""
@@ -1011,15 +1015,15 @@ class UNet2DConditionModel(nn.Module):
             aug_emb = self.add_embedding(text_embs, image_embs)
         elif self.config.addition_embed_type == "text_time":
             # SDXL - style
-            if "text_embeds" not in added_cond_kwargs:
-                raise ValueError(
-                    f"{self.__class__} has the config param `addition_embed_type` set to 'text_time' which requires the keyword argument `text_embeds` to be passed in `added_cond_kwargs`"
-                )
+            # if "text_embeds" not in added_cond_kwargs:
+            #     raise ValueError(
+            #         f"{self.__class__} has the config param `addition_embed_type` set to 'text_time' which requires the keyword argument `text_embeds` to be passed in `added_cond_kwargs`"
+            #     )
             text_embeds = added_cond_kwargs.get("text_embeds")
-            if "time_ids" not in added_cond_kwargs:
-                raise ValueError(
-                    f"{self.__class__} has the config param `addition_embed_type` set to 'text_time' which requires the keyword argument `time_ids` to be passed in `added_cond_kwargs`"
-                )
+            # if "time_ids" not in added_cond_kwargs:
+            #     raise ValueError(
+            #         f"{self.__class__} has the config param `addition_embed_type` set to 'text_time' which requires the keyword argument `time_ids` to be passed in `added_cond_kwargs`"
+            #     )
             time_ids = added_cond_kwargs.get("time_ids")
             time_embeds = self.add_time_proj(time_ids.flatten())
             time_embeds = time_embeds.reshape((text_embeds.shape[0], -1))
@@ -1086,11 +1090,11 @@ class UNet2DConditionModel(nn.Module):
         sample: torch.Tensor,
         timestep: Union[torch.Tensor, float, int],
         encoder_hidden_states: torch.Tensor,
+        added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
         class_labels: Optional[torch.Tensor] = None,
         timestep_cond: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
-        added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
         down_block_additional_residuals: Optional[Tuple[torch.Tensor]] = None,
         mid_block_additional_residual: Optional[torch.Tensor] = None,
         down_intrablock_additional_residuals: Optional[Tuple[torch.Tensor]] = None,
@@ -1212,19 +1216,19 @@ class UNet2DConditionModel(nn.Module):
         sample = self.conv_in(sample)
 
         # 2.5 GLIGEN position net
-        if cross_attention_kwargs is not None and cross_attention_kwargs.get("gligen", None) is not None:
-            cross_attention_kwargs = cross_attention_kwargs.copy()
-            gligen_args = cross_attention_kwargs.pop("gligen")
-            cross_attention_kwargs["gligen"] = {"objs": self.position_net(**gligen_args)}
+        # if cross_attention_kwargs is not None and cross_attention_kwargs.get("gligen", None) is not None:
+        #     cross_attention_kwargs = cross_attention_kwargs.copy()
+        #     gligen_args = cross_attention_kwargs.pop("gligen")
+        #     cross_attention_kwargs["gligen"] = {"objs": self.position_net(**gligen_args)}
 
         # 3. down
         # we're popping the `scale` instead of getting it because otherwise `scale` will be propagated
         # to the internal blocks and will raise deprecation warnings. this will be confusing for our users.
-        if cross_attention_kwargs is not None:
-            cross_attention_kwargs = cross_attention_kwargs.copy()
-            lora_scale = cross_attention_kwargs.pop("scale", 1.0)
-        else:
-            lora_scale = 1.0
+        # if cross_attention_kwargs is not None:
+        #     cross_attention_kwargs = cross_attention_kwargs.copy()
+        #     lora_scale = cross_attention_kwargs.pop("scale", 1.0)
+        # else:
+        #     lora_scale = 1.0
 
         is_controlnet = mid_block_additional_residual is not None and down_block_additional_residuals is not None
         # using new arg down_intrablock_additional_residuals for T2I-Adapters, to distinguish from controlnets
@@ -1249,8 +1253,8 @@ class UNet2DConditionModel(nn.Module):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
                 # For t2i-adapter CrossAttnDownBlock2D
                 additional_residuals = {}
-                if is_adapter and len(down_intrablock_additional_residuals) > 0:
-                    additional_residuals["additional_residuals"] = down_intrablock_additional_residuals.pop(0)
+                # if is_adapter and len(down_intrablock_additional_residuals) > 0:
+                #     additional_residuals["additional_residuals"] = down_intrablock_additional_residuals.pop(0)
 
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
@@ -1263,21 +1267,21 @@ class UNet2DConditionModel(nn.Module):
                 )
             else:
                 sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
-                if is_adapter and len(down_intrablock_additional_residuals) > 0:
-                    sample += down_intrablock_additional_residuals.pop(0)
+                # if is_adapter and len(down_intrablock_additional_residuals) > 0:
+                #     sample += down_intrablock_additional_residuals.pop(0)
 
             down_block_res_samples += res_samples
 
-        if is_controlnet:
-            new_down_block_res_samples = ()
+        # if is_controlnet:
+        #     new_down_block_res_samples = ()
 
-            for down_block_res_sample, down_block_additional_residual in zip(
-                down_block_res_samples, down_block_additional_residuals
-            ):
-                down_block_res_sample = down_block_res_sample + down_block_additional_residual
-                new_down_block_res_samples = new_down_block_res_samples + (down_block_res_sample,)
+        #     for down_block_res_sample, down_block_additional_residual in zip(
+        #         down_block_res_samples, down_block_additional_residuals
+        #     ):
+        #         down_block_res_sample = down_block_res_sample + down_block_additional_residual
+        #         new_down_block_res_samples = new_down_block_res_samples + (down_block_res_sample,)
 
-            down_block_res_samples = new_down_block_res_samples
+        #     down_block_res_samples = new_down_block_res_samples
 
         # 4. mid
         if self.mid_block is not None:
@@ -1294,12 +1298,12 @@ class UNet2DConditionModel(nn.Module):
                 sample = self.mid_block(sample, emb)
 
             # To support T2I-Adapter-XL
-            if (
-                is_adapter
-                and len(down_intrablock_additional_residuals) > 0
-                and sample.shape == down_intrablock_additional_residuals[0].shape
-            ):
-                sample += down_intrablock_additional_residuals.pop(0)
+            # if (
+            #     is_adapter
+            #     and len(down_intrablock_additional_residuals) > 0
+            #     and sample.shape == down_intrablock_additional_residuals[0].shape
+            # ):
+            #     sample += down_intrablock_additional_residuals.pop(0)
 
         if is_controlnet:
             sample = sample + mid_block_additional_residual

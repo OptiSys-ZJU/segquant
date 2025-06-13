@@ -80,15 +80,25 @@ class SegQuantPatternDetector:
             "block_controlnet_hidden_states",
             "controlnet_block_samples",
             "controlnet_single_block_samples",
+            "down_block_additional_residuals",
+            "down_intrablock_additional_residuals",
+            "added_cond_kwargs",
+            "cross_attention_kwargs",
         ]
 
         for key in expand_keys:
             value = concrete.get(key, None)
-            if isinstance(value, (list, tuple)):
+            if isinstance(value, (list, tuple, dict)):
                 concrete.update(
                     {f"{key}_{i+1}": tensor for i, tensor in enumerate(value)}
                 )
                 del concrete[key]
+        
+        # for sdxl
+        concrete['timestep_cond'] = None
+        concrete['cross_attention_kwargs'] = None
+        concrete['attention_mask'] = None
+        concrete['encoder_attention_mask'] = None
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")

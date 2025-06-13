@@ -5,6 +5,7 @@ matplotlib>=3.10,<3.11
 numpy>=1.26,<2.0
 opencv-python>=4.11.0.86,<5.0
 pillow>=10.3,<11.0
+protobuf>=5.27
 pytorch-fid>=0.3.0,<0.4
 safetensors>=0.4.4,<0.5
 scikit-image>=0.25,<0.26
