@@ -11,6 +11,6 @@ scikit-image>=0.25,<0.26
 scipy>=1.14,<1.15
 torch>=2.6,<2.7
 torchvision>=0.21,<0.22
-transformers>=4.42,<5.0
+transformers==4.42.4
 tqdm>=4.66,<5.0
 zstandard>=0.23,<0.24
