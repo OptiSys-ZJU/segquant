@@ -615,8 +615,7 @@ class SVDOptimizer(SmoothOptimizer):
 
         for idx, smooth_weight_chunk in enumerate(smooth_weight_chunks):
             chunk = smooth_weight_chunk.t()
-            with torch.amp.autocast(enabled=False):
-                u, s, vt = torch.linalg.svd(chunk.to(torch.float64), full_matrices=False)
+            u, s, vt = torch.linalg.svd(chunk.to(torch.float64), full_matrices=False)
 
             if u.shape[1] < self.low_rank or vt.shape[0] < self.low_rank:
                 raise ValueError(
