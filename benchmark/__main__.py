@@ -28,19 +28,20 @@ calib_args = {
     "shuffle": False,
 }
 
+per_layer_mode = False
+
 quant_config = {
     "default": {
         "enable": True,
         "seglinear": True,
-        "search_patterns": SegPattern.all(),
+        "search_patterns": [],
         "real_quant": False,
         "opt": {
-            "type": Optimum.SMOOTH,
+            "type": Optimum.SVD,
             "alpha": 0.5,
             "low_rank": 64,
-            "cpu_storage": False,
             "search_alpha_config": {
-                "enable": False,
+                "enable": True,
                 "min": 0.0,
                 "max": 1.0,
                 "step": 0.1,
@@ -48,20 +49,20 @@ quant_config = {
             "verbose": True,
         },
         "calib": {
-            "type": Calibrate.AMAX,
+            "type": Calibrate.GPTQ,
             "cpu_storage": False,
             "verbose": False,
         },
         "input_quant": {
             "type": DType.INT8,
-            "axis": None,
-            # "axis": -1, # per-token, input shape (..., in)
-            # "dynamic": True,
+            # "axis": None,
+            "axis": -1, # per-token, input shape (..., in)
+            "dynamic": True,
         },
         "weight_quant": {
-            "type": DType.INT8,
-            "axis": None,
-            # "axis": 1, # per-channel, weight shape (out, in)
+            "type": DType.INT4,
+            # "axis": None,
+            "axis": 1, # per-channel, weight shape (out, in)
         },
     },
 }
@@ -182,7 +183,7 @@ def get_quantized_model(model_type: str, quant_layer: str, config, dataset, cali
 
     calib_loader = calibset.get_dataloader(batch_size=1)
     model = get_part_model(model_type, quant_layer)
-    return quantize(model, calib_loader, config, True)
+    return quantize(model, calib_loader, config, per_layer_mode=per_layer_mode, verbose=True)
 
 def get_full_model_by_quantized_part(model_type, part_layer, model_part):
     if model_type == 'flux':
@@ -257,10 +258,10 @@ def run_real_module():
 
 def run_any_module():
     with torch.no_grad():
-        root_dir = "sdxl_test_linear"
+        root_dir = "tmp_test_linear"
         os.makedirs(root_dir, exist_ok=True)
 
-        dataset = DCIDataset(
+        dataset = COCODataset(
             path="../dataset/controlnet_datasets/COCO-Caption2017-canny", cache_size=16
         )
 
@@ -283,8 +284,8 @@ def run_any_module():
                 quantized_model = torch.load(model_target_path, weights_only=False)
             return quantized_model
 
-        model_type = 'sdxl'
-        quant_layer = 'unet'
+        model_type = 'sd3'
+        quant_layer = 'dit'
 
         latents = get_randn_latents(model_type)
         model_quant_path = os.path.join(root_dir, f"model/{model_type}/{quant_layer}/model_quant.pt")

@@ -110,9 +110,6 @@ class BaseOptimizer:
 
         self.has_calibrated = True
 
-    def fake_forward(self, input_chunks):
-        pass
-
     def process_step(self, err):
         pass
 
@@ -223,7 +220,7 @@ class DefaultOptimizer(BaseOptimizer):
         ):
             weight_calibrator.calibrate(weight_chunk, input_data=input_copy_or_chunk)
 
-    def finish_calibrate(self, **kwargs):
+    def finish_calibrate(self):
         super().finish_calibrate()
         if self.seg_mode == 'input':
             # weights need to be splited when input enabled
@@ -231,27 +228,7 @@ class DefaultOptimizer(BaseOptimizer):
             self.weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
             self.weight_chunk_indices = range(self.chunks)
 
-    def fake_forward(self, input_chunks):
-        if self.seg_mode == 'input':
-            weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
-        elif self.seg_mode == 'weight':
-            weight_chunks = self.weight_chunks
-        else:
-            raise ValueError("seg_mode not found")
-
-        quantized_output_chunks = [
-            F.linear(
-                input_chunks[self.input_chunk_indices[i]],
-                weight_chunks[self.weight_chunk_indices[i]],
-            )
-            for i in range(self.chunks)
-        ]
-        return quantized_output_chunks
-
     def forward(self, input_chunks):
-        if not self.has_calibrated:
-            return self.fake_forward(input_chunks)
-
         funcs = self._get_funcs(self.input_quantized_indices, self.weight_quantized_indices)
         quantized_output_chunks = [
             funcs[i](
@@ -326,9 +303,6 @@ class SmoothOptimizer(BaseOptimizer):
             raise ValueError("seg_mode not found")
 
         self.has_traced_w = False
-
-        # for fake forward
-        self.fake_weight_chunks = [t.clone() for t in self.weight_chunks]
 
         self.verbose = verbose
 
@@ -449,7 +423,6 @@ class SmoothOptimizer(BaseOptimizer):
             # weights need to be splitted when input enabled
             assert len(self.weight_chunks) == 1, "weight_chunks size not 1"
             self.weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
-            self.fake_weight_chunks = self.fake_weight_chunks[0].split(self.chunksizes, dim=-1)
         elif self.seg_mode == 'weight':
             pass
         else:
@@ -479,7 +452,16 @@ class SmoothOptimizer(BaseOptimizer):
         input_chunks = self._smooth_x(input_chunks) # len == chunks
         super().calibrate(input_chunks)
 
-    def finish_calibrate(self, clear=True):
+    def _clean(self):
+        for i, input_calibrator in enumerate(self.input_calibrators):
+            self.input_calibrators[i] = input_calibrator.quantizer
+        for i, weight_calibrator in enumerate(self.weight_calibrators):
+            self.weight_calibrators[i] = weight_calibrator.quantizer
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def finish_calibrate(self):
         for i, input_calibrator in enumerate(self.input_calibrators):
             input_calibrator.finish_calibrate()
 
@@ -491,40 +473,10 @@ class SmoothOptimizer(BaseOptimizer):
             self.input_chunk_indices = range(self.chunks)
         self.has_calibrated = True
 
-        if clear:
-            # clear old weights
-            del self.fake_weight_chunks
-
-    def fake_forward(self, input_chunks):
-        if self.has_calibrated and self.seg_mode == 'weight':
-            input_chunk_indices = [0] * self.chunks
-        else:
-            input_chunk_indices = self.input_chunk_indices
-
-        if self.has_smoothed:
-            weight_chunks = self.fake_weight_chunks
-        else:
-            # when tracing
-            if self.seg_mode == 'input':
-                weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
-            elif self.seg_mode == 'weight':
-                weight_chunks = self.weight_chunks
-            else:
-                raise ValueError("seg_mode not found")
-
-        quantized_output_chunks = [
-            F.linear(
-                input_chunks[input_chunk_indices[i]],
-                weight_chunks[self.weight_chunk_indices[i]],
-            )
-            for i in range(self.chunks)
-        ]
-        return quantized_output_chunks
+        if not self.search_alpha:
+            self._clean()
 
     def forward(self, input_chunks):
-        if not self.has_calibrated:
-            return self.fake_forward(input_chunks)
-
         funcs = self._get_funcs(self.input_quantized_indices, self.weight_quantized_indices)
         input_chunks = self._smooth_x(input_chunks)
         quantized_output_chunks = [
@@ -537,28 +489,27 @@ class SmoothOptimizer(BaseOptimizer):
 
         return quantized_output_chunks
 
-    def search_step(self, errs):
+    def search_step(self, errs, origin_weight):
         assert len(errs) == self.chunks, "errlist length must be chunks"
 
         for i in range(self.chunks):
             this_err = errs[i]
-            if self.verbose:
-                print(
-                    f"Chunk {i}: current err={this_err}, best err={self.opt_err[i]}, best alpha={self.opt_alpha[i]}"
-                )
             if this_err < self.opt_err[i]:
                 self.opt_err[i] = this_err
                 self.opt_alpha[i] = self.alpha[i]
-                if self.verbose:
-                    print(f"Chunk {i}: Updated best err to {this_err} with alpha={self.alpha[i]}")
+            
+            if self.verbose:
+                print(
+                    f"Chunk {i}: current err={this_err:.4f}, best err={self.opt_err[i]:.4f}, best alpha={self.opt_alpha[i]:.4f}"
+                )
 
         # iterate alpha
         self.alpha = [alphas.popleft() for alphas in self.candidate_alphas]
         if self.verbose:
-            print(f"Next alphas to try: {self.alpha}")
+            print(f"Next alphas to try: {self.alpha[0]:.4f}")
 
         # reset optimizer
-        self._reset()
+        self._reset(origin_weight=origin_weight)
 
         if all(len(alphas) == 0 for alphas in self.candidate_alphas):
             self._finish_search()
@@ -572,16 +523,17 @@ class SmoothOptimizer(BaseOptimizer):
         del self.opt_alpha
         del self.opt_err
         del self.candidate_alphas
+        self._clean()
 
-    def _reset(self):
-        if self.seg_mode == 'input':
-            self.fake_weight_chunks = [torch.cat(self.fake_weight_chunks, dim=-1)]
-        elif self.seg_mode == 'weight':
+    def _reset(self, origin_weight):
+        if self.seg_mode == 'weight':
             self.input_chunk_indices = [0] * self.chunks
+            weight_chunks = origin_weight.split(self.chunksizes, dim=0)
+            for i, w in enumerate(self.weight_chunks):
+                w.copy_(weight_chunks[i])
+        elif self.seg_mode == 'input':
+            self.weight_chunks = [origin_weight.clone()]
 
-        self.weight_chunks = [
-            t.clone().to(self.weight_chunks[0].device) for t in self.fake_weight_chunks
-        ]
         for input_calibrator in self.input_calibrators:
             input_calibrator.reset()
         for weight_calibrator in self.weight_calibrators:
@@ -605,7 +557,6 @@ class SVDOptimizer(SmoothOptimizer):
         kernel_type=None,
         alpha=0.5,
         low_rank=32,
-        cpu_storage=False,
         search_alpha_config=None,
         verbose=False,
         **kwargs,
@@ -630,9 +581,6 @@ class SVDOptimizer(SmoothOptimizer):
         self.l2s = [None] * self.chunks
         self.has_svd = False
         self.device = self.weight_chunks[0].device
-        self.cpu_storage = cpu_storage
-        if self.cpu_storage:
-            print('[Warning] SVDOptimizer set CPU Storage.')
 
     def __repr__(self):
         if self.real_quant:
@@ -666,14 +614,9 @@ class SVDOptimizer(SmoothOptimizer):
         svd_weight_chunk = []
 
         for idx, smooth_weight_chunk in enumerate(smooth_weight_chunks):
-            if self.cpu_storage:
-                this_weight = smooth_weight_chunk.to('cpu')
-                high_pre = this_weight.t().double()
-            else:
-                this_weight = smooth_weight_chunk
-                high_pre = this_weight.t().double()
-
-            u, s, vt = torch.linalg.svd(high_pre)
+            chunk = smooth_weight_chunk.t()
+            with torch.amp.autocast(enabled=False):
+                u, s, vt = torch.linalg.svd(chunk.to(torch.float64), full_matrices=False)
 
             if u.shape[1] < self.low_rank or vt.shape[0] < self.low_rank:
                 raise ValueError(
@@ -681,32 +624,20 @@ class SVDOptimizer(SmoothOptimizer):
                     f"dimensions {u.shape[1]} and {vt.shape[0]}."
                 )
 
-            us = u[:, :self.low_rank] * s[:self.low_rank]  # (m, r)
-            vt = vt[:self.low_rank, :]                      # (r, n)
+            us = u[:, :self.low_rank] * s[:self.low_rank] # (m, r)
+            vt = vt[:self.low_rank, :]                    # (r, n)
 
-            if self.cpu_storage:
-                # us, vt are on CPU now → move to device and store
-                device = self.device
-                dtype = smooth_weight_chunk.dtype
-                l1 = us.to(device=device, dtype=dtype)
-                l2 = vt.to(device=device, dtype=dtype)
-                weight_svd = high_pre - us @ vt  # still on CPU
-                weight_svd = weight_svd.t().to(device=device, dtype=dtype)
-                self.l1s[idx] = l1
-                self.l2s[idx] = l2
-            else:
-                device = smooth_weight_chunk.device
-                dtype = smooth_weight_chunk.dtype
-                l1 = us.to(device=device, dtype=dtype)
-                l2 = vt.to(device=device, dtype=dtype)
-                weight_svd = high_pre - us @ vt
-                weight_svd = weight_svd.t().to(device=device, dtype=dtype)
-                self.l1s[idx] = l1
-                self.l2s[idx] = l2
+            device, dtype = smooth_weight_chunk.device, smooth_weight_chunk.dtype
+            l1 = us.to(device=device, dtype=dtype)
+            l2 = vt.to(device=device, dtype=dtype)
+            self.l1s[idx] = l1
+            self.l2s[idx] = l2
 
+            weight_svd = (chunk.to(torch.float64) - us @ vt).t().to(device=device, dtype=dtype)
             svd_weight_chunk.append(weight_svd)
-
-        return svd_weight_chunk
+            del u, s, vt, us, chunk
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def smooth(self):
         super().smooth()
@@ -717,36 +648,7 @@ class SVDOptimizer(SmoothOptimizer):
         assert self.has_svd, 'SVDOptimizer: linear is not svd'
         super().calibrate(input_chunks)
 
-    def fake_forward(self, input_chunks):
-        if self.has_calibrated and self.seg_mode == 'weight':
-            input_chunk_indices = [0] * self.chunks
-        else:
-            input_chunk_indices = self.input_chunk_indices
-
-        if self.has_svd:
-            weight_chunks = self.fake_weight_chunks
-        else:
-            # when tracing
-            if self.seg_mode == 'input':
-                weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
-            elif self.seg_mode == 'weight':
-                weight_chunks = self.weight_chunks
-            else:
-                raise ValueError("seg_mode not found")
-
-        quantized_output_chunks = [
-            F.linear(
-                input_chunks[input_chunk_indices[i]],
-                weight_chunks[self.weight_chunk_indices[i]],
-            )
-            for i in range(self.chunks)
-        ]
-        return quantized_output_chunks
-
     def forward(self, input_chunks):
-        if not self.has_calibrated:
-            return self.fake_forward(input_chunks)
-
         funcs = self._get_funcs(self.input_quantized_indices, self.weight_quantized_indices)
         input_chunks = self._smooth_x(input_chunks)
         quantized_output_chunks = [

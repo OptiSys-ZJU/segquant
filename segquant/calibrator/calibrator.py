@@ -137,7 +137,7 @@ class GPTQCalibrator(BaseCalibrator):
 
     def reset(self):
         self.nsamples = 0
-        self.H = None
+        self.H.zero_()
         self.err = 0
         self.quantizer.reset()
 
@@ -151,8 +151,7 @@ class GPTQCalibrator(BaseCalibrator):
             input_data = input_data.reshape((-1, input_data.shape[-1]))
             this_batch = input_data.shape[0]
 
-        input_data = input_data.t()  # (b, in) -> (in, b)
-
+        input_data = input_data.to(dtype=torch.float32, device=x.device).t()  # (in, b)
         device = x.device
 
         if self.H is None:
@@ -162,20 +161,28 @@ class GPTQCalibrator(BaseCalibrator):
                 dtype=torch.float32,
             )
 
-        H = self.H.to(device=device) if self.cpu_storage else self.H
+        if self.cpu_storage:
+            if not hasattr(self, "_H_device") or self._H_device != device:
+                self._H_device = device
+                self._H_on_device = self.H.to(device)
+            H = self._H_on_device
+        else:
+            H = self.H
 
-        if input_data.dtype != torch.float32:
-            input_data = input_data.to(dtype=torch.float32)
-
-        input_data = input_data.to(device)
         H.mul_(self.nsamples / (self.nsamples + this_batch))
         self.nsamples += this_batch
 
-        input_data.mul_(math.sqrt(2 / self.nsamples))
+        scale = math.sqrt(2 / self.nsamples)
+        input_data = input_data * scale
+
         H.addmm_(input_data, input_data.t(), beta=1.0, alpha=1.0)
 
         if self.cpu_storage:
-            self.H.copy_(H.to(device='cpu'))
+            self.H.copy_(H.to('cpu'))
+            del H
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def finish_calibrate(self, weight_data=None):
         blocksize = self.blocksize

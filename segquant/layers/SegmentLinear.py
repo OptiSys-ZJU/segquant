@@ -1,6 +1,7 @@
 from typing import Literal
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from segquant.calibrator.calibrator import CalibratorRegistry
 from segquant.config import Calibrate, DType, Optimum
 from segquant.layers.splitter import BaseSplitter
@@ -40,6 +41,8 @@ class SegmentLinear(nn.Module):
                 f"Expected ({out_features}, {in_features}), "
                 f"but got {custom_weight_tensor.shape}."
             )
+            ### use new space
+            custom_weight_tensor = custom_weight_tensor.clone()
         else:
             custom_weight_tensor = torch.randn([self.out_features, self.in_features])
         self.bias = bias
@@ -114,12 +117,7 @@ class SegmentLinear(nn.Module):
         else:
             raise ValueError("opt_type not found")
 
-        if self.seg_mode == "input":
-            weight_chunks = [custom_weight_tensor]
-        elif self.seg_mode == "weight":
-            weight_chunks = self.splitter.split_weight(custom_weight_tensor)
-        else:
-            raise ValueError("seg_mode not found")
+        weight_chunks = self._chunk_w(custom_weight_tensor)
 
         self.optimizer = OptimizerRegistry.create(
             opt_type,
@@ -180,30 +178,43 @@ class SegmentLinear(nn.Module):
 
         return input_chunks
 
+    def _chunk_w(self, w):
+        if self.seg_mode == "input":
+            weight_chunks = [w]
+        elif self.seg_mode == "weight":
+            weight_chunks = self.splitter.split_weight(w)
+        else:
+            raise ValueError("seg_mode not found")
+        return weight_chunks
+
     def calibrate(self, input_data):
         input_chunks = self._chunk_x(input_data)
         self.optimizer.calibrate(input_chunks)
 
-    def finish_calibrate(self, **kwargs):
-        self.optimizer.finish_calibrate(**kwargs)
+    def finish_calibrate(self):
+        self.optimizer.finish_calibrate()
 
-    def fake_forward(self, x, chunked=False):
+    def segment_forward(self, x, weight):
+        # only for search
         input_chunks = self._chunk_x(x)
-        quantized_output_chunks = self.optimizer.fake_forward(input_chunks)
-        if self.seg_mode == "weight":
-            res = self.splitter.concat_output(quantized_output_chunks)
-        elif self.seg_mode == "input":
-            res = sum(quantized_output_chunks)
-        else:
-            raise ValueError("seg_mode not found")
+        weight_chunks = self._chunk_w(weight)
 
-        if chunked:
-            return quantized_output_chunks
-        return (res + self.bias_data if self.bias else res)
+        output_chunks = []
+        if self.seg_mode == 'weight':
+            for w in weight_chunks:
+                output_chunks.append(F.linear(input_chunks[0], w))
+        elif self.seg_mode == 'input':
+            this_weight_chunks = weight_chunks[0].split(self.chunksizes, dim=1)
+            for i, inp in enumerate(input_chunks):
+                output_chunks.append(F.linear(inp, this_weight_chunks[i]))
+
+        return output_chunks
 
     def forward(self, x, chunked=False):
         input_chunks = self._chunk_x(x)
         quantized_output_chunks = self.optimizer.forward(input_chunks)
+        if chunked:
+            return quantized_output_chunks
         if self.seg_mode == "weight":
             res = self.splitter.concat_output(quantized_output_chunks)
         elif self.seg_mode == "input":
@@ -211,8 +222,6 @@ class SegmentLinear(nn.Module):
         else:
             raise ValueError("seg_mode not found")
 
-        if chunked:
-            return quantized_output_chunks
         return (res + self.bias_data if self.bias else res)
 
 def create_segment_linear(
