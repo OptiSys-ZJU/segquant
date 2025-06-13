@@ -637,6 +637,7 @@ class SVDOptimizer(SmoothOptimizer):
             del u, s, vt, us, chunk
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+        return svd_weight_chunk
 
     def smooth(self):
         super().smooth()
