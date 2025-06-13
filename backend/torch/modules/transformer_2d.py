@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from typing import Any, Dict, Optional
-
+from types import SimpleNamespace
+import inspect
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -83,6 +84,12 @@ class Transformer2DModel(nn.Module):
         use_additional_conditions: Optional[bool] = None,
     ):
         super().__init__()
+
+        self.config = SimpleNamespace()
+        init_params = inspect.signature(self.__init__).parameters.keys()
+        for key, value in locals().items():
+            if key in init_params:
+                setattr(self.config, key, value)
 
         # Validate inputs.
         if patch_size is not None:

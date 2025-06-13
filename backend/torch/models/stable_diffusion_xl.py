@@ -15,6 +15,7 @@
 import inspect
 from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
+from tqdm import tqdm
 import torch.nn as nn
 from transformers import (
     CLIPImageProcessor,
@@ -218,7 +219,6 @@ class StableDiffusionXLModel(nn.Module):
             .half()
             .to(device)
         )
-
         text_encoder = CLIPTextModel.from_pretrained(
             f"{main_repo}/text_encoder"
         )
@@ -258,7 +258,7 @@ class StableDiffusionXLModel(nn.Module):
     ):
         super().__init__()
 
-        self.vae=vae,
+        self.vae=vae
         self.text_encoder=text_encoder
         self.text_encoder_2=text_encoder_2
         self.tokenizer=tokenizer
@@ -1145,7 +1145,7 @@ class StableDiffusionXLModel(nn.Module):
             ).to(device=device, dtype=latents.dtype)
 
         self._num_timesteps = len(timesteps)
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
+        with tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
                     continue
@@ -1233,8 +1233,5 @@ class StableDiffusionXLModel(nn.Module):
                 image = self.watermark.apply_watermark(image)
 
             image = self.image_processor.postprocess(image, output_type=output_type)
-
-        # Offload all models
-        self.maybe_free_model_hooks()
 
         return (image,)
