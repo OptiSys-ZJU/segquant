@@ -203,7 +203,6 @@ class GPTQCalibrator(BaseCalibrator):
             if self.cpu_storage
             else self.H
         )
-        del self.H
 
         diag_H = torch.diag(H)
         dead = diag_H < 1e-8
