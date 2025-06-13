@@ -64,14 +64,6 @@ quant_config = {
             "axis": 1, # per-channel, weight shape (out, in)
         },
     },
-
-    "transformer_blocks.*.norm1*": {
-        "enable": False,
-    },
-
-    "single_transformer_blocks.*.norm*": {
-        "enable": False,
-    }
 }
 
 def get_randn_latents(model_type):
@@ -278,6 +270,8 @@ def run_any_module():
         def quant_or_load(model_type: str, quant_layer: str, model_target_path, quant_config, latents):
             if not os.path.exists(model_target_path):
                 print(f"[INFO] {model_target_path} not found, start quantizing...")
+                print('quant config:')
+                print(quant_config)
                 quantized_model = get_quantized_model(
                     model_type, quant_layer, quant_config, dataset, calib_args, latents
                 )
@@ -310,4 +304,4 @@ def run_any_module():
         print("model_quant completed")
 
 if __name__ == "__main__":
-    run_real_module()
+    run_any_module()
