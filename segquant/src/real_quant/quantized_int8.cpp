@@ -29,11 +29,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Quantize weights to int8 format",
         py::arg("weights"),
         py::arg("outputs"),
-        py::arg("scale_w")
+        py::arg("scale_w").noconvert()
     );
 
-    m.def("real_quantized_quantize_weights_axis",
-        [](at::Tensor weights, at::Tensor outputs, int axis, at::Tensor scale_w) {
+    m.def("real_quantized_quantize_weights",
+        [](at::Tensor weights, at::Tensor outputs, at::Tensor scale_w) {
             TORCH_CHECK(weights.is_contiguous(), "weights must be contiguous");
             TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
 
@@ -45,12 +45,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             TORCH_CHECK(scale_w.is_cuda(), "scale_w must be a CUDA tensor");
             TORCH_CHECK(scale_w.dtype() == at::kFloat, "scale_w must be Float");
 
-            real_quantized_quantize_weights_axis<int8_t>(weights, outputs, axis, scale_w);
+            real_quantized_quantize_weights_axis<int8_t>(weights, outputs, scale_w);
         },
         "Quantize weights to int8 format with axis",
         py::arg("weights"),
         py::arg("outputs"),
-        py::arg("axis"),
         py::arg("scale_w")
     );
 
@@ -59,6 +58,67 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
             TORCH_CHECK(inputs.is_cuda(), "inputs must be a CUDA tensor");
             TORCH_CHECK(weights.dtype() == at::kChar, "weights tensor must be int8");
+
+            return real_quantized_gemm_scaled<int8_t>(inputs, weights, scale_x, scale_w);
+        },
+        "Run scaled int8 GEMM",
+        py::arg("inputs"),
+        py::arg("weights"),
+        py::arg("scale_x").noconvert(),
+        py::arg("scale_w").noconvert()
+    );
+
+    m.def("real_quantized_gemm_scaled",
+        [](at::Tensor inputs, at::Tensor weights, float scale_x, at::Tensor scale_w) {
+            TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
+            TORCH_CHECK(inputs.is_cuda(), "inputs must be a CUDA tensor");
+            TORCH_CHECK(weights.dtype() == at::kChar, "weights tensor must be int8");
+
+            TORCH_CHECK(scale_w.is_contiguous(), "scale_w must be contiguous");
+            TORCH_CHECK(scale_w.is_cuda(), "scale_w must be a CUDA tensor");
+            TORCH_CHECK(scale_w.dtype() == at::kFloat, "scale_w must be Float");
+
+            return real_quantized_gemm_scaled<int8_t>(inputs, weights, scale_x, scale_w);
+        },
+        "Run scaled int8 GEMM",
+        py::arg("inputs"),
+        py::arg("weights"),
+        py::arg("scale_x").noconvert(),
+        py::arg("scale_w")
+    );
+
+    m.def("real_quantized_gemm_scaled",
+        [](at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, float scale_w) {
+            TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
+            TORCH_CHECK(inputs.is_cuda(), "inputs must be a CUDA tensor");
+            TORCH_CHECK(weights.dtype() == at::kChar, "weights tensor must be int8");
+
+            TORCH_CHECK(scale_x.is_contiguous(), "scale_x must be contiguous");
+            TORCH_CHECK(scale_x.is_cuda(), "scale_x must be a CUDA tensor");
+            TORCH_CHECK(scale_x.dtype() == at::kFloat, "scale_x must be Float");
+
+            return real_quantized_gemm_scaled<int8_t>(inputs, weights, scale_x, scale_w);
+        },
+        "Run scaled int8 GEMM",
+        py::arg("inputs"),
+        py::arg("weights"),
+        py::arg("scale_x"),
+        py::arg("scale_w").noconvert()
+    );
+
+    m.def("real_quantized_gemm_scaled",
+        [](at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, at::Tensor scale_w) {
+            TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
+            TORCH_CHECK(inputs.is_cuda(), "inputs must be a CUDA tensor");
+            TORCH_CHECK(weights.dtype() == at::kChar, "weights tensor must be int8");
+
+            TORCH_CHECK(scale_x.is_contiguous(), "scale_x must be contiguous");
+            TORCH_CHECK(scale_x.is_cuda(), "scale_x must be a CUDA tensor");
+            TORCH_CHECK(scale_x.dtype() == at::kFloat, "scale_x must be Float");
+
+            TORCH_CHECK(scale_w.is_contiguous(), "scale_w must be contiguous");
+            TORCH_CHECK(scale_w.is_cuda(), "scale_w must be a CUDA tensor");
+            TORCH_CHECK(scale_w.dtype() == at::kFloat, "scale_w must be Float");
 
             return real_quantized_gemm_scaled<int8_t>(inputs, weights, scale_x, scale_w);
         },

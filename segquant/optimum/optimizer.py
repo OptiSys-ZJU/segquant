@@ -31,6 +31,8 @@ class BaseOptimizer:
         self.real_quant = real_quant
         self.kernel_type = kernel_type
 
+        self.device = self.weight_chunks[0].device
+
         self.dual_scale = dual_scale
         if self.real_quant and dual_scale:
             self.func_name = 'gemm_dual_scaled_fn'
@@ -41,13 +43,19 @@ class BaseOptimizer:
 
     def _get_funcs(self, input_quantized_indices, weight_quantized_indices):
         if self.real_quant:
+            def tensor_wrapper(x):
+                if isinstance(x, torch.Tensor):
+                    return x.to(dtype=torch.float32, device=self.device).contiguous()
+                else:
+                    return x
+
             if self.dual_scale:
                 funcs = [
                     partial(
                         ext_dict[self.kernel_type][self.func_name],
-                        pos_scale_x=self.input_calibrators[input_quantized_indices[i]].pos_scale,
-                        neg_scale_x=self.input_calibrators[input_quantized_indices[i]].neg_scale,
-                        scale_w=self.weight_calibrators[weight_quantized_indices[i]].scale,
+                        pos_scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].pos_scale),
+                        neg_scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].neg_scale),
+                        scale_w=tensor_wrapper(self.weight_calibrators[weight_quantized_indices[i]].scale),
                     )
                     for i in range(self.chunks)
                 ]
@@ -55,8 +63,8 @@ class BaseOptimizer:
                 funcs = [
                     partial(
                         ext_dict[self.kernel_type][self.func_name],
-                        scale_x=self.input_calibrators[input_quantized_indices[i]].scale,
-                        scale_w=self.weight_calibrators[weight_quantized_indices[i]].scale,
+                        scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].scale),
+                        scale_w=tensor_wrapper(self.weight_calibrators[weight_quantized_indices[i]].scale),
                     )
                     for i in range(self.chunks)
                 ]
@@ -586,7 +594,6 @@ class SVDOptimizer(SmoothOptimizer):
         self.l1s = [None] * self.chunks
         self.l2s = [None] * self.chunks
         self.has_svd = False
-        self.device = self.weight_chunks[0].device
 
     def __repr__(self):
         if self.real_quant:
