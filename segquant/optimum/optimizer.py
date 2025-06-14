@@ -523,7 +523,7 @@ class SmoothOptimizer(BaseOptimizer):
         del self.opt_alpha
         del self.opt_err
         del self.candidate_alphas
-        self._clean()
+        self.search_alpha = False
 
     def _reset(self, origin_weight):
         if self.seg_mode == 'weight':

@@ -34,7 +34,7 @@ quant_config = {
     "default": {
         "enable": True,
         "seglinear": True,
-        "search_patterns": SegPattern.all(),
+        "search_patterns": [],
         "real_quant": False,
         "opt": {
             "type": Optimum.SVD,
@@ -284,8 +284,8 @@ def run_any_module():
                 quantized_model = torch.load(model_target_path, weights_only=False)
             return quantized_model
 
-        model_type = 'sdxl'
-        quant_layer = 'unet'
+        model_type = 'sd3'
+        quant_layer = 'dit'
 
         latents = get_randn_latents(model_type)
         model_quant_path = os.path.join(root_dir, f"model/{model_type}/{quant_layer}/model_quant.pt")
