@@ -27,6 +27,7 @@ class SegmentLinear(nn.Module):
         opt_kwargs=None,
         calib_type: Literal["amax", "gptq"] = "amax",
         calib_kwargs=None,
+        device='cuda:0',
     ):
         super().__init__()
 
@@ -41,9 +42,11 @@ class SegmentLinear(nn.Module):
                 f"Expected ({out_features}, {in_features}), "
                 f"but got {custom_weight_tensor.shape}."
             )
+            self.origin_device = custom_weight_tensor.device
             ### use new space
-            custom_weight_tensor = custom_weight_tensor.clone()
+            custom_weight_tensor = custom_weight_tensor.to(device).clone()
         else:
+            self.origin_device = torch.device('cpu')
             custom_weight_tensor = torch.randn([self.out_features, self.in_features])
         self.bias = bias
         self.bias_data = 0
@@ -209,6 +212,14 @@ class SegmentLinear(nn.Module):
                 output_chunks.append(F.linear(inp, this_weight_chunks[i]))
 
         return output_chunks
+
+    def to_cpu(self):
+        self.optimizer.to_cpu()
+        self.bias_data = self.bias_data.to('cpu')
+    
+    def to_cuda(self):
+        self.optimizer.to_cuda(self.origin_device)
+        self.bias_data = self.bias_data.to(self.origin_device)
 
     def forward(self, x, chunked=False):
         input_chunks = self._chunk_x(x)

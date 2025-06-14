@@ -55,10 +55,10 @@ def _create_linear(
     seg_linear_config,
     final_config,
     dual_scale=False,
+    force_cpu=False,
 ):
     old_linear = layer
     device = old_linear.weight.device
-    old_dtype = old_linear.weight.dtype
     has_bias = hasattr(old_linear, "bias") and old_linear.bias is not None
 
     this_config = final_config['default']
@@ -98,10 +98,9 @@ def _create_linear(
         ),
         chunksizes=seg_linear_config.get("chunksizes"),
         custom_weight_tensor=old_linear.weight.data,
+        device='cpu' if force_cpu else device,
     )
 
-    new_linear = new_linear.to(device).to(old_dtype)
-    del old_linear
     return new_linear
 
 def _trace_linears(
@@ -351,11 +350,18 @@ def quantize_linear(
     need_smooth = seglinear.opt_type in ('smooth', 'svd')
     need_search = hasattr(seglinear.optimizer, 'search_alpha') and seglinear.optimizer.search_alpha
 
+    seglinear.to_cuda()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     if need_smooth:
         # trace
         _trace_linear(model, calib_data_loader, linear_name, module, seglinear, device)
 
     while need_search:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         if need_smooth:
             seglinear.smooth()
         # calibrate
@@ -372,6 +378,10 @@ def quantize_linear(
     # calibrate
     _calibrate_linear(model, calib_data_loader, linear_name, module, seglinear, device)
     seglinear.finish_calibrate()
+
+    seglinear.to_cpu()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 def quantize(
     model: nn.Module,
@@ -458,6 +468,7 @@ def quantize(
             {"chunks": 1, "seg_mode": "weight"},
             final_config,
             dual_scale=(name in dual_scale_linears),
+            force_cpu=per_layer_mode,
         )
     del linears
     if per_layer_mode:
@@ -465,10 +476,13 @@ def quantize(
             quantize_linear(model, calib_data_loader, linear_name, seglinear, device)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-        
         if verbose:
             print("start replace ...")
         _replace_linears(model, to_calib_linears)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        for seglinear in to_calib_linears.values():
+            seglinear.to_cuda()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     else:
@@ -481,6 +495,8 @@ def quantize(
             if verbose:
                 print("start trace ...")
             _trace_linears(model, to_smooth_linears, calib_data_loader, device)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         to_search_linears = {
             k: v for k, v in to_calib_linears.items()
@@ -492,10 +508,16 @@ def quantize(
                 if verbose:
                     print("[search] start smooth ...")
                 _smooth_linears(to_search_linears)
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             if verbose:
                 print("[search] start calibrate ...")
             _calib_linears(model, to_search_linears, calib_data_loader, device)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             _search_linears(model, to_search_linears, calib_data_loader, device)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         if to_smooth_linears:
             if verbose:

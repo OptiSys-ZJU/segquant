@@ -113,6 +113,12 @@ class BaseOptimizer:
     def process_step(self, err):
         pass
 
+    def to_cpu(self):
+        self.weight_chunks = [chunk.to('cpu') for chunk in self.weight_chunks]
+    
+    def to_cuda(self, device):
+        self.weight_chunks = [chunk.to(device) for chunk in self.weight_chunks]
+
 class OptimizerRegistry:
     _registry = {}
 
