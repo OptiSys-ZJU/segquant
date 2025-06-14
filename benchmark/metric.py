@@ -17,7 +17,7 @@ def calculate_fid(real_dir, fake_dir, batch_size=50, device=None):
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     fid_value = fid_score.calculate_fid_given_paths(
-        [real_dir, fake_dir], batch_size=batch_size, device=device, dims=2048
+        [real_dir, fake_dir], batch_size=batch_size, device=device, dims=2048, num_workers=64,
     )
     return fid_value
 
@@ -81,8 +81,7 @@ def generate_metric(path1, path2):
 
 
 if __name__ == "__main__":
-    for i in range(4, 28, 1):
-        print(generate_metric(f"affine_pics/1/{i}/real", f"affine_pics/1/{i}/quant"))
-        print(
-            generate_metric(f"affine_pics/1/{i}/real", f"affine_pics/1/{i}/blockaffine")
-        )
+    generate_metric(f"benchmark_record/MJHQ/run_real_module/pics/real", f"benchmark_record/MJHQ/run_int8smooth_seg_dual_affine_module/pics/quant_int8smooth_seg_dual_affine")
+
+    print('----------')
+    generate_metric(f"benchmark_record/MJHQ/run_real_module/pics/real", f"benchmark_record/MJHQ/run_int8smooth_seg_dual_module/pics/quant_int8smooth_seg_dual")
