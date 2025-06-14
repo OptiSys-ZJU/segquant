@@ -28,45 +28,6 @@ calib_args = {
     "shuffle": False,
 }
 
-per_layer_mode = True
-
-quant_config = {
-    "default": {
-        "enable": True,
-        "seglinear": True,
-        "search_patterns": [],
-        "real_quant": False,
-        "opt": {
-            "type": Optimum.SVD,
-            "alpha": 0.5,
-            "low_rank": 64,
-            "search_alpha_config": {
-                "enable": True,
-                "min": 0.0,
-                "max": 1.0,
-                "step": 0.1,
-            },
-            "verbose": True,
-        },
-        "calib": {
-            "type": Calibrate.GPTQ,
-            "cpu_storage": False,
-            "verbose": False,
-        },
-        "input_quant": {
-            "type": DType.INT8,
-            # "axis": None,
-            "axis": -1, # per-token, input shape (..., in)
-            "dynamic": True,
-        },
-        "weight_quant": {
-            "type": DType.INT4,
-            # "axis": None,
-            "axis": 1, # per-channel, weight shape (out, in)
-        },
-    },
-}
-
 def get_randn_latents(model_type):
     if model_type == 'flux':
         latents = randn_tensor(
@@ -147,7 +108,7 @@ def get_part_model(model_type, part_layer):
 
     return model
 
-def get_quantized_model(model_type: str, quant_layer: str, config, dataset, calibargs: dict, latents=None):
+def get_quantized_model(model_type: str, quant_layer: str, config, dataset, calibargs: dict, latents=None, per_layer_mode=False):
     calib_key = (
         f"maxT{calibargs['max_timestep']}_"
         f"sz{calibargs['sample_size']}_"
@@ -225,6 +186,22 @@ def get_full_model_by_quantized_part(model_type, part_layer, model_part):
     
     return model
 
+def quant_or_load(dataset, model_type: str, quant_layer: str, model_target_path, quant_config, latents, per_layer_mode):
+    if not os.path.exists(model_target_path):
+        print(f"[INFO] {model_target_path} not found, start quantizing...")
+        print('quant config:')
+        print(quant_config)
+        quantized_model = get_quantized_model(
+            model_type, quant_layer, quant_config, dataset, calib_args, latents, per_layer_mode
+        )
+        os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
+        torch.save(quantized_model, model_target_path)
+        print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
+    else:
+        print(f"[INFO] {model_target_path} found, start loading...")
+        quantized_model = torch.load(model_target_path, weights_only=False)
+    return quantized_model
+
 def run_real_module():
     with torch.no_grad():
         root_dir = "sdxl_test_linear"
@@ -256,9 +233,8 @@ def run_real_module():
         del model
         print("model_quant completed")
 
-def run_any_module():
+def run_any_module(quant_config, model_type, quant_layer, per_layer_mode=False, root_dir='tmp_test_linear'):
     with torch.no_grad():
-        root_dir = "tmp_test_linear"
         os.makedirs(root_dir, exist_ok=True)
 
         dataset = COCODataset(
@@ -268,28 +244,9 @@ def run_any_module():
         max_timestep = 50
         max_num = 1
 
-        def quant_or_load(model_type: str, quant_layer: str, model_target_path, quant_config, latents):
-            if not os.path.exists(model_target_path):
-                print(f"[INFO] {model_target_path} not found, start quantizing...")
-                print('quant config:')
-                print(quant_config)
-                quantized_model = get_quantized_model(
-                    model_type, quant_layer, quant_config, dataset, calib_args, latents
-                )
-                os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
-                torch.save(quantized_model, model_target_path)
-                print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
-            else:
-                print(f"[INFO] {model_target_path} found, start loading...")
-                quantized_model = torch.load(model_target_path, weights_only=False)
-            return quantized_model
-
-        model_type = 'sd3'
-        quant_layer = 'dit'
-
         latents = get_randn_latents(model_type)
         model_quant_path = os.path.join(root_dir, f"model/{model_type}/{quant_layer}/model_quant.pt")
-        model_part = quant_or_load(model_type, quant_layer, model_quant_path, quant_config, latents)
+        model_part = quant_or_load(dataset, model_type, quant_layer, model_quant_path, quant_config, latents, per_layer_mode)
         model = get_full_model_by_quantized_part(model_type, quant_layer, model_part)
         trace_pic(
             model,
@@ -304,8 +261,8 @@ def run_any_module():
         del model
         print("model_quant completed")
 
-def run_flux_module():
-    quant_config = {
+def run_flux():
+    flux_config = {
         "default": {
             "enable": True,
             "seglinear": True,
@@ -341,54 +298,97 @@ def run_flux_module():
             },
         },
     }
+    model_type = 'flux'
+    quant_layer = 'dit'
+    per_layer_mode = True
+    root_dir = 'flux_tmp_linear'
+    run_any_module(flux_config, model_type, quant_layer, per_layer_mode, root_dir)
 
-    with torch.no_grad():
-        root_dir = "flux_test_linear"
-        os.makedirs(root_dir, exist_ok=True)
+def run_sd3():
+    sd3_config = {
+        "default": {
+            "enable": True,
+            "seglinear": True,
+            "search_patterns": [],
+            "real_quant": False,
+            "opt": {
+                "type": Optimum.SVD,
+                "alpha": 0.5,
+                "low_rank": 64,
+                "search_alpha_config": {
+                    "enable": True,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.1,
+                },
+                "verbose": True,
+            },
+            "calib": {
+                "type": Calibrate.GPTQ,
+                "cpu_storage": False,
+                "verbose": False,
+            },
+            "input_quant": {
+                "type": DType.INT8,
+                # "axis": None,
+                "axis": -1, # per-token, input shape (..., in)
+                "dynamic": True,
+            },
+            "weight_quant": {
+                "type": DType.INT4,
+                # "axis": None,
+                "axis": 1, # per-channel, weight shape (out, in)
+            },
+        },
+    }
+    model_type = 'sd3'
+    quant_layer = 'dit'
+    per_layer_mode = False
+    root_dir = 'sd3_tmp_linear'
+    run_any_module(sd3_config, model_type, quant_layer, per_layer_mode, root_dir)
 
-        dataset = COCODataset(
-            path="../dataset/controlnet_datasets/COCO-Caption2017-canny", cache_size=16
-        )
-
-        max_timestep = 50
-        max_num = 1
-
-        def quant_or_load(model_type: str, quant_layer: str, model_target_path, quant_config, latents):
-            if not os.path.exists(model_target_path):
-                print(f"[INFO] {model_target_path} not found, start quantizing...")
-                print('quant config:')
-                print(quant_config)
-                quantized_model = get_quantized_model(
-                    model_type, quant_layer, quant_config, dataset, calib_args, latents
-                )
-                os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
-                torch.save(quantized_model, model_target_path)
-                print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
-            else:
-                print(f"[INFO] {model_target_path} found, start loading...")
-                quantized_model = torch.load(model_target_path, weights_only=False)
-            return quantized_model
-
-        model_type = 'flux'
-        quant_layer = 'dit'
-
-        latents = get_randn_latents(model_type)
-        model_quant_path = os.path.join(root_dir, f"model/{model_type}/{quant_layer}/model_quant.pt")
-        model_part = quant_or_load(model_type, quant_layer, model_quant_path, quant_config, latents)
-        model = get_full_model_by_quantized_part(model_type, quant_layer, model_part)
-        trace_pic(
-            model,
-            os.path.join(root_dir, "pics/quant"),
-            dataset.get_dataloader(),
-            latents,
-            max_num=max_num,
-            controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
-            guidance_scale=calib_args["guidance_scale"],
-            num_inference_steps=max_timestep,
-        )
-        del model
-        print("model_quant completed")
-
+def run_sdxl():
+    sd3xl_config = {
+        "default": {
+            "enable": True,
+            "seglinear": True,
+            "search_patterns": [],
+            "real_quant": False,
+            "opt": {
+                "type": Optimum.SVD,
+                "alpha": 0.5,
+                "low_rank": 64,
+                "search_alpha_config": {
+                    "enable": True,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.1,
+                },
+                "verbose": True,
+            },
+            "calib": {
+                "type": Calibrate.GPTQ,
+                "cpu_storage": False,
+                "verbose": False,
+            },
+            "input_quant": {
+                "type": DType.INT8,
+                # "axis": None,
+                "axis": -1, # per-token, input shape (..., in)
+                "dynamic": True,
+            },
+            "weight_quant": {
+                "type": DType.INT4,
+                # "axis": None,
+                "axis": 1, # per-channel, weight shape (out, in)
+            },
+        },
+    }
+    model_type = 'sdxl'
+    quant_layer = 'unet'
+    per_layer_mode = False
+    root_dir = 'sdxl_tmp_linear'
+    run_any_module(sd3xl_config, model_type, quant_layer, per_layer_mode, root_dir)
 
 if __name__ == "__main__":
-    run_flux_module()
+    run_sdxl()
