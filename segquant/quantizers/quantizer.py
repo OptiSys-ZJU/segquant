@@ -282,9 +282,40 @@ class IntQuantizer(BaseQuantizer):
 
             if ext is not None:
                 res = ext.create_quantized_weights(x)
-                ext.real_quantized_quantize_weights(
-                    x.contiguous(), res, self.scale
-                )
+
+                if self.axis is None:
+                    ext.real_quantized_quantize_weights(
+                        x.contiguous(), res, self.scale
+                    )
+                else:
+                    ### axis for weight [out, in]
+                    # axis = 1, amax(dim=1), scale shape(out,)
+                    # axis = 0, amax(dim=0), scale shape(in,)
+                    assert (
+                        self.scale.dim() == 1
+                    ), f"Expected self.scale to be 1D tensor, but got {self.scale.dim()}D tensor with shape {self.scale.shape}"
+
+                    out_, in_ = x.shape
+                    if self.axis == 1:
+                        assert self.scale.shape == (out_,), (
+                            f"Scale shape {self.scale.shape} mismatch with input shape {x.shape} along axis=1 (expected ({out_},))"
+                        )
+                    elif self.axis == 0:
+                        assert self.scale.shape == (in_,), (
+                            f"Scale shape {self.scale.shape} mismatch with input shape {x.shape} along axis=0 (expected ({in_},))"
+                        )
+                    else:
+                        raise ValueError(f"Unsupported axis {self.axis} for weight shape {x.shape}")
+
+                    assert isinstance(
+                        self.scale, torch.Tensor
+                    ), f"Expected self.scale to be a torch.Tensor, but got {type(self.scale)}"
+
+                    # call kernel
+                    ext.real_quantized_quantize_weights_axis(
+                        x.contiguous(), res, self.axis, self.scale.to(dtype=torch.float32, device=x.device).contiguous()
+                    )
+
                 return res
 
         # fake quantization

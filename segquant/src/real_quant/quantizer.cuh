@@ -54,6 +54,44 @@ __global__ void real_quantize_scaled_kernel(
     }
 }
 
+template <int axis>
+__device__ __forceinline__ float get_scale_with_axis(int idx, const float* scales, size_t last_features) {
+    float scale_val;
+    if constexpr (axis == 0) {
+        int col = idx % last_features;
+        scale_val = scales[col];
+    }
+    else if constexpr (axis == 1) {
+        int row = idx / last_features;
+        scale_val = scales[row];
+    }
+    else if constexpr (axis == -1) {
+        int col = idx % last_features;
+        scale_val = scales[col];
+    }
+    else {
+        static_assert(axis == 0 || axis == 1 || axis == -1, "Unsupported axis");
+    }
+    return scale_val;
+}
+
+template <typename T, typename OutputType, typename StoreType, int axis>
+__global__ void real_quantize_scaled_axis_kernel(
+    const T* inputs,
+    const float* scale_x,
+    size_t last_features,
+    size_t n,
+    StoreType* Xq
+) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int idx = 4 * tid; idx < 4 * (tid + 1) && idx < n; ++idx) {
+        float val = static_cast<float>(inputs[idx]);
+        float scale_val = get_scale_with_axis<axis>(idx, scale_x, last_features);
+        float scaled = val * scale_val;
+        store_data<OutputType, StoreType>(Xq, idx, scaled);
+    }
+}
+
 template <typename T, typename OutputType, typename StoreType>
 __global__ void real_quantize_dual_scaled_kernel(
     const T *inputs,
@@ -73,6 +111,34 @@ __global__ void real_quantize_dual_scaled_kernel(
             store_data<OutputType, StoreType>(Xn, idx, 0.0f);
         } else {
             // val < 0, neg_scale_x > 0 --> scaled < 0
+            float scaled = val * neg_scale_x;
+            store_data<OutputType, StoreType>(Xn, idx, scaled);
+            store_data<OutputType, StoreType>(Xp, idx, 0.0f);
+        }
+    }
+}
+
+template <typename T, typename OutputType, typename StoreType, int axis>
+__global__ void real_quantize_dual_scaled_axis_kernel(
+    const T *inputs,
+    const float* pos_scale_x, const float* neg_scale_x,
+    size_t last_features,
+    size_t n,
+    StoreType* Xp,
+    StoreType* Xn
+) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (int idx = 4 * tid; idx < 4 * (tid + 1) && idx < n; ++idx) {
+        float val = static_cast<float>(inputs[idx]);
+        if (val >= 0) {
+            float pos_scale_x = get_scale_with_axis<axis>(idx, pos_scale_x, last_features);
+            float scaled = val * pos_scale_x;
+            store_data<OutputType, StoreType>(Xp, idx, scaled);
+            store_data<OutputType, StoreType>(Xn, idx, 0.0f);
+        } else {
+            // val < 0, neg_scale_x > 0 --> scaled < 0
+            float neg_scale_x = get_scale_with_axis<axis>(idx, neg_scale_x, last_features);
             float scaled = val * neg_scale_x;
             store_data<OutputType, StoreType>(Xn, idx, scaled);
             store_data<OutputType, StoreType>(Xp, idx, 0.0f);

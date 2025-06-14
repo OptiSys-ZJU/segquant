@@ -35,3 +35,9 @@ __global__ void real_dequantize_dual_scaled_kernel(
         Y[idx] = static_cast<T>(sum);
     }
 }
+
+//////////////////////////////////////////////////////////////////////
+//// Axis Dequant for Y = (batch, out)
+//// When weight axis = 1, scale_w = (out,)
+//// When input axis = -1, scale_i = (batch,)
+//////////////////////////////////////////////////////////////////////

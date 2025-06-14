@@ -129,7 +129,9 @@ struct ShapeType<cutlass::int4b_t> {
     using InstructionShape = cutlass::gemm::GemmShape<16, 8, 64>;
 };
 
-
+//////////////////////////////////////////////////////////////////////
+////////// CUTLASS Kernels
+//////////////////////////////////////////////////////////////////////
 template <typename ABType, typename CType>
 void launch_gemm_scaled(
     const ABType *A, const ABType *B, CType *C,
@@ -349,6 +351,10 @@ void launch_array_gemm_scaled(
     }
 }
 
+
+//////////////////////////////////////////////////////////////////////
+////////// Real Quantize weight
+//////////////////////////////////////////////////////////////////////
 template<typename T>
 void real_quantized_quantize_weights(at::Tensor weights, at::Tensor outputs, float scale_w);
 
@@ -391,6 +397,138 @@ void real_quantized_quantize_weights<cutlass::int4b_t>(at::Tensor weights, at::T
     });
 }
 
+template<typename T>
+void real_quantized_quantize_weights_axis(at::Tensor weights, at::Tensor outputs, int axis, at::Tensor scale_w);
+
+template <>
+void real_quantized_quantize_weights_axis<int8_t>(at::Tensor weights, at::Tensor outputs, int axis, at::Tensor scale_w) {
+    size_t numel = weights.numel();
+    auto stream = c10::cuda::getCurrentCUDAStream();
+
+    auto last_features = weights.sizes()[1];
+
+    AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "real_quantize_scaled_axis_kernel", [&] {
+        switch (axis) {
+            case 0:
+                real_quantize_scaled_axis_kernel<scalar_t, int8_t, int8_t, 0><<<
+                    (numel + BLOCK_SIZE * 4 - 1) / (BLOCK_SIZE * 4), BLOCK_SIZE, 0, stream>>>(
+                    weights.data_ptr<scalar_t>(),
+                    scale_w.data_ptr<float>(),
+                    last_features,
+                    numel,
+                    outputs.data_ptr<int8_t>());
+                break;
+            case 1:
+                real_quantize_scaled_axis_kernel<scalar_t, int8_t, int8_t, 1><<<
+                    (numel + BLOCK_SIZE * 4 - 1) / (BLOCK_SIZE * 4), BLOCK_SIZE, 0, stream>>>(
+                    weights.data_ptr<scalar_t>(),
+                    scale_w.data_ptr<float>(),
+                    last_features,
+                    numel,
+                    outputs.data_ptr<int8_t>());
+                break;
+            case -1:
+                real_quantize_scaled_axis_kernel<scalar_t, int8_t, int8_t, -1><<<
+                    (numel + BLOCK_SIZE * 4 - 1) / (BLOCK_SIZE * 4), BLOCK_SIZE, 0, stream>>>(
+                    weights.data_ptr<scalar_t>(),
+                    scale_w.data_ptr<float>(),
+                    last_features,
+                    numel,
+                    outputs.data_ptr<int8_t>());
+                break;
+            default:
+                AT_ERROR("Unsupported axis: ", axis);
+        }
+    });
+}
+
+template <>
+void real_quantized_quantize_weights_axis<__nv_fp8_e4m3>(at::Tensor weights, at::Tensor outputs, int axis, at::Tensor scale_w) {
+    size_t numel = weights.numel();
+    auto stream = c10::cuda::getCurrentCUDAStream();
+
+    auto last_features = weights.sizes()[1];
+
+    AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "real_quantize_scaled_axis_kernel", [&] {
+        switch (axis) {
+            case 0:
+                real_quantize_scaled_axis_kernel<scalar_t, __nv_fp8_e4m3, uint8_t, 0><<<
+                    (numel + BLOCK_SIZE * 4 - 1) / (BLOCK_SIZE * 4), BLOCK_SIZE, 0, stream>>>(
+                    weights.data_ptr<scalar_t>(),
+                    scale_w.data_ptr<float>(),
+                    last_features,
+                    numel,
+                    outputs.data_ptr<int8_t>());
+                break;
+            case 1:
+                real_quantize_scaled_axis_kernel<scalar_t, __nv_fp8_e4m3, uint8_t, 1><<<
+                    (numel + BLOCK_SIZE * 4 - 1) / (BLOCK_SIZE * 4), BLOCK_SIZE, 0, stream>>>(
+                    weights.data_ptr<scalar_t>(),
+                    scale_w.data_ptr<float>(),
+                    last_features,
+                    numel,
+                    outputs.data_ptr<int8_t>());
+                break;
+            case -1:
+                real_quantize_scaled_axis_kernel<scalar_t, __nv_fp8_e4m3, uint8_t, -1><<<
+                    (numel + BLOCK_SIZE * 4 - 1) / (BLOCK_SIZE * 4), BLOCK_SIZE, 0, stream>>>(
+                    weights.data_ptr<scalar_t>(),
+                    scale_w.data_ptr<float>(),
+                    last_features,
+                    numel,
+                    outputs.data_ptr<int8_t>());
+                break;
+            default:
+                AT_ERROR("Unsupported axis: ", axis);
+        }
+    });
+}
+
+template <>
+void real_quantized_quantize_weights_axis<cutlass::int4b_t>(at::Tensor weights, at::Tensor outputs, int axis, at::Tensor scale_w) {
+    size_t numel = weights.numel();
+    auto stream = c10::cuda::getCurrentCUDAStream();
+
+    auto last_features = weights.sizes()[1];
+
+    AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "real_quantize_scaled_axis_kernel", [&] {
+        switch (axis) {
+            case 0:
+                real_quantize_scaled_axis_kernel<scalar_t, cutlass::int4b_t, uint8_t, 0><<<
+                    (numel + BLOCK_SIZE * 4 - 1) / (BLOCK_SIZE * 4), BLOCK_SIZE, 0, stream>>>(
+                    weights.data_ptr<scalar_t>(),
+                    scale_w.data_ptr<float>(),
+                    last_features,
+                    numel,
+                    outputs.data_ptr<int8_t>());
+                break;
+            case 1:
+                real_quantize_scaled_axis_kernel<scalar_t, cutlass::int4b_t, uint8_t, uint8_t, 1><<<
+                    (numel + BLOCK_SIZE * 4 - 1) / (BLOCK_SIZE * 4), BLOCK_SIZE, 0, stream>>>(
+                    weights.data_ptr<scalar_t>(),
+                    scale_w.data_ptr<float>(),
+                    last_features,
+                    numel,
+                    outputs.data_ptr<int8_t>());
+                break;
+            case -1:
+                real_quantize_scaled_axis_kernel<scalar_t, cutlass::int4b_t, uint8_t, uint8_t, -1><<<
+                    (numel + BLOCK_SIZE * 4 - 1) / (BLOCK_SIZE * 4), BLOCK_SIZE, 0, stream>>>(
+                    weights.data_ptr<scalar_t>(),
+                    scale_w.data_ptr<float>(),
+                    last_features,
+                    numel,
+                    outputs.data_ptr<int8_t>());
+                break;
+            default:
+                AT_ERROR("Unsupported axis: ", axis);
+        }
+    });
+}
+
+//////////////////////////////////////////////////////////////////////
+////////// Call GEMM Pipepine
+//////////////////////////////////////////////////////////////////////
 template<typename T>
 at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w) {
     auto inputs_sizes = inputs.sizes();
