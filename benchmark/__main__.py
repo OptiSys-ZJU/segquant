@@ -176,7 +176,7 @@ def get_full_model_by_quantized_part(model_type, part_layer, model_part):
     elif model_type == 'sdxl':
         if part_layer == 'unet':
             model = StableDiffusionXLModel.from_repo(
-                ("../stable-diffusion-xl-base-1.0", "../SD3-Controlnet-Canny"), "cuda:0",
+                "../stable-diffusion-xl-base-1.0", "cuda:0",
                 unet=model_part
             )
         else:
@@ -372,10 +372,10 @@ def run_sdxl():
                 "verbose": False,
             },
             "input_quant": {
-                "type": DType.INT8,
-                # "axis": None,
-                "axis": -1, # per-token, input shape (..., in)
-                "dynamic": True,
+                "type": DType.FP16,
+                "axis": None,
+                # "axis": -1, # per-token, input shape (..., in)
+                # "dynamic": True,
             },
             "weight_quant": {
                 "type": DType.INT4,

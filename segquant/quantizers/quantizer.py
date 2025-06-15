@@ -126,7 +126,7 @@ class IntQuantizer(BaseQuantizer):
         self.scale = 1.0
         self.real_quant = real_quant
         if self.real_quant:
-            assert self.axis is None, "Real quantization does not support axis."
+            assert self.axis is None or self.axis == 1 or self.axis == -1, 'only support axis = -1 for input and axis = 1 for weight'
 
         self.dynamic = dynamic
         self.fake = fake
@@ -143,10 +143,9 @@ class IntQuantizer(BaseQuantizer):
 
         if self.symmetric:
             if self.dual_scale:
-                neg_x = x[x < 0].abs()
-                pos_x = x[x > 0].abs()
-
                 if self.axis is None:
+                    neg_x = x[x < 0].abs()
+                    pos_x = x[x > 0].abs()
                     neg_max = neg_x.max().item() if neg_x.numel() > 0 else 0.0
                     pos_max = pos_x.max().item() if pos_x.numel() > 0 else 0.0
 
@@ -161,16 +160,11 @@ class IntQuantizer(BaseQuantizer):
                     )
                     self.zero_point = 0
                 else:
-                    neg_max = (
-                        neg_x.amax(dim=self.axis, keepdim=False)
-                        if neg_x.numel() > 0
-                        else torch.zeros(x.size(self.axis), device=x.device)
-                    )
-                    pos_max = (
-                        pos_x.amax(dim=self.axis, keepdim=False)
-                        if pos_x.numel() > 0
-                        else torch.zeros(x.size(self.axis), device=x.device)
-                    )
+                    neg_x = torch.where(x < 0, x.abs(), torch.zeros_like(x))
+                    pos_x = torch.where(x > 0, x.abs(), torch.zeros_like(x))
+
+                    neg_max = neg_x.amax(dim=self.axis, keepdim=False)
+                    pos_max = pos_x.amax(dim=self.axis, keepdim=False)
 
                     if self.neg_amax is None:
                         self.neg_amax = neg_max
@@ -276,15 +270,41 @@ class IntQuantizer(BaseQuantizer):
             assert not self.dual_scale, "Weight quantization does not support dual scale."
             ext = None
             if self.num_bits == 8:
-                ext = load_real_quant_int8_ext(required=False)
+                ext = load_real_quant_int8_ext(required=False)[0]
             elif self.num_bits == 4:
-                ext = load_real_quant_int4_ext(required=False)
+                ext = load_real_quant_int4_ext(required=False)[0]
 
             if ext is not None:
                 res = ext.create_quantized_weights(x)
-                ext.real_quantized_quantize_weights(
-                    x.contiguous(), res, self.scale
-                )
+
+                if self.axis is None:
+                    ext.real_quantized_quantize_weights(
+                        x.contiguous(), res, self.scale
+                    )
+                else:
+                    ### axis for weight [out, in]
+                    # axis = 1, amax(dim=1), scale shape(out,)
+                    assert (
+                        self.scale.dim() == 1
+                    ), f"Expected self.scale to be 1D tensor, but got {self.scale.dim()}D tensor with shape {self.scale.shape}"
+
+                    out_, _ = x.shape
+                    if self.axis == 1:
+                        assert self.scale.shape == (out_,), (
+                            f"Scale shape {self.scale.shape} mismatch with input shape {x.shape} along axis=1 (expected ({out_},))"
+                        )
+                    else:
+                        raise ValueError(f"Unsupported axis {self.axis} for weight shape {x.shape}")
+
+                    assert isinstance(
+                        self.scale, torch.Tensor
+                    ), f"Expected self.scale to be a torch.Tensor, but got {type(self.scale)}"
+
+                    # call kernel
+                    ext.real_quantized_quantize_weights(
+                        x.contiguous(), res, self.scale.to(dtype=torch.float32, device=x.device).contiguous()
+                    )
+
                 return res
 
         # fake quantization
@@ -364,10 +384,9 @@ class FloatQuantizer(BaseQuantizer):
         epsilon = 1.0 / (1 << 24)
 
         if self.dual_scale:
-            neg_x = x[x < 0].abs()
-            pos_x = x[x > 0].abs()
-
             if self.axis is None:
+                neg_x = x[x < 0].abs()
+                pos_x = x[x > 0].abs()
                 neg_max = neg_x.max().item() if neg_x.numel() > 0 else 0.0
                 pos_max = pos_x.max().item() if pos_x.numel() > 0 else 0.0
 
@@ -381,16 +400,11 @@ class FloatQuantizer(BaseQuantizer):
                     self.fp_max / self.pos_amax if self.pos_amax > epsilon else 1.0
                 )
             else:
-                neg_max = (
-                    neg_x.amax(dim=self.axis, keepdim=False)
-                    if neg_x.numel() > 0
-                    else torch.zeros(x.size(self.axis), device=x.device)
-                )
-                pos_max = (
-                    pos_x.amax(dim=self.axis, keepdim=False)
-                    if pos_x.numel() > 0
-                    else torch.zeros(x.size(self.axis), device=x.device)
-                )
+                neg_x = torch.where(x < 0, x.abs(), torch.zeros_like(x))
+                pos_x = torch.where(x > 0, x.abs(), torch.zeros_like(x))
+
+                neg_max = neg_x.amax(dim=self.axis, keepdim=False)
+                pos_max = pos_x.amax(dim=self.axis, keepdim=False)
 
                 if self.neg_amax is None:
                     self.neg_amax = neg_max
@@ -505,13 +519,39 @@ class FloatQuantizer(BaseQuantizer):
 
         if self.real_quant:
             # when real quantization is enabled, only weights are quantized
+            assert not self.dual_scale, "Weight quantization does not support dual scale."
             ext = load_real_quant_fp8_ext(required=False)
             if ext is not None:
-                assert not self.dual_scale, "Weight quantization does not support dual scale."
                 res = ext.create_quantized_weights(x)
-                ext.real_quantized_quantize_weights(
-                    x.contiguous(), res, self.scale
-                )
+
+                if self.axis is None:
+                    ext.real_quantized_quantize_weights(
+                        x.contiguous(), res, self.scale
+                    )
+                else:
+                    ### axis for weight [out, in]
+                    # axis = 1, amax(dim=1), scale shape(out,)
+                    assert (
+                        self.scale.dim() == 1
+                    ), f"Expected self.scale to be 1D tensor, but got {self.scale.dim()}D tensor with shape {self.scale.shape}"
+
+                    out_, _ = x.shape
+                    if self.axis == 1:
+                        assert self.scale.shape == (out_,), (
+                            f"Scale shape {self.scale.shape} mismatch with input shape {x.shape} along axis=1 (expected ({out_},))"
+                        )
+                    else:
+                        raise ValueError(f"Unsupported axis {self.axis} for weight shape {x.shape}")
+
+                    assert isinstance(
+                        self.scale, torch.Tensor
+                    ), f"Expected self.scale to be a torch.Tensor, but got {type(self.scale)}"
+
+                    # call kernel
+                    ext.real_quantized_quantize_weights(
+                        x.contiguous(), res, self.scale.to(dtype=torch.float32, device=x.device).contiguous()
+                    )
+
                 return res
 
         # fake quantization

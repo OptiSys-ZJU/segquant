@@ -12,6 +12,17 @@ _loaded_extensions = {}
 cutlass_path = os.environ.get('CUTLASS_PATH', '/usr/local/cutlass')
 print(f"Use Cutlass Path [{cutlass_path}]")
 
+supported_type = [
+    'Wint8Aint8',
+    'Wint8Aint4',
+    'Wint4Aint4',
+    'Wfp16Aint4',
+    'Wfp16Aint8',
+    'Wfp8e4m3Afp8e4m3',
+    'Wfp16Afp16',
+]
+
+
 def load_extension(
     name: str,
     sources: list,
@@ -52,7 +63,6 @@ def load_extension(
         if required:
             raise RuntimeError(f"Required extension '{name}' failed to load.") from e
         return None
-
 
 def load_fake_quant_fp8_ext(verbose=False, required=False):
     """
@@ -101,7 +111,7 @@ def load_real_quant_fp8_ext(verbose=False, required=False):
         return torch.empty_like(x, dtype=torch.uint8)
 
     ext.create_quantized_weights = types.MethodType(create_quantized_weights, ext)
-    return ext
+    return ext, ('Wfpe4m3Afpe4m3',)
 
 def load_real_quant_int8_ext(verbose=False, required=False):
     """
@@ -131,7 +141,7 @@ def load_real_quant_int8_ext(verbose=False, required=False):
         return torch.empty_like(x, dtype=torch.int8)
 
     ext.create_quantized_weights = types.MethodType(create_quantized_weights, ext)
-    return ext
+    return ext, ('Wint8Aint8',)
 
 def load_real_quant_int4_ext(verbose=False, required=False):
     """
@@ -163,4 +173,31 @@ def load_real_quant_int4_ext(verbose=False, required=False):
         return torch.empty(num_bytes, dtype=torch.uint8, device=x.device)
 
     ext.create_quantized_weights = types.MethodType(create_quantized_weights, ext)
-    return ext
+    return ext, ('Wint4Aint4',)
+
+
+def load_real_quant_mix_ext(verbose=False, required=False):
+    """
+    Load the real quantization extension for MIX quantization.
+    Args:
+        verbose (bool): If True, prints additional information during loading.
+        required (bool): If True, raises an error if the extension fails to load.
+    Returns:
+        module: The loaded extension object, or None if it fails to load and `required` is False.
+    """
+    ext = load_extension(
+        name="segquant_real_quant_mix",
+        sources=[
+            "segquant/src/real_quant/quantized_mix.cpp",
+            "segquant/src/real_quant/real_gemm.cu",
+        ],
+        include_dirs=[
+            f'{cutlass_path}/include'
+        ],
+        verbose=verbose,
+        required=required,
+        extra_cflags=['-DSEGQUANT_MIX'],
+        extra_cuda_cflags=['-DSEGQUANT_MIX'],
+    )
+
+    return ext, supported_type

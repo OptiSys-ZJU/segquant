@@ -10,3 +10,4 @@ calibset_record/
 *.png
 *.log
 .pylintrc
+a.txt

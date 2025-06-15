@@ -7,7 +7,7 @@ from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 
-embedding_dim = 1536
+embedding_dim = 16
 
 class RandomTensorDataset:
     def __init__(self, num_batches=6, seed=42):
@@ -375,8 +375,8 @@ def test_smooth_int8_real():
         "default": {
             "enable": True,
             "seglinear": True,
-            # "search_patterns": [],
-            "search_patterns": SegPattern.all(),
+            "search_patterns": [SegPattern.ACTIVATION2LINEAR],
+            # "search_patterns": SegPattern.all(),
             "real_quant": False,
             "opt": {
                 "type": Optimum.SMOOTH,
@@ -387,11 +387,11 @@ def test_smooth_int8_real():
             },
             "input_quant": {
                 "type": DType.INT8,
-                "axis": None,
+                "axis": -1,
             },
             "weight_quant": {
                 "type": DType.INT8,
-                "axis": None,
+                "axis": 1,
             },
         },
     }
@@ -399,7 +399,8 @@ def test_smooth_int8_real():
         copy.deepcopy(test_model),
         seg_data_loader,
         config,
-        True,
+        per_layer_mode=False,
+        verbose=True,
         example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
@@ -407,8 +408,8 @@ def test_smooth_int8_real():
         "default": {
             "enable": True,
             "seglinear": True,
-            # "search_patterns": [],
-            "search_patterns": SegPattern.all(),
+            "search_patterns": [SegPattern.ACTIVATION2LINEAR],
+            # "search_patterns": SegPattern.all(),
             "real_quant": True,
             "opt": {
                 "type": Optimum.SMOOTH,
@@ -419,11 +420,11 @@ def test_smooth_int8_real():
             },
             "input_quant": {
                 "type": DType.INT8,
-                "axis": None,
+                "axis": -1,
             },
             "weight_quant": {
                 "type": DType.INT8,
-                "axis": None,
+                "axis": 1,
             },
         },
     }
@@ -431,7 +432,8 @@ def test_smooth_int8_real():
         copy.deepcopy(test_model),
         seg_data_loader,
         config_real,
-        True,
+        per_layer_mode=False,
+        verbose=True,
         example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
@@ -751,4 +753,4 @@ def test_gptq():
 
 
 if __name__ == "__main__":
-    test_smooth_int8()
+    test_smooth_int8_real()

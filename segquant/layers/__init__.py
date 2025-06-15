@@ -1,24 +1,20 @@
-from segquant.utils.extension import load_real_quant_fp8_ext, load_real_quant_int4_ext, load_real_quant_int8_ext
+from segquant.utils.extension import load_real_quant_fp8_ext, load_real_quant_int4_ext, load_real_quant_int8_ext, load_real_quant_mix_ext
 
 def build_ext_dict():
     d = {}
-    # ext_fp8 = load_real_quant_fp8_ext(required=False)
-    # d["Wfpe4m3Afpe4m3"] = {
-    #     "gemm_scaled_fn": getattr(ext_fp8, "real_quantized_gemm_scaled", None),
-    #     "gemm_dual_scaled_fn": getattr(ext_fp8, "real_quantized_gemm_dual_scaled", None),
-    # }
 
-    # ext_int8 = load_real_quant_int8_ext(required=False)
-    # d["Wint8Aint8"] = {
-    #     "gemm_scaled_fn": getattr(ext_int8, "real_quantized_gemm_scaled", None),
-    #     "gemm_dual_scaled_fn": getattr(ext_int8, "real_quantized_gemm_dual_scaled", None),
-    # }
+    def add_dict(func):
+        ext, prefix = func(required=False)
+        for p in prefix:
+            d[p] = {
+                "gemm_scaled_fn": getattr(ext, f"{p}_real_quantized_gemm_scaled", None),
+                "gemm_dual_scaled_fn": getattr(ext, f"{p}_real_quantized_gemm_dual_scaled", None),
+            }
 
-    # ext_int4 = load_real_quant_int4_ext(required=False)
-    # d["Wint4Aint4"] = {
-    #     "gemm_scaled_fn": getattr(ext_int4, "real_quantized_gemm_scaled", None),
-    #     "gemm_dual_scaled_fn": getattr(ext_int4, "real_quantized_gemm_dual_scaled", None),
-    # }
+    add_dict(load_real_quant_fp8_ext)
+    add_dict(load_real_quant_int8_ext)
+    add_dict(load_real_quant_int4_ext)
+    # add_dict(load_real_quant_mix_ext)
 
     return d
 
