@@ -372,24 +372,16 @@ def run_sdxl():
                 "verbose": False,
             },
             "input_quant": {
-                "type": DType.INT8,
-                # "axis": None,
-                "axis": -1, # per-token, input shape (..., in)
-                "dynamic": True,
+                "type": DType.FP16,
+                "axis": None,
+                # "axis": -1, # per-token, input shape (..., in)
+                # "dynamic": True,
             },
             "weight_quant": {
                 "type": DType.INT4,
                 # "axis": None,
                 "axis": 1, # per-channel, weight shape (out, in)
             },
-        },
-
-        "*to_k*": {
-            "enable": False,
-        },
-
-        "*to_v*": {
-            "enable": False,
         },
     }
     model_type = 'sdxl'
