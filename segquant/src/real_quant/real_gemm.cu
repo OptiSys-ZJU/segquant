@@ -435,7 +435,7 @@ void real_quantized_quantize_weights<__nv_fp8_e4m3>(at::Tensor weights, at::Tens
             scale_w.data_ptr<float>(),
             last_features,
             numel,
-            outputs.data_ptr<int8_t>());
+            outputs.data_ptr<uint8_t>());
     });
 }
 
@@ -453,15 +453,15 @@ void real_quantized_quantize_weights<cutlass::int4b_t>(at::Tensor weights, at::T
             scale_w.data_ptr<float>(),
             last_features,
             numel,
-            outputs.data_ptr<int8_t>());
+            outputs.data_ptr<uint8_t>());
     });
 }
 
 //////////////////////////////////////////////////////////////////////
 ////////// Call GEMM Pipepine
 //////////////////////////////////////////////////////////////////////
-template<typename T>
-at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w) {
+template<typename T, typename scale_x_type, typename scale_w_type>
+at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, scale_x_type scale_x, scale_w_type scale_w) {
     auto inputs_sizes = inputs.sizes();
     auto weights_sizes = weights.sizes();
     auto input_rank = inputs_sizes.size();
@@ -501,265 +501,111 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, flo
 
     auto stream = c10::cuda::getCurrentCUDAStream();
     size_t numel_x = inputs.numel();
-    AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_scaled_kernel", [&] {
-        real_quantize_scaled_kernel<scalar_t, T, StoreT><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-            inputs.data_ptr<scalar_t>(), scale_x, numel_x, Xq_tensor.template data_ptr<StoreT>()
-        );
-    });
-
-    // scale can be fusioned, dequant is unnecessary
-    if (batch_count > 1) {
-        // batched gemm
-        AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_batched_gemm_scaled", [&] {
-            launch_batched_gemm_scaled<T, scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, batch_count, scale_x, scale_w, 0.0f, stream);
+    if constexpr (std::is_same<scale_x_type, float>::value) {
+        // axis none
+        AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_scaled_kernel", [&] {
+            real_quantize_scaled_kernel<scalar_t, T, StoreT><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                inputs.data_ptr<scalar_t>(), scale_x, numel_x, Xq_tensor.template data_ptr<StoreT>()
+            );
         });
     }
     else {
-        // single gemm
-        AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_gemm_scaled", [&] {
-            launch_gemm_scaled<T, scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, scale_x, scale_w, 0.0f, stream);
+        // axis = -1
+        AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_scaled_kernel", [&] {
+            real_quantize_scaled_kernel<scalar_t, T, StoreT><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                inputs.data_ptr<scalar_t>(), scale_x.template data_ptr<float>(), K, numel_x, Xq_tensor.template data_ptr<StoreT>()
+            );
         });
     }
-    
-    return outputs;
-}
 
-template<typename T>
-at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, float scale_w) {
-    auto inputs_sizes = inputs.sizes();
-    auto weights_sizes = weights.sizes();
-    auto input_rank = inputs_sizes.size();
-    int64_t batch_count = 1;
-    if (input_rank > 2) {
-        // batch gemm
-        TORCH_CHECK(inputs.is_contiguous(), "inputs must be contiguous");
-        for (int64_t i = 0; i < input_rank - 2; ++i) {
-            batch_count *= inputs.size(i);
+    if constexpr (std::is_same<scale_x_type, float>::value && std::is_same<scale_w_type, float>::value) {
+        // dequant is unnecessary
+        if (batch_count > 1) {
+            // batched gemm
+            AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_batched_gemm_scaled", [&] {
+                launch_batched_gemm_scaled<T, scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, batch_count, scale_x, scale_w, 0.0f, stream);
+            });
         }
-    }
-    int64_t M = inputs_sizes[input_rank - 2]; // (..., M, K)
-    int64_t K = inputs_sizes[input_rank - 1];
-    int64_t N = std::is_same<T, cutlass::int4b_t>::value ? weights_sizes[0] * 2 / K : weights_sizes[0]; // (N, K)
-    if constexpr (!std::is_same<T, cutlass::int4b_t>::value) {
-        if (weights_sizes[1] != K) {
-            std::ostringstream oss;
-            oss << "real_quantized_e4m3fy_gemm_scaled: weights tensor must have shape [N, K], but got weights shape ["
-                << weights_sizes[0] << ", " << weights_sizes[1] << "] and inputs shape [..., "
-                << inputs_sizes[input_rank - 2] << ", " << inputs_sizes[input_rank - 1] << "]";
-            throw std::runtime_error(oss.str());
+        else {
+            // single gemm
+            AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_gemm_scaled", [&] {
+                launch_gemm_scaled<T, scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, scale_x, scale_w, 0.0f, stream);
+            });
         }
-    }
-
-    // create output tensor
-    auto options = inputs.options();
-    std::vector<int64_t> output_sizes(inputs_sizes.begin(), inputs_sizes.end() - 1);
-    output_sizes.push_back(N);
-    auto outputs = at::empty(output_sizes, options);
-    // quantized tensors
-    using StoreT = typename StoreType<T>::type;
-    auto Xq_tensor = std::is_same<T, cutlass::int4b_t>::value
-        ? at::empty({(inputs.numel() + 1) / 2}, options.dtype(c10::CppTypeToScalarType<StoreT>::value))
-        : at::empty_like(inputs, options.dtype(c10::CppTypeToScalarType<StoreT>::value));
-    T* Xq = reinterpret_cast<T*>(Xq_tensor.template data_ptr<StoreT>());
-    T* Wq = reinterpret_cast<T*>(weights.template data_ptr<StoreT>());
-
-    auto stream = c10::cuda::getCurrentCUDAStream();
-    size_t numel_x = inputs.numel();
-    // input axis = -1
-    AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_scaled_kernel", [&] {
-        real_quantize_scaled_kernel<scalar_t, T, StoreT, -1><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-            inputs.data_ptr<scalar_t>(), scale_x.data_ptr<float>(), K, numel_x, Xq_tensor.template data_ptr<StoreT>()
-        );
-    });
-
-    // dequant is necessary but only pass scale_w and the type shoule be float32 because we need to do extra scale.
-    auto tmp_options = outputs.options().dtype(torch::kFloat32);
-    auto Yq = at::empty_like(outputs, tmp_options);
-    if (batch_count > 1) {
-        // batched gemm
-        AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_batched_gemm_scaled", [&] {
-            launch_batched_gemm_scaled<T, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, batch_count, 1.0f, scale_w, 0.0f, stream);
-        });
     }
     else {
-        // single gemm
-        AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_gemm_scaled", [&] {
-            launch_gemm_scaled<T, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, 1.0f, scale_w, 0.0f, stream);
-        });
+        auto tmp_options = outputs.options().dtype(torch::kFloat32);
+        auto Yq = at::empty_like(outputs, tmp_options);
+        size_t numel_y = outputs.numel();
+
+        float new_scale_x = 1.0f;
+        if constexpr (std::is_same<scale_x_type, float>::value) {
+            new_scale_x = scale_x;
+        }
+
+        float new_scale_w = 1.0f;
+        if constexpr (std::is_same<scale_w_type, float>::value) {
+            new_scale_w = scale_w;
+        }
+
+        if (batch_count > 1) {
+            // batched gemm
+            AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_batched_gemm_scaled", [&] {
+                launch_batched_gemm_scaled<T, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, batch_count, new_scale_x, new_scale_w, 0.0f, stream);
+            });
+        }
+        else {
+            // single gemm
+            AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_gemm_scaled", [&] {
+                launch_gemm_scaled<T, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, new_scale_x, new_scale_w, 0.0f, stream);
+            });
+        }
+
+        if constexpr (std::is_same<scale_x_type, float>::value) {
+            // dequant with scale_w
+            AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_scaled_kernel", [&] {
+                real_dequantize_scaled_kernel<scalar_t, 0><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                    Yq.data_ptr<float>(),
+                    outputs.data_ptr<scalar_t>(), 
+                    scale_w.template data_ptr<float>(),
+                    N,
+                    numel_y
+                );
+            });
+        }
+        else if constexpr (std::is_same<scale_w_type, float>::value) {
+            // dequant with scale_x
+            AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_scaled_kernel", [&] {
+                real_dequantize_scaled_kernel<scalar_t, 1><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                    Yq.data_ptr<float>(),
+                    outputs.data_ptr<scalar_t>(), 
+                    scale_x.template data_ptr<float>(),
+                    N,
+                    numel_y
+                );
+            });
+        }
+        else {
+            // dequant with scale_x and scale_w
+            AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_scaled_kernel", [&] {
+                real_dequantize_scaled_kernel<scalar_t><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                    Yq.data_ptr<float>(),
+                    outputs.data_ptr<scalar_t>(), 
+                    scale_x.template data_ptr<float>(), scale_w.template data_ptr<float>(),
+                    N,
+                    numel_y
+                );
+            });
+        }
     }
 
-    // dequant with scale_x
-    AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_scaled_kernel", [&] {
-        real_dequantize_scaled_kernel<scalar_t, 1><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-            Yq.data_ptr<float>(),
-            outputs.data_ptr<scalar_t>(), 
-            scale_x.data_ptr<float>(),
-            N,
-            numel_y
-        );
-    });
-    
     return outputs;
 }
 
-template<typename T>
-at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, float scale_x, at::Tensor scale_w) {
-    auto inputs_sizes = inputs.sizes();
-    auto weights_sizes = weights.sizes();
-    auto input_rank = inputs_sizes.size();
-    int64_t batch_count = 1;
-    if (input_rank > 2) {
-        // batch gemm
-        TORCH_CHECK(inputs.is_contiguous(), "inputs must be contiguous");
-        for (int64_t i = 0; i < input_rank - 2; ++i) {
-            batch_count *= inputs.size(i);
-        }
-    }
-    int64_t M = inputs_sizes[input_rank - 2]; // (..., M, K)
-    int64_t K = inputs_sizes[input_rank - 1];
-    int64_t N = std::is_same<T, cutlass::int4b_t>::value ? weights_sizes[0] * 2 / K : weights_sizes[0]; // (N, K)
-    if constexpr (!std::is_same<T, cutlass::int4b_t>::value) {
-        if (weights_sizes[1] != K) {
-            std::ostringstream oss;
-            oss << "real_quantized_e4m3fy_gemm_scaled: weights tensor must have shape [N, K], but got weights shape ["
-                << weights_sizes[0] << ", " << weights_sizes[1] << "] and inputs shape [..., "
-                << inputs_sizes[input_rank - 2] << ", " << inputs_sizes[input_rank - 1] << "]";
-            throw std::runtime_error(oss.str());
-        }
-    }
-
-    // create output tensor
-    auto options = inputs.options();
-    std::vector<int64_t> output_sizes(inputs_sizes.begin(), inputs_sizes.end() - 1);
-    output_sizes.push_back(N);
-    auto outputs = at::empty(output_sizes, options);
-    // quantized tensors
-    using StoreT = typename StoreType<T>::type;
-    auto Xq_tensor = std::is_same<T, cutlass::int4b_t>::value
-        ? at::empty({(inputs.numel() + 1) / 2}, options.dtype(c10::CppTypeToScalarType<StoreT>::value))
-        : at::empty_like(inputs, options.dtype(c10::CppTypeToScalarType<StoreT>::value));
-    T* Xq = reinterpret_cast<T*>(Xq_tensor.template data_ptr<StoreT>());
-    T* Wq = reinterpret_cast<T*>(weights.template data_ptr<StoreT>());
-
-    auto stream = c10::cuda::getCurrentCUDAStream();
-    size_t numel_x = inputs.numel();
-    AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_scaled_kernel", [&] {
-        real_quantize_scaled_kernel<scalar_t, T, StoreT><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-            inputs.data_ptr<scalar_t>(), scale_x, numel_x, Xq_tensor.template data_ptr<StoreT>()
-        );
-    });
-
-    // dequant is necessary but only pass scale_x and the type shoule be float32 because we need to do extra scale.
-    auto tmp_options = outputs.options().dtype(torch::kFloat32);
-    auto Yq = at::empty_like(outputs, tmp_options);
-    if (batch_count > 1) {
-        // batched gemm
-        AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_batched_gemm_scaled", [&] {
-            launch_batched_gemm_scaled<T, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, batch_count, scale_x, 1.0f, 0.0f, stream);
-        });
-    }
-    else {
-        // single gemm
-        AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_gemm_scaled", [&] {
-            launch_gemm_scaled<T, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, scale_x, 1.0f, 0.0f, stream);
-        });
-    }
-
-    // dequant with scale_w
-    AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_scaled_kernel", [&] {
-        real_dequantize_scaled_kernel<scalar_t, 0><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-            Yq.data_ptr<float>(),
-            outputs.data_ptr<scalar_t>(), 
-            scale_w.data_ptr<float>(),
-            N,
-            numel_y
-        );
-    });
-    
-    return outputs;
-}
-
-template<typename T>
-at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, at::Tensor scale_w) {
-    auto inputs_sizes = inputs.sizes();
-    auto weights_sizes = weights.sizes();
-    auto input_rank = inputs_sizes.size();
-    int64_t batch_count = 1;
-    if (input_rank > 2) {
-        // batch gemm
-        TORCH_CHECK(inputs.is_contiguous(), "inputs must be contiguous");
-        for (int64_t i = 0; i < input_rank - 2; ++i) {
-            batch_count *= inputs.size(i);
-        }
-    }
-    int64_t M = inputs_sizes[input_rank - 2]; // (..., M, K)
-    int64_t K = inputs_sizes[input_rank - 1];
-    int64_t N = std::is_same<T, cutlass::int4b_t>::value ? weights_sizes[0] * 2 / K : weights_sizes[0]; // (N, K)
-    if constexpr (!std::is_same<T, cutlass::int4b_t>::value) {
-        if (weights_sizes[1] != K) {
-            std::ostringstream oss;
-            oss << "real_quantized_e4m3fy_gemm_scaled: weights tensor must have shape [N, K], but got weights shape ["
-                << weights_sizes[0] << ", " << weights_sizes[1] << "] and inputs shape [..., "
-                << inputs_sizes[input_rank - 2] << ", " << inputs_sizes[input_rank - 1] << "]";
-            throw std::runtime_error(oss.str());
-        }
-    }
-
-    // create output tensor
-    auto options = inputs.options();
-    std::vector<int64_t> output_sizes(inputs_sizes.begin(), inputs_sizes.end() - 1);
-    output_sizes.push_back(N);
-    auto outputs = at::empty(output_sizes, options);
-    // quantized tensors
-    using StoreT = typename StoreType<T>::type;
-    auto Xq_tensor = std::is_same<T, cutlass::int4b_t>::value
-        ? at::empty({(inputs.numel() + 1) / 2}, options.dtype(c10::CppTypeToScalarType<StoreT>::value))
-        : at::empty_like(inputs, options.dtype(c10::CppTypeToScalarType<StoreT>::value));
-    T* Xq = reinterpret_cast<T*>(Xq_tensor.template data_ptr<StoreT>());
-    T* Wq = reinterpret_cast<T*>(weights.template data_ptr<StoreT>());
-
-    auto stream = c10::cuda::getCurrentCUDAStream();
-    size_t numel_x = inputs.numel();
-    // input axis = -1
-    AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_scaled_kernel", [&] {
-        real_quantize_scaled_kernel<scalar_t, T, StoreT, -1><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-            inputs.data_ptr<scalar_t>(), scale_x.data_ptr<float>(), K, numel_x, Xq_tensor.template data_ptr<StoreT>()
-        );
-    });
-
-    auto tmp_options = outputs.options().dtype(torch::kFloat32);
-    auto Yq = at::empty_like(outputs, tmp_options);
-    if (batch_count > 1) {
-        // batched gemm
-        AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_batched_gemm_scaled", [&] {
-            launch_batched_gemm_scaled<T, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, batch_count, 1.0f, 1.0f, 0.0f, stream);
-        });
-    }
-    else {
-        // single gemm
-        AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_gemm_scaled", [&] {
-            launch_gemm_scaled<T, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, 1.0f, 1.0f, 0.0f, stream);
-        });
-    }
-
-    // dequant with scale_x and scale_w
-    AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_scaled_kernel", [&] {
-        real_dequantize_scaled_kernel<scalar_t><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-            Yq.data_ptr<float>(),
-            outputs.data_ptr<scalar_t>(), 
-            scale_x.data_ptr<float>(), scale_w.data_ptr<float>(),
-            N,
-            numel_y
-        );
-    });
-    
-    return outputs;
-}
-
-template<typename T>
+template<typename T, typename scale_x_type, typename scale_w_type>
 at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights,
-                                float pos_scale_x, float neg_scale_x,
-                                float scale_w) {
+                                scale_x_type pos_scale_x, scale_x_type neg_scale_x,
+                                scale_w_type scale_w) {
     
     auto inputs_sizes = inputs.sizes();
     auto weights_sizes = weights.sizes();
@@ -806,10 +652,21 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
     auto stream = c10::cuda::getCurrentCUDAStream();
     size_t numel_x = inputs.numel();
     // X = Xp + Xn
-    AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_dual_scaled_kernel", [&] {
-        real_quantize_dual_scaled_kernel<scalar_t, T, StoreT><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-            inputs.data_ptr<scalar_t>(), pos_scale_x, neg_scale_x, numel_x, Xp_tensor.template data_ptr<typename StoreType<T>::type>(), Xn_tensor.template data_ptr<typename StoreType<T>::type>());
-    });
+    if constexpr (std::is_same<scale_x_type, float>::value) {
+        // axis none
+        AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_dual_scaled_kernel", [&] {
+            real_quantize_dual_scaled_kernel<scalar_t, T, StoreT><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                inputs.data_ptr<scalar_t>(), pos_scale_x, neg_scale_x, numel_x, Xp_tensor.template data_ptr<typename StoreType<T>::type>(), Xn_tensor.template data_ptr<typename StoreType<T>::type>());
+        });
+    }
+    else {
+        // axis = -1
+        AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_dual_scaled_kernel", [&] {
+            real_quantize_dual_scaled_kernel<scalar_t, T, StoreT><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                inputs.data_ptr<scalar_t>(), pos_scale_x.template data_ptr<float>(), neg_scale_x.template data_ptr<float>(), K,
+                numel_x, Xp_tensor.template data_ptr<typename StoreType<T>::type>(), Xn_tensor.template data_ptr<typename StoreType<T>::type>());
+        });
+    }
 
     auto tmp_options = outputs.options().dtype(torch::kFloat32);
     auto Y_p = at::empty_like(outputs, tmp_options);
@@ -855,31 +712,95 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
 
     // Y = Y_p + Y_n
     size_t numel_y = outputs.numel();
-    AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_dual_scaled_kernel", [&] {
-        real_dequantize_dual_scaled_kernel<scalar_t><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-            Y_p.data_ptr<float>(), 
-            Y_n.data_ptr<float>(), 
-            outputs.data_ptr<scalar_t>(), 
-            pos_scale_x * scale_w, 
-            neg_scale_x * scale_w, 
-            numel_y
-        );
-    });
+
+    if constexpr (std::is_same<scale_x_type, float>::value && std::is_same<scale_w_type, float>::value) {
+        // input axis = None, weight axis = None
+        AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_dual_scaled_kernel", [&] {
+            real_dequantize_dual_scaled_kernel<scalar_t><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                Y_p.data_ptr<float>(), 
+                Y_n.data_ptr<float>(), 
+                outputs.data_ptr<scalar_t>(), 
+                pos_scale_x, neg_scale_x,
+                scale_w, 
+                numel_y
+            );
+        });
+    }
+    else if constexpr (std::is_same<scale_w_type, float>::value) {
+        // scale x is tensor, row_flag = 1
+        AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_dual_scaled_kernel", [&] {
+            real_dequantize_dual_scaled_kernel<scalar_t><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                Y_p.data_ptr<float>(), 
+                Y_n.data_ptr<float>(), 
+                outputs.data_ptr<scalar_t>(), 
+                pos_scale_x.template data_ptr<float>(), neg_scale_x.template data_ptr<float>(),
+                scale_w,
+                N,
+                numel_y
+            );
+        });
+    }
+    else if constexpr (std::is_same<scale_x_type, float>::value) {
+        // scale w is tensor, row_flag = 0
+        AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_dual_scaled_kernel", [&] {
+            real_dequantize_dual_scaled_kernel<scalar_t><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                Y_p.data_ptr<float>(), 
+                Y_n.data_ptr<float>(), 
+                outputs.data_ptr<scalar_t>(), 
+                pos_scale_x, neg_scale_x,
+                scale_w.template data_ptr<float>(),
+                N,
+                numel_y
+            );
+        });
+    }
+    else {
+        // all tensor
+        AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_dual_scaled_kernel", [&] {
+            real_dequantize_dual_scaled_kernel<scalar_t><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                Y_p.data_ptr<float>(), 
+                Y_n.data_ptr<float>(), 
+                outputs.data_ptr<scalar_t>(), 
+                pos_scale_x.template data_ptr<float>(), neg_scale_x.template data_ptr<float>(),
+                scale_w.template data_ptr<float>(),
+                N,
+                numel_y
+            );
+        });
+    }
 
     return outputs;
 }
 
 #ifdef SEGQUANT_FP8
-template at::Tensor real_quantized_gemm_scaled<__nv_fp8_e4m3>(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
-template at::Tensor real_quantized_gemm_dual_scaled<__nv_fp8_e4m3>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_scaled<__nv_fp8_e4m3, float, float>(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_scaled<__nv_fp8_e4m3, float, at::Tensor>(at::Tensor inputs, at::Tensor weights, float scale_x, at::Tensor scale_w);
+template at::Tensor real_quantized_gemm_scaled<__nv_fp8_e4m3, at::Tensor, float>(at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_scaled<__nv_fp8_e4m3, at::Tensor, at::Tensor>(at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, at::Tensor scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<__nv_fp8_e4m3, float, float>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<__nv_fp8_e4m3, float, at::Tensor>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, at::Tensor scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<__nv_fp8_e4m3, at::Tensor, float>(at::Tensor inputs, at::Tensor weights, at::Tensor pos_scale_x, at::Tensor neg_scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<__nv_fp8_e4m3, at::Tensor, at::Tensor>(at::Tensor inputs, at::Tensor weights, at::Tensor pos_scale_x, at::Tensor neg_scale_x, at::Tensor scale_w);
 #endif
 
 #ifdef SEGQUANT_INT8
-template at::Tensor real_quantized_gemm_scaled<int8_t>(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
-template at::Tensor real_quantized_gemm_dual_scaled<int8_t>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_scaled<int8_t, float, float>(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_scaled<int8_t, float, at::Tensor>(at::Tensor inputs, at::Tensor weights, float scale_x, at::Tensor scale_w);
+template at::Tensor real_quantized_gemm_scaled<int8_t, at::Tensor, float>(at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_scaled<int8_t, at::Tensor, at::Tensor>(at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, at::Tensor scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<int8_t, float, float>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<int8_t, float, at::Tensor>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, at::Tensor scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<int8_t, at::Tensor, float>(at::Tensor inputs, at::Tensor weights, at::Tensor pos_scale_x, at::Tensor neg_scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<int8_t, at::Tensor, at::Tensor>(at::Tensor inputs, at::Tensor weights, at::Tensor pos_scale_x, at::Tensor neg_scale_x, at::Tensor scale_w);
 #endif
 
 #ifdef SEGQUANT_INT4
-template at::Tensor real_quantized_gemm_scaled<cutlass::int4b_t>(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
-template at::Tensor real_quantized_gemm_dual_scaled<cutlass::int4b_t>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_scaled<cutlass::int4b_t, float, float>(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_scaled<cutlass::int4b_t, float, at::Tensor>(at::Tensor inputs, at::Tensor weights, float scale_x, at::Tensor scale_w);
+template at::Tensor real_quantized_gemm_scaled<cutlass::int4b_t, at::Tensor, float>(at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_scaled<cutlass::int4b_t, at::Tensor, at::Tensor>(at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, at::Tensor scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<cutlass::int4b_t, float, float>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<cutlass::int4b_t, float, at::Tensor>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, at::Tensor scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<cutlass::int4b_t, at::Tensor, float>(at::Tensor inputs, at::Tensor weights, at::Tensor pos_scale_x, at::Tensor neg_scale_x, float scale_w);
+template at::Tensor real_quantized_gemm_dual_scaled<cutlass::int4b_t, at::Tensor, at::Tensor>(at::Tensor inputs, at::Tensor weights, at::Tensor pos_scale_x, at::Tensor neg_scale_x, at::Tensor scale_w);
 #endif

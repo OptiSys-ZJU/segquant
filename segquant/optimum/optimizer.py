@@ -20,6 +20,7 @@ class BaseOptimizer:
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
+        device=None,
     ):
         super().__init__()
         self.seg_mode = seg_mode
@@ -31,7 +32,7 @@ class BaseOptimizer:
         self.real_quant = real_quant
         self.kernel_type = kernel_type
 
-        self.device = self.weight_chunks[0].device
+        self.device = device
 
         self.dual_scale = dual_scale
         if self.real_quant and dual_scale:
@@ -162,6 +163,7 @@ class DefaultOptimizer(BaseOptimizer):
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
+        device=None,
         **kwargs,
     ):
         assert len(input_calibrators) == 1 or len(weight_calibrators) == 1, \
@@ -176,6 +178,7 @@ class DefaultOptimizer(BaseOptimizer):
             real_quant,
             dual_scale,
             kernel_type,
+            device,
         )
 
         if seg_mode == 'weight':
@@ -270,6 +273,7 @@ class SmoothOptimizer(BaseOptimizer):
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
+        device=None,
         alpha=0.5,
         search_alpha_config=None,
         verbose=False,
@@ -296,6 +300,7 @@ class SmoothOptimizer(BaseOptimizer):
             real_quant,
             dual_scale,
             kernel_type,
+            device,
         )
 
         self.max_w = []
@@ -569,6 +574,7 @@ class SVDOptimizer(SmoothOptimizer):
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
+        device=None,
         alpha=0.5,
         low_rank=32,
         search_alpha_config=None,
@@ -585,6 +591,7 @@ class SVDOptimizer(SmoothOptimizer):
             real_quant,
             dual_scale,
             kernel_type,
+            device,
             alpha,
             search_alpha_config,
             verbose,

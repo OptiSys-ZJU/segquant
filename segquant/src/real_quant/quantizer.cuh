@@ -89,7 +89,6 @@ __global__ void real_quantize_dual_scaled_kernel(
 __device__ __forceinline__ float get_scale_with_axis(int idx, const float* scales, size_t last_features) {
     // weight: idx (out, in), s: (out,)
     // input: idx (..., in), s: (..., )
-    float scale_val;
     int row = idx / last_features;
     return scales[row];
 }
@@ -111,7 +110,7 @@ __global__ void real_quantize_scaled_kernel(
     }
 }
 
-template <typename T, typename OutputType, typename StoreType, int row_flag>
+template <typename T, typename OutputType, typename StoreType>
 __global__ void real_quantize_dual_scaled_kernel(
     const T *inputs,
     const float* pos_scale_x, const float* neg_scale_x,
@@ -125,14 +124,14 @@ __global__ void real_quantize_dual_scaled_kernel(
     for (int idx = 4 * tid; idx < 4 * (tid + 1) && idx < n; ++idx) {
         float val = static_cast<float>(inputs[idx]);
         if (val >= 0) {
-            float pos_scale_x = get_scale_with_axis(idx, pos_scale_x, last_features);
-            float scaled = val * pos_scale_x;
+            float pos_scale_val = get_scale_with_axis(idx, pos_scale_x, last_features);
+            float scaled = val * pos_scale_val;
             store_data<OutputType, StoreType>(Xp, idx, scaled);
             store_data<OutputType, StoreType>(Xn, idx, 0.0f);
         } else {
             // val < 0, neg_scale_x > 0 --> scaled < 0
-            float neg_scale_x = get_scale_with_axis(idx, neg_scale_x, last_features);
-            float scaled = val * neg_scale_x;
+            float neg_scale_val = get_scale_with_axis(idx, neg_scale_x, last_features);
+            float scaled = val * neg_scale_val;
             store_data<OutputType, StoreType>(Xn, idx, scaled);
             store_data<OutputType, StoreType>(Xp, idx, 0.0f);
         }
