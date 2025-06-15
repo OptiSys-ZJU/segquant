@@ -270,9 +270,9 @@ class IntQuantizer(BaseQuantizer):
             assert not self.dual_scale, "Weight quantization does not support dual scale."
             ext = None
             if self.num_bits == 8:
-                ext = load_real_quant_int8_ext(required=False)
+                ext = load_real_quant_int8_ext(required=False)[0]
             elif self.num_bits == 4:
-                ext = load_real_quant_int4_ext(required=False)
+                ext = load_real_quant_int4_ext(required=False)[0]
 
             if ext is not None:
                 res = ext.create_quantized_weights(x)
