@@ -1,13 +1,15 @@
 #include <cutlass/gemm/device/gemm.h>
 #include <cutlass/gemm/device/gemm_array.h>
 #include <cutlass/gemm/device/gemm_batched.h>
+#include <cutlass/gemm/device/gemm_universal.h>
 #include <cutlass/util/device_memory.h>
+#include <cutlass/arch/mma_sm80.h>
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <string>
 #include "quantizer.cuh"
 #include "dequantizer.cuh"
-#include "utils.h"
+#include "seg_utils.h"
 
 #define BLOCK_SIZE 128
 
@@ -109,20 +111,8 @@ struct OpType {
     using type = cutlass::arch::OpClassTensorOp;
 };
 
-template <>
-struct OpType<int8_t, cutlass::int4b_t> {
-    using type = cutlass::arch::OpClassSimt;
-};
-
 template <typename A, typename B>
 struct ShapeType;
-
-template <>
-struct ShapeType<cutlass::int4b_t, cutlass::int4b_t> {
-    using ThreadblockShape = cutlass::gemm::GemmShape<128, 256, 128>;
-    using WarpShape = cutlass::gemm::GemmShape<64, 64, 128>;
-    using InstructionShape = cutlass::gemm::GemmShape<16, 8, 64>;
-};
 
 template <>
 struct ShapeType<int8_t, int8_t> {
@@ -132,15 +122,29 @@ struct ShapeType<int8_t, int8_t> {
 };
 
 template <>
+struct ShapeType<cutlass::int4b_t, cutlass::int4b_t> {
+    using ThreadblockShape = cutlass::gemm::GemmShape<128, 256, 128>;
+    using WarpShape = cutlass::gemm::GemmShape<64, 64, 128>;
+    using InstructionShape = cutlass::gemm::GemmShape<16, 8, 64>;
+};
+
+template <>
 struct ShapeType<int8_t, cutlass::int4b_t> {
-    using ThreadblockShape = cutlass::gemm::GemmShape<128, 256, 64>;
+    using ThreadblockShape = cutlass::gemm::GemmShape<128, 128, 64>;
+    using WarpShape = cutlass::gemm::GemmShape<64, 64, 64>;
+    using InstructionShape = cutlass::gemm::GemmShape<16, 8, 32>;
+};
+
+template <>
+struct ShapeType<at::Half, cutlass::int4b_t> {
+    using ThreadblockShape = cutlass::gemm::GemmShape<128, 128, 64>;
     using WarpShape = cutlass::gemm::GemmShape<64, 64, 64>;
     using InstructionShape = cutlass::gemm::GemmShape<16, 8, 32>;
 };
 
 template <>
 struct ShapeType<at::Half, int8_t> {
-    using ThreadblockShape = cutlass::gemm::GemmShape<128, 256, 64>;
+    using ThreadblockShape = cutlass::gemm::GemmShape<128, 128, 64>;
     using WarpShape = cutlass::gemm::GemmShape<64, 64, 64>;
     using InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;
 };
@@ -152,23 +156,71 @@ struct ShapeType<__nv_fp8_e4m3, __nv_fp8_e4m3> {
     using InstructionShape = cutlass::gemm::GemmShape<16, 8, 32>;
 };
 
-template <typename A>
-struct ShapeType<A, at::Half> {
-    using ThreadblockShape = cutlass::gemm::GemmShape<128, 256, 64>;
-    using WarpShape = cutlass::gemm::GemmShape<64, 64, 64>;
-    using InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;
+template <typename A, typename B, bool IsSame = std::is_same<A, B>::value>
+struct StagesImpl;
+template <typename A, typename B>
+struct StagesImpl<A, B, true> {
+    static constexpr int value = 3;
+};
+template <typename A, typename B>
+struct StagesImpl<A, B, false> {
+    static constexpr int value = 4;
+};
+template <typename A, typename B>
+struct Stages : StagesImpl<A, B> {};
+
+template <typename A, typename B>
+struct AddType {
+    using type = cutlass::arch::OpMultiplyAdd;
+};
+template <>
+struct AddType<int8_t, int8_t> {
+    using type = cutlass::arch::OpMultiplyAddSaturate;
+};
+
+template <>
+struct AddType<cutlass::int4b_t, cutlass::int4b_t> {
+    using type = cutlass::arch::OpMultiplyAddSaturate;
+};
+
+template <>
+struct AddType<int8_t, cutlass::int4b_t> {
+    using type = cutlass::arch::OpMultiplyAddMixedInputUpcast;
+};
+
+template <>
+struct AddType<at::Half, int8_t> {
+    using type = cutlass::arch::OpMultiplyAddMixedInputUpcast;
+};
+
+template <>
+struct AddType<__nv_fp8_e4m3, __nv_fp8_e4m3> {
+    using type = cutlass::arch::OpMultiplyAdd;
+    // fast but precision not ok
+    // using type = cutlass::arch::OpMultiplyAddFastAccum;
+};
+
+template <typename A, typename B>
+struct AlignNums {
+    static constexpr int kAlignmentA = 128 / cutlass::sizeof_bits<A>::value;
+    static constexpr int kAlignmentB = 128 / cutlass::sizeof_bits<B>::value;
 };
 
 //////////////////////////////////////////////////////////////////////
 ////////// CUTLASS Kernels
 //////////////////////////////////////////////////////////////////////
 template <typename AType, typename BType, typename CType>
-void launch_gemm_scaled(
-    const AType *A, const BType *B, CType *C,
+void launch_universal_gemm_scaled(
+    cudaStream_t stream,
+    void const* A, void const* B, void* C,
     int M, int N, int K,
-    float scale_x, float scale_w,
-    float beta,
-    cudaStream_t stream) {
+    cutlass::gemm::GemmUniversalMode mode = cutlass::gemm::GemmUniversalMode::kGemm,
+    float alpha = 1.0f, float beta = 0.0f,
+    int batch_count=1,
+    int64_t batch_stride_A=0,
+    int64_t batch_stride_B=0,
+    int64_t batch_stride_C=0,
+    int64_t batch_stride_D=0) {
 
     using ElementInputA = typename CutlassElementOutputType<AType>::type;
     using ElementInputB = typename CutlassElementOutputType<BType>::type;
@@ -181,10 +233,20 @@ void launch_gemm_scaled(
     using LayoutOutput = cutlass::layout::RowMajor;
     using CutlassArch = typename CutlassArchType<AType, BType>::arch;
     constexpr int NumPerThread = 128 / cutlass::sizeof_bits<ElementOutput>::value;
-    constexpr int kAlignmentA = 128 / cutlass::sizeof_bits<ElementInputA>::value;
-    constexpr int kAlignmentB = 128 / cutlass::sizeof_bits<ElementInputB>::value;
 
-    using Gemm = cutlass::gemm::device::Gemm<
+    if (K % AlignNums<AType, BType>::kAlignmentA != 0) {
+        throw std::runtime_error(
+            "K (" + std::to_string(K) + ") must be divisible by alignmentA (" +
+            std::to_string(AlignNums<AType, BType>::kAlignmentA) + ") for AType");
+    }
+    
+    if (K % AlignNums<AType, BType>::kAlignmentB != 0) {
+        throw std::runtime_error(
+            "K (" + std::to_string(K) + ") must be divisible by alignmentB (" +
+            std::to_string(AlignNums<AType, BType>::kAlignmentB) + ") for BType");
+    }
+
+    using GemmUniversal = cutlass::gemm::device::GemmUniversal<
         ElementInputA,
         LayoutInputA,
         ElementInputB,
@@ -203,30 +265,56 @@ void launch_gemm_scaled(
             ElementAccumulator,
             ElementCompute
         >,
-        cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
-        3,
-        kAlignmentA,
-        kAlignmentB
+        cutlass::gemm::threadblock::GemmBatchedIdentityThreadblockSwizzle,
+        Stages<AType, BType>::value,
+        AlignNums<AType, BType>::kAlignmentA,
+        AlignNums<AType, BType>::kAlignmentB,
+        typename AddType<AType, BType>::type
     >;
 
-    Gemm gemm;
-
-    float scale = 1.0f / (scale_x * scale_w);
-
-    typename Gemm::Arguments args{
+    typename GemmUniversal::Arguments args{
+        mode,
         {M, N, K},
-        {reinterpret_cast<const ElementInputA*>(A), K},
-        {reinterpret_cast<const ElementInputB*>(B), K},
-        {reinterpret_cast<const ElementOutput*>(C), N},
-        {reinterpret_cast<ElementOutput*>(C), N},
-        {scale, beta}
+        batch_count,
+        {alpha, beta},
+        reinterpret_cast<void const *>(A),
+        reinterpret_cast<void const *>(B),
+        reinterpret_cast<void const *>(C),
+        reinterpret_cast<void *>(C),
+        batch_stride_A,
+        batch_stride_B,
+        batch_stride_C,
+        batch_stride_D,
+        K,
+        K,
+        N,
+        N
     };
 
+    GemmUniversal gemm;
     cutlass::Status status = gemm(args, nullptr, stream);
     cudaError_t err = cudaGetLastError();
     if (status != cutlass::Status::kSuccess) {
         throw std::runtime_error(std::string("GEMM launch failed, cutlass status: ") + cutlass::cutlassGetStatusString(status) + ", cuda error: " + cudaGetErrorString(err));
     }
+}
+
+
+template <typename AType, typename BType, typename CType>
+void launch_gemm_scaled(
+    const AType *A, const BType *B, CType *C,
+    int M, int N, int K,
+    float scale_x, float scale_w,
+    float beta,
+    cudaStream_t stream) {
+
+    float scale = 1.0f / (scale_x * scale_w);
+    launch_universal_gemm_scaled<AType, BType, CType>(
+        stream,
+        A, B, C,
+        M, N, K,
+        cutlass::gemm::GemmUniversalMode::kGemm,
+        scale, beta);
 }
 
 template <typename AType, typename BType, typename CType>
@@ -238,68 +326,19 @@ void launch_batched_gemm_scaled(
     float beta,
     cudaStream_t stream) {
 
-    using ElementInputA = typename CutlassElementOutputType<AType>::type;
-    using ElementInputB = typename CutlassElementOutputType<BType>::type;
-    using ElementOutput = typename CutlassElementOutputType<CType>::type;
-    using ElementAccumulator = typename CutlassElementAccumulatorType<AType, BType>::type;
-    using ElementCompute = float;
-    using CutlassOp = typename OpType<AType, BType>::type;
-    using LayoutInputA = cutlass::layout::RowMajor;
-    using LayoutInputB = cutlass::layout::ColumnMajor;
-    using LayoutOutput = cutlass::layout::RowMajor;
-    using CutlassArch = typename CutlassArchType<AType, BType>::arch;
-    constexpr int NumPerThread = 128 / cutlass::sizeof_bits<ElementOutput>::value;
-    constexpr int kAlignmentA = 128 / cutlass::sizeof_bits<ElementInputA>::value;
-    constexpr int kAlignmentB = 128 / cutlass::sizeof_bits<ElementInputB>::value;
-
-    using Gemm = cutlass::gemm::device::GemmBatched<
-        ElementInputA,
-        LayoutInputA,
-        ElementInputB,
-        LayoutInputB,
-        ElementOutput,
-        LayoutOutput,
-        ElementAccumulator,
-        CutlassOp,
-        CutlassArch,
-        typename ShapeType<AType, BType>::ThreadblockShape,
-        typename ShapeType<AType, BType>::WarpShape,
-        typename ShapeType<AType, BType>::InstructionShape,
-        cutlass::epilogue::thread::LinearCombination<
-            ElementOutput,
-            NumPerThread,
-            ElementAccumulator,
-            ElementCompute
-        >,
-        cutlass::gemm::threadblock::GemmBatchedIdentityThreadblockSwizzle,
-        3,
-        kAlignmentA,
-        kAlignmentB
-    >;
-
-    Gemm gemm;
-
     float scale = 1.0f / (scale_x * scale_w);
-
-    typename Gemm::Arguments args{
-        {M, N, K},
-        {reinterpret_cast<const ElementInputA*>(A), K},
+    launch_universal_gemm_scaled<AType, BType, CType>(
+        stream,
+        A, B, C,
+        M, N, K,
+        cutlass::gemm::GemmUniversalMode::kBatched,
+        scale, beta,
+        batch_count,
         M * K,
-        {reinterpret_cast<const ElementInputB*>(B), K},
         0,
-        {reinterpret_cast<const ElementOutput*>(C), N},
         M * N,
-        {reinterpret_cast<ElementOutput*>(C), N},
-        M * N,
-        {scale, beta},
-        batch_count
-    };
-
-    cutlass::Status status = gemm(args, nullptr, stream);
-    cudaError_t err = cudaGetLastError();
-    if (status != cutlass::Status::kSuccess) {
-        throw std::runtime_error(std::string("GEMM launch failed, cutlass status: ") + cutlass::cutlassGetStatusString(status) + ", cuda error: " + cudaGetErrorString(err));
-    }
+        M * N
+    );
 }
 
 template <typename AType, typename BType, typename CType>
@@ -309,61 +348,14 @@ void launch_array_gemm_scaled(
     int batch_count,
     cudaStream_t stream) {
 
-    using ElementInputA = typename CutlassElementOutputType<AType>::type;
-    using ElementInputB = typename CutlassElementOutputType<BType>::type;
-    using ElementOutput = typename CutlassElementOutputType<CType>::type;
-    using ElementAccumulator = typename CutlassElementAccumulatorType<AType, BType>::type;
-    using ElementCompute = float;
-    using CutlassOp = typename OpType<AType, BType>::type;
-    using LayoutInputA = cutlass::layout::RowMajor;
-    using LayoutInputB = cutlass::layout::ColumnMajor;
-    using LayoutOutput = cutlass::layout::RowMajor;
-    using CutlassArch = typename CutlassArchType<AType, BType>::arch;
-    constexpr int NumPerThread = 128 / cutlass::sizeof_bits<ElementOutput>::value;
-    constexpr int kAlignmentA = 128 / cutlass::sizeof_bits<ElementInputA>::value;
-    constexpr int kAlignmentB = 128 / cutlass::sizeof_bits<ElementInputB>::value;
-
-    using GemmArray = cutlass::gemm::device::GemmArray<
-        ElementInputA,
-        LayoutInputA,
-        ElementInputB,
-        LayoutInputB,
-        ElementOutput,
-        LayoutOutput,
-        ElementAccumulator,
-        CutlassOp,
-        CutlassArch,
-        typename ShapeType<AType, BType>::ThreadblockShape,
-        typename ShapeType<AType, BType>::WarpShape,
-        typename ShapeType<AType, BType>::InstructionShape,
-        cutlass::epilogue::thread::LinearCombination<
-            ElementOutput,
-            NumPerThread,
-            ElementAccumulator,
-            ElementCompute
-        >,
-        cutlass::gemm::threadblock::GemmBatchedIdentityThreadblockSwizzle,
-        3,
-        kAlignmentA,
-        kAlignmentB
-    >;
-
-    typename GemmArray::Arguments args{
-        {M, N, K},
-        reinterpret_cast<ElementInputA const * const *>(A), K,
-        reinterpret_cast<ElementInputB const * const *>(B), K,
-        reinterpret_cast<ElementOutput const * const *>(C), N,
-        reinterpret_cast<ElementOutput * const *>(C), N,
-        {1.0f, 0.0f},
-        batch_count   
-    };
-
-    GemmArray gemm;
-    cutlass::Status status = gemm(args, nullptr, stream);
-    cudaError_t err = cudaGetLastError();
-    if (status != cutlass::Status::kSuccess) {
-        throw std::runtime_error(std::string("GEMM launch failed, cutlass status: ") + cutlass::cutlassGetStatusString(status) + ", cuda error: " + cudaGetErrorString(err));
-    }
+    launch_universal_gemm_scaled<AType, BType, CType>(
+        stream,
+        A, B, C,
+        M, N, K,
+        cutlass::gemm::GemmUniversalMode::kArray,
+        1.0f, 0.0f,
+        batch_count
+    );
 }
 
 
@@ -501,6 +493,15 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, sca
         }
     }
 
+    if constexpr (std::is_same<input_type, at::Half>::value) {
+        if constexpr (std::is_same<scale_x_type, float>::value) {
+            scale_x = 1.0f;
+        }
+        else {
+            scale_x = at::ones_like(scale_x);
+        }
+    }
+
     // create output tensor
     auto options = inputs.options();
     std::vector<int64_t> output_sizes(inputs_sizes.begin(), inputs_sizes.end() - 1);
@@ -509,6 +510,7 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, sca
     // quantized tensors
     using StoreInputType = typename StoreType<input_type>::type;
     using StoreWeightType = typename StoreType<weight_type>::type;
+    using CUDAStoreInputType = typename CUDAStoreType<input_type>::type;
 
     auto Xq_tensor = std::is_same<input_type, cutlass::int4b_t>::value
         ? at::empty({(inputs.numel() + 1) / 2}, options.dtype(c10::CppTypeToScalarType<StoreInputType>::value))
@@ -521,16 +523,16 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, sca
     if constexpr (std::is_same<scale_x_type, float>::value) {
         // axis none
         AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_scaled_kernel", [&] {
-            real_quantize_scaled_kernel<scalar_t, input_type, StoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-                inputs.data_ptr<scalar_t>(), scale_x, numel_x, Xq_tensor.template data_ptr<StoreInputType>()
+            real_quantize_scaled_kernel<scalar_t, input_type, CUDAStoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                inputs.data_ptr<scalar_t>(), scale_x, numel_x, reinterpret_cast<CUDAStoreInputType*>(Xq_tensor.template data_ptr<StoreInputType>())
             );
         });
     }
     else {
         // axis = -1
         AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_scaled_kernel", [&] {
-            real_quantize_scaled_kernel<scalar_t, input_type, StoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-                inputs.data_ptr<scalar_t>(), scale_x.template data_ptr<float>(), K, numel_x, Xq_tensor.template data_ptr<StoreInputType>()
+            real_quantize_scaled_kernel<scalar_t, input_type, CUDAStoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                inputs.data_ptr<scalar_t>(), scale_x.template data_ptr<float>(), K, numel_x, reinterpret_cast<CUDAStoreInputType*>(Xq_tensor.template data_ptr<StoreInputType>())
             );
         });
     }
@@ -648,6 +650,16 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
         }
     }
 
+    if constexpr (std::is_same<input_type, at::Half>::value) {
+        if constexpr (std::is_same<scale_x_type, float>::value) {
+            pos_scale_x = neg_scale_x = 1.0f;
+        }
+        else {
+            pos_scale_x = at::ones_like(pos_scale_x);
+            neg_scale_x = at::ones_like(neg_scale_x);
+        }
+    }
+
     // create output tensor
     auto options = inputs.options();
     std::vector<int64_t> output_sizes(inputs_sizes.begin(), inputs_sizes.end() - 1);
@@ -655,6 +667,8 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
     auto outputs = at::empty(output_sizes, options);
     using StoreInputType = typename StoreType<input_type>::type;
     using StoreWeightType = typename StoreType<weight_type>::type;
+    using CUDAStoreInputType = typename CUDAStoreType<input_type>::type;
+
     auto Xp_tensor = std::is_same<input_type, cutlass::int4b_t>::value
         ? at::empty({(inputs.numel() + 1) / 2}, options.dtype(c10::CppTypeToScalarType<StoreInputType>::value))
         : at::empty_like(inputs, options.dtype(c10::CppTypeToScalarType<StoreInputType>::value));
@@ -673,16 +687,22 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
     if constexpr (std::is_same<scale_x_type, float>::value) {
         // axis none
         AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_dual_scaled_kernel", [&] {
-            real_quantize_dual_scaled_kernel<scalar_t, input_type, StoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-                inputs.data_ptr<scalar_t>(), pos_scale_x, neg_scale_x, numel_x, Xp_tensor.template data_ptr<StoreInputType>(), Xn_tensor.template data_ptr<StoreInputType>());
+            real_quantize_dual_scaled_kernel<scalar_t, input_type, CUDAStoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                inputs.data_ptr<scalar_t>(), pos_scale_x, neg_scale_x, numel_x,
+                reinterpret_cast<CUDAStoreInputType*>(Xp_tensor.template data_ptr<StoreInputType>()),
+                reinterpret_cast<CUDAStoreInputType*>(Xn_tensor.template data_ptr<StoreInputType>())
+            );
         });
     }
     else {
         // axis = -1
         AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_dual_scaled_kernel", [&] {
-            real_quantize_dual_scaled_kernel<scalar_t, input_type, StoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+            real_quantize_dual_scaled_kernel<scalar_t, input_type, CUDAStoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
                 inputs.data_ptr<scalar_t>(), pos_scale_x.template data_ptr<float>(), neg_scale_x.template data_ptr<float>(), K,
-                numel_x, Xp_tensor.template data_ptr<StoreInputType>(), Xn_tensor.template data_ptr<StoreInputType>());
+                numel_x,
+                reinterpret_cast<CUDAStoreInputType*>(Xp_tensor.template data_ptr<StoreInputType>()),
+                reinterpret_cast<CUDAStoreInputType*>(Xn_tensor.template data_ptr<StoreInputType>())
+            );
         });
     }
 
@@ -804,17 +824,12 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
 #define FP8_AW_PAIRS \
     X(__nv_fp8_e4m3, __nv_fp8_e4m3)
 
-// #define MIX_AW_PAIRS \
-//     X(int8_t, int8_t) \
-//     X(int8_t, cutlass::int4b_t) \
-//     X(cutlass::int4b_t, cutlass::int4b_t) \
-//     X(at::Half, cutlass::int4b_t) \
-//     X(at::Half, int8_t) \
-//     X(__nv_fp8_e4m3, __nv_fp8_e4m3) \
-//     X(at::Half, at::Half)
-
 #define MIX_AW_PAIRS \
-    X(int8_t, cutlass::int4b_t)
+    X(int8_t, int8_t) \
+    X(__nv_fp8_e4m3, __nv_fp8_e4m3) \
+    X(cutlass::int4b_t, cutlass::int4b_t) \
+    X(int8_t, cutlass::int4b_t) \
+    X(at::Half, int8_t)
 
 #define INSTANTIATE(A, W, SX, SW) \
     template at::Tensor real_quantized_gemm_scaled<A, W, SX, SW>(at::Tensor, at::Tensor, SX, SW); \

@@ -14,8 +14,9 @@ def build_ext_dict():
     add_dict(load_real_quant_fp8_ext)
     add_dict(load_real_quant_int8_ext)
     add_dict(load_real_quant_int4_ext)
-    # add_dict(load_real_quant_mix_ext)
+    add_dict(load_real_quant_mix_ext)
 
     return d
 
 ext_dict = build_ext_dict()
+print(f'[SegQuant Real Kernel] Supported Type {ext_dict.keys()}')

@@ -96,10 +96,12 @@ class SegmentLinear(nn.Module):
 
         if real_quant:
             if kernel_type not in ext_dict:
+                print(f"[Warning] Seglinear need [{kernel_type}] but not found")
                 real_quant = False
             else:
                 if ext_dict[kernel_type]['gemm_scaled_fn'] is None or \
                     ext_dict[kernel_type]['gemm_dual_scaled_fn'] is None:
+                    print(f"[Warning] Seglinear need [{kernel_type}] but function is None")
                     real_quant = False
 
         input_quant_args['real_quant'] = real_quant

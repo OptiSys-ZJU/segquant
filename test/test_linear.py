@@ -7,7 +7,7 @@ from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 
-embedding_dim = 16
+embedding_dim = 1536
 
 class RandomTensorDataset:
     def __init__(self, num_batches=6, seed=42):
@@ -752,5 +752,96 @@ def test_gptq():
     print('diff3', torch.norm(b - c).item())
 
 
+def test_mix_real():
+    def step_mix(atype, wtype, axis=False, dual=False):
+        test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
+
+        # ==============================
+        # Baseline Quant (fake)
+        # ==============================
+        config = {
+            "default": {
+                "enable": True,
+                "seglinear": True,
+                "search_patterns": [SegPattern.ACTIVATION2LINEAR] if dual else [],
+                "real_quant": False,
+                "opt": {
+                    "type": Optimum.SMOOTH,
+                    "alpha": 0.5,
+                },
+                "calib": {
+                    "type": Calibrate.AMAX,
+                },
+                "input_quant": {
+                    "type": atype,
+                    "axis": -1 if axis else None,
+                },
+                "weight_quant": {
+                    "type": wtype,
+                    "axis": 1 if axis else None,
+                },
+            },
+        }
+
+        # Fake quantization model
+        segquant_model = quantize(
+            copy.deepcopy(test_model),
+            seg_data_loader,
+            config,
+            per_layer_mode=False,
+            verbose=False,
+            example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+        )
+
+        # ==============================
+        # Real Quant (int4/fp8 kernel path)
+        # ==============================
+        config["default"]["real_quant"] = True
+
+        segquant_model_real = quantize(
+            copy.deepcopy(test_model),
+            seg_data_loader,
+            config,
+            per_layer_mode=False,
+            verbose=False,
+            example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+        )
+
+        # ==============================
+        # Run and Compare
+        # ==============================
+        x_generator = torch.Generator().manual_seed(1234)
+        x = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+        emb = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+
+        a = test_model(x, emb)[0]            # FP baseline
+        b = segquant_model(x, emb)[0]        # Fake quant output
+        c = segquant_model_real(x, emb)[0]   # Real quant output
+
+        # ==============================
+        # Print result
+        # ==============================
+        print(f"\n[ {atype} * {wtype} ] axis: {axis}, dual: {dual}")
+        print("→ diff1 (fp - fake):", torch.norm(a - b).item())
+        print("→ diff2 (fp - real):", torch.norm(a - c).item())
+        print("→ diff3 (fake - real):", torch.norm(b - c).item())
+
+    # ==============================
+    # All Config Combinations
+    # ==============================
+    configs = [
+        (DType.INT8, DType.INT8),
+        (DType.INT4, DType.INT4),
+        (DType.FP8E4M3, DType.FP8E4M3),
+        (DType.INT8, DType.INT4),
+        (DType.FP16, DType.INT8),
+    ]
+
+    for atype, wtype in configs:
+        for axis in [False, True]:
+            for dual in [False, True]:
+                step_mix(atype, wtype, axis, dual)
+
+
 if __name__ == "__main__":
-    test_smooth_int8_real()
+    test_mix_real()

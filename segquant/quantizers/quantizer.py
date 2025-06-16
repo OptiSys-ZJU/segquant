@@ -371,7 +371,7 @@ class FloatQuantizer(BaseQuantizer):
 
         self.real_quant = real_quant
         if self.real_quant:
-            assert self.axis is None, "Real quantization does not support axis."
+            assert self.axis is None or self.axis == 1 or self.axis == -1, 'only support axis = -1 for input and axis = 1 for weight'
         self.dynamic = dynamic
         self.fake = fake
 
@@ -520,7 +520,7 @@ class FloatQuantizer(BaseQuantizer):
         if self.real_quant:
             # when real quantization is enabled, only weights are quantized
             assert not self.dual_scale, "Weight quantization does not support dual scale."
-            ext = load_real_quant_fp8_ext(required=False)
+            ext = load_real_quant_fp8_ext(required=False)[0]
             if ext is not None:
                 res = ext.create_quantized_weights(x)
 

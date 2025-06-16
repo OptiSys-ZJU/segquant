@@ -1,5 +1,5 @@
 #include <cuda_fp8.h>
-#include "utils.h"
+#include "seg_utils.h"
 
 INSTANTIATE_QUANTIZE_WEIGHTS(__nv_fp8_e4m3)
 #define SPECIALIZATION(A, W, SX, SW) \
@@ -20,5 +20,5 @@ X(__nv_fp8_e4m3, __nv_fp8_e4m3)
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     register_quantweight_module<__nv_fp8_e4m3>(m);
-    register_gemm_module<__nv_fp8_e4m3, __nv_fp8_e4m3>(m, "Wfp8e4m3Afp8e4m3");
+    register_gemm_module<__nv_fp8_e4m3, __nv_fp8_e4m3>(m, "Wfpe4m3Afpe4m3");
 }

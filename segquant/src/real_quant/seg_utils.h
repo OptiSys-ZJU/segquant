@@ -43,6 +43,15 @@ template <>
 struct StoreType<at::Half> {
     using type = at::Half;
 };
+template <typename T>
+struct CUDAStoreType {
+    using type = typename StoreType<T>::type;
+};
+
+template <>
+struct CUDAStoreType<at::Half> {
+    using type = cutlass::half_t;
+};
 
 inline void tensor_check(at::Tensor x) {
     TORCH_CHECK(x.is_contiguous(), "tensor must be contiguous");

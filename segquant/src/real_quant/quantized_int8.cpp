@@ -1,4 +1,4 @@
-#include "utils.h"
+#include "seg_utils.h"
 
 INSTANTIATE_QUANTIZE_WEIGHTS(int8_t)
 

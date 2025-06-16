@@ -14,11 +14,11 @@ print(f"Use Cutlass Path [{cutlass_path}]")
 
 supported_type = [
     'Wint8Aint8',
-    'Wint8Aint4',
+    'Wint4Aint8',
     'Wint4Aint4',
-    'Wfp16Aint4',
-    'Wfp16Aint8',
-    'Wfp8e4m3Afp8e4m3',
+    'Wint4Afp16',
+    'Wint8Afp16',
+    'Wfpe4m3Afpe4m3',
     'Wfp16Afp16',
 ]
 

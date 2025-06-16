@@ -5,12 +5,18 @@
 #include <cstdint>
 #include <torch/extension.h>
 #include <cutlass/numeric_types.h>
+#include <cutlass/half.h>
 
 //////////////////////////////////////////////////////////////////////
 ////////// Store data func
 //////////////////////////////////////////////////////////////////////
 template <typename OutputType, typename StoreType>
 __device__ __forceinline__ void store_data(StoreType* out, int idx, float scaled_val);
+
+template <>
+__device__ __forceinline__ void store_data<at::Half, cutlass::half_t>(cutlass::half_t* out, int idx, float scaled_val) {
+    out[idx] = cutlass::half_t(scaled_val);
+}
 
 template <>
 __device__ __forceinline__ void store_data<__nv_fp8_e4m3, __nv_fp8_e4m3>(__nv_fp8_e4m3* out, int idx, float scaled_val) {

@@ -1,5 +1,5 @@
 #include <cutlass/util/device_memory.h>
-#include "utils.h"
+#include "seg_utils.h"
 
 INSTANTIATE_QUANTIZE_WEIGHTS(cutlass::int4b_t)
 #define SPECIALIZATION(A, W, SX, SW) \
