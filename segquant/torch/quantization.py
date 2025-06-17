@@ -483,6 +483,8 @@ def quantize(
             torch.cuda.empty_cache()
         for seglinear in to_calib_linears.values():
             seglinear.to_cuda()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     else:

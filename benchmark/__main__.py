@@ -267,13 +267,13 @@ def run_flux():
             "enable": True,
             "seglinear": True,
             "search_patterns": [],
-            "real_quant": False,
+            "real_quant": True,
             "opt": {
                 "type": Optimum.SVD,
                 "alpha": 0.5,
                 "low_rank": 64,
                 "search_alpha_config": {
-                    "enable": True,
+                    "enable": False,
                     "min": 0.0,
                     "max": 1.0,
                     "step": 0.1,
@@ -391,4 +391,4 @@ def run_sdxl():
     run_any_module(sd3xl_config, model_type, quant_layer, per_layer_mode, root_dir)
 
 if __name__ == "__main__":
-    run_sdxl()
+    run_flux()
