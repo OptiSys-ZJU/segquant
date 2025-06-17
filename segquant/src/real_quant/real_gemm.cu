@@ -8,21 +8,6 @@
 #include <cuda_runtime.h>
 #include <string>
 
-#ifdef SEGQUANT_MIX
-#include "cutlass_extensions/gemm/kernel/default_fpA_intB_traits.h"
-#include "cutlass_extensions/gemm/threadblock/default_mma.h"
-#else
-namespace cutlass
-{
-namespace arch
-{
-
-struct OpMultiplyAddFp16Int4 {};
-
-} // namespace arch
-} // namespace cutlass
-#endif
-
 #include "quantizer.cuh"
 #include "dequantizer.cuh"
 #include "seg_utils.h"
@@ -155,13 +140,6 @@ struct ShapeType<__nv_fp8_e4m3, __nv_fp8_e4m3> {
     using InstructionShape = cutlass::gemm::GemmShape<16, 8, 32>;
 };
 
-template <>
-struct ShapeType<at::Half, cutlass::int4b_t> {
-    using ThreadblockShape = cutlass::gemm::GemmShape<128, 256, 64>;
-    using WarpShape = cutlass::gemm::GemmShape<64, 64, 64>;
-    using InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;
-};
-
 template <typename A, typename B, bool IsSame = std::is_same<A, B>::value>
 struct StagesImpl;
 template <typename A, typename B>
@@ -197,11 +175,6 @@ struct AddType<int8_t, cutlass::int4b_t> {
 template <>
 struct AddType<at::Half, int8_t> {
     using type = cutlass::arch::OpMultiplyAddMixedInputUpcast;
-};
-
-template <>
-struct AddType<at::Half, cutlass::int4b_t> {
-    using type = cutlass::arch::OpMultiplyAddFp16Int4;
 };
 
 template <>
@@ -836,7 +809,11 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
     X(__nv_fp8_e4m3, __nv_fp8_e4m3)
 
 #define MIX_AW_PAIRS \
-    X(at::Half, cutlass::int4b_t)
+    X(int8_t, int8_t) \
+    X(__nv_fp8_e4m3, __nv_fp8_e4m3) \
+    X(cutlass::int4b_t, cutlass::int4b_t) \
+    X(int8_t, cutlass::int4b_t) \
+    X(at::Half, int8_t)
 
 #define INSTANTIATE(A, W, SX, SW) \
     template at::Tensor real_quantized_gemm_scaled<A, W, SX, SW>(at::Tensor, at::Tensor, SX, SW); \

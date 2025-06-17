@@ -16,7 +16,6 @@ supported_type = [
     'Wint8Aint8',
     'Wint4Aint8',
     'Wint4Aint4',
-    'Wint4Afp16',
     'Wint8Afp16',
     'Wfpe4m3Afpe4m3',
     'Wfp16Afp16',
