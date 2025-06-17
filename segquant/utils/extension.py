@@ -192,7 +192,8 @@ def load_real_quant_mix_ext(verbose=False, required=False):
             "segquant/src/real_quant/real_gemm.cu",
         ],
         include_dirs=[
-            f'{cutlass_path}/include'
+            f'{cutlass_path}/include',
+            "segquant/src/real_quant/cutlass_extensions/include"
         ],
         verbose=verbose,
         required=required,

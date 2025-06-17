@@ -7,6 +7,22 @@
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <string>
+
+#ifdef SEGQUANT_MIX
+#include "cutlass_extensions/gemm/kernel/default_fpA_intB_traits.h"
+#include "cutlass_extensions/gemm/threadblock/default_mma.h"
+#else
+namespace cutlass
+{
+namespace arch
+{
+
+struct OpMultiplyAddFp16Int4 {};
+
+} // namespace arch
+} // namespace cutlass
+#endif
+
 #include "quantizer.cuh"
 #include "dequantizer.cuh"
 #include "seg_utils.h"
@@ -21,16 +37,6 @@
 #define AT_DISPATCH_FLOATING_TYPES(TYPE, NAME, ...)                                                \
     AT_DISPATCH_SWITCH(TYPE, NAME, AT_DISPATCH_CASE_FLOATING_TYPES(__VA_ARGS__))
 
-//////////////////////////////////////////////////////////////////////
-////////// input        weight      acc         arch
-////////// int8         int8        int32       sm80
-////////// int8         int4        int32       sm80
-////////// int4         int4        int32       sm80
-////////// fp16         int4        fp32        sm80
-////////// fp16         int8        fp32        sm80
-////////// fpe4m3       fpe4m3      fp32        sm89
-////////// fp16         fp16        fp32        sm80
-//////////////////////////////////////////////////////////////////////
 template <typename T>
 struct CutlassElementOutputType;
 
@@ -136,13 +142,6 @@ struct ShapeType<int8_t, cutlass::int4b_t> {
 };
 
 template <>
-struct ShapeType<at::Half, cutlass::int4b_t> {
-    using ThreadblockShape = cutlass::gemm::GemmShape<128, 128, 64>;
-    using WarpShape = cutlass::gemm::GemmShape<64, 64, 64>;
-    using InstructionShape = cutlass::gemm::GemmShape<16, 8, 32>;
-};
-
-template <>
 struct ShapeType<at::Half, int8_t> {
     using ThreadblockShape = cutlass::gemm::GemmShape<128, 128, 64>;
     using WarpShape = cutlass::gemm::GemmShape<64, 64, 64>;
@@ -154,6 +153,13 @@ struct ShapeType<__nv_fp8_e4m3, __nv_fp8_e4m3> {
     using ThreadblockShape = cutlass::gemm::GemmShape<128, 256, 64>;
     using WarpShape = cutlass::gemm::GemmShape<64, 64, 64>;
     using InstructionShape = cutlass::gemm::GemmShape<16, 8, 32>;
+};
+
+template <>
+struct ShapeType<at::Half, cutlass::int4b_t> {
+    using ThreadblockShape = cutlass::gemm::GemmShape<128, 256, 64>;
+    using WarpShape = cutlass::gemm::GemmShape<64, 64, 64>;
+    using InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;
 };
 
 template <typename A, typename B, bool IsSame = std::is_same<A, B>::value>
@@ -191,6 +197,11 @@ struct AddType<int8_t, cutlass::int4b_t> {
 template <>
 struct AddType<at::Half, int8_t> {
     using type = cutlass::arch::OpMultiplyAddMixedInputUpcast;
+};
+
+template <>
+struct AddType<at::Half, cutlass::int4b_t> {
+    using type = cutlass::arch::OpMultiplyAddFp16Int4;
 };
 
 template <>
@@ -825,11 +836,7 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
     X(__nv_fp8_e4m3, __nv_fp8_e4m3)
 
 #define MIX_AW_PAIRS \
-    X(int8_t, int8_t) \
-    X(__nv_fp8_e4m3, __nv_fp8_e4m3) \
-    X(cutlass::int4b_t, cutlass::int4b_t) \
-    X(int8_t, cutlass::int4b_t) \
-    X(at::Half, int8_t)
+    X(at::Half, cutlass::int4b_t)
 
 #define INSTANTIATE(A, W, SX, SW) \
     template at::Tensor real_quantized_gemm_scaled<A, W, SX, SW>(at::Tensor, at::Tensor, SX, SW); \
