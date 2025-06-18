@@ -149,7 +149,7 @@ class BenchmarkConfig:
     def __init__(self, 
         quant_method, 
         dataset_type, 
-        data_cache_size=1024, 
+        data_cache_size=256, 
         generate_real_pics=False,
         latents_path="../latents.pt",
         controlnet_conditioning_scale=0,

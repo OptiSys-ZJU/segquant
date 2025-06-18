@@ -103,98 +103,6 @@ def quant_model(
         )
     return model_real
 
-def run_module(benchmark, affine_config, calibration_config, continue_process):
-    # No need to quant, generate real pics
-    if benchmark.generate_real_pics:
-        model_real = StableDiffusion3ControlNetModel.from_repo(
-            ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), f"cuda:{benchmark.gpu_id}"
-        )
-        # generate real pics
-        print(f"[INFO] generating real pics with model_real")
-        trace_pic(
-            model_real,
-            os.path.join(f"../segquant/benchmark_record/{benchmark.dataset_type}/run_real_module", f"pics/real"),
-            benchmark.dataset.get_dataloader(batch_size=16),
-            benchmark.latents,
-            max_num=benchmark.benchmark_size,
-            continue_process=continue_process,
-            controlnet_conditioning_scale=benchmark.controlnet_conditioning_scale,
-            guidance_scale=benchmark.guidance_scale,
-            num_inference_steps=benchmark.max_timestep,
-        )
-        print(f"[INFO] real pics generated with model_real")
-        del model_real
-        return
-    
-    # Need to quant
-    # set up parameters
-    quant_config = QuantizationConfigs.get_config(benchmark.quant_method)
-    affine = quant_config["default"]["affine"]
-    # setting up model path
-    quant_layer_type="dit" if quant_config["default"]["dit"] else "controlnet"
-    # to see if model_quant_path have "affine" keywords
-    if "affine" in benchmark.quant_method: # if have affine, delete affine from quant_method
-        quant_method = benchmark.quant_method.replace("_affine", "")
-    else:
-        quant_method = benchmark.quant_method
-    if "affine" in benchmark.res_dir:
-        model_dir = benchmark.res_dir.replace("_affine", "")
-    else:
-        model_dir = benchmark.res_dir
-    model_quant_path = f"model/{quant_layer_type}/model_quant_{quant_method}.pt"
-    model_quant_path = os.path.join(model_dir, model_quant_path)
-    
-    # quantize or load model
-    model_quant = quant_or_load(model_quant_path, quant_config, benchmark.dataset, calibration_config, benchmark.gpu_id)
-    # affine or not, different process
-    if not affine:
-        # get model ready to generate pics
-        model_quant = model_quant.to(f"cuda:{benchmark.gpu_id}")
-        # generate quant pics
-        print(f"[INFO] generating pics with model_quant_{benchmark.quant_method}")
-        trace_pic(
-            model_quant,
-            os.path.join(benchmark.res_dir, f"pics/quant_{benchmark.quant_method}"),
-            benchmark.dataset.get_dataloader(batch_size=16),
-            benchmark.latents,
-            max_num=benchmark.benchmark_size,
-            continue_process=continue_process,
-            controlnet_conditioning_scale=benchmark.controlnet_conditioning_scale,
-            guidance_scale=benchmark.guidance_scale,
-            num_inference_steps=benchmark.max_timestep,
-        )
-        print(f"[INFO] pics generating with model_quant_{benchmark.quant_method} is completed")
-    else:
-        # get model to cpu, ready to learn better affine
-        model_real = StableDiffusion3ControlNetModel.from_repo(
-            ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
-        )
-        # learning better affine
-        print(f"[INFO] learning better affine...")
-        affiner = process_affiner(
-            affine_config, benchmark.dataset, model_real, model_quant, latents=benchmark.latents, shuffle=True
-        )
-        print(f"[INFO] affine learning completed")
-        # get model to gpu, ready to generate pics
-        model_quant = model_quant.to(f"cuda:{benchmark.gpu_id}")
-        # generate pics with affine
-        print(f"[INFO] generating pics with affine base on model_quant_{benchmark.quant_method}")
-        trace_pic(
-            model_quant,
-            os.path.join(benchmark.res_dir, f"pics/quant_{benchmark.quant_method}"),
-            benchmark.dataset.get_dataloader(batch_size=16),
-            benchmark.latents,
-            steper=affiner,
-            max_num=benchmark.benchmark_size,
-            continue_process=continue_process,
-            controlnet_conditioning_scale=benchmark.controlnet_conditioning_scale,
-            guidance_scale=benchmark.guidance_scale,
-            num_inference_steps=benchmark.max_timestep,
-        )
-        print(f"[INFO] pics generating with affine based on model_quant_{benchmark.quant_method} is completed")
-    
-    del model_quant
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Benchmark Configuration")
     # 量化方法参数
@@ -227,11 +135,7 @@ def parse_args():
         default=0,
         help="GPU ID"
     )
-    parser.add_argument(
-        "-c", "--continue_process",
-        action="store_false",
-        help="Continue processing from the last image"
-    )
+
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -244,5 +148,52 @@ if __name__ == "__main__":
         gpu_id=args.gpu_id,
     )
     print(f"[INFO] benchmark: {benchmark}")
-    run_module(benchmark, AffineConfig.to_dict(), CalibrationConfig.to_dict(), args.continue_process)
+
+    quant_config = QuantizationConfigs.get_config(benchmark.quant_method)
+    affine = quant_config["default"]["affine"]
+
+    quant_layer_type="dit" if quant_config["default"]["dit"] else "controlnet"
+
+    if "affine" in benchmark.quant_method: # if have affine, delete affine from quant_method
+        quant_method = benchmark.quant_method.replace("_affine", "")
+    else:
+        quant_method = benchmark.quant_method
+    if "affine" in benchmark.res_dir:
+        model_dir = benchmark.res_dir.replace("_affine", "")
+    else:
+        model_dir = benchmark.res_dir
+    model_quant_path = f"model/{quant_layer_type}/model_quant_{quant_method}.pt"
+    model_quant_path = os.path.join(model_dir, model_quant_path)
     
+    # quantize or load model
+    model_quant = quant_or_load(model_quant_path, quant_config, benchmark.dataset, CalibrationConfig.to_dict(), benchmark.gpu_id)
+    
+    # get model to cpu, ready to learn better affine
+    model_real = StableDiffusion3ControlNetModel.from_repo(
+        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
+    )
+    # learning better affine
+    print(f"[INFO] learning better affine...")
+    affiner = process_affiner(
+        AffineConfig.to_dict(), benchmark.dataset, model_real, model_quant, latents=benchmark.latents, shuffle=True
+    )
+    print(f"[INFO] affine learning completed")
+
+    model_quant = model_quant.to(f"cuda:{benchmark.gpu_id}")
+
+    print(f"[INFO] generating pics with affine base on model_quant_{benchmark.quant_method}")
+    trace_pic(
+        model_quant,
+        os.path.join(benchmark.res_dir, f"pics/quant_{benchmark.quant_method}"),
+        benchmark.dataset.get_dataloader(batch_size=16),
+        benchmark.latents,
+        steper=affiner,
+        max_num=1,
+        continue_process=True,
+        controlnet_conditioning_scale=benchmark.controlnet_conditioning_scale,
+        guidance_scale=benchmark.guidance_scale,
+        num_inference_steps=benchmark.max_timestep,
+    )
+    print(f"[INFO] pics generating with affine based on model_quant_{benchmark.quant_method} is completed")
+
+    del model_quant

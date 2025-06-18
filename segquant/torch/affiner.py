@@ -4,10 +4,19 @@ based on a given configuration, dataset, and models. It supports both
 blockwise and third-party affiner types.
 """
 
+import json
 import numpy as np
 from segquant.solver.blockwise_affiner import BlockwiseAffiner
 from segquant.subset_wrapper import SubsetWrapper
+import os
+import torch 
 
+
+def load_affiner(affiner_path):
+    if os.path.exists(affiner_path):
+        affiner = torch.load(affiner_path)
+    else:
+        raise ValueError(f"Affiner in {affiner_path} does not exist, which is unexpected")
 
 def process_affiner(
     config, dataset, model_real, model_quant, latents=None, shuffle=True, thirdparty_affiner=None,
@@ -25,6 +34,35 @@ def process_affiner(
     Returns:
         affiner (Tuple(BlockwiseAffiner|thirdparty_affiner)): The trained affiner instance.
     """
+    affine_config_path = "../affine_configs"
+    if not os.path.exists(affine_config_path):
+        os.makedirs(affine_config_path)
+
+    # save the config of affiner
+    if not os.path.exists(os.path.join(affine_config_path, "affiner_config.json")):
+        configs = []
+        with open(os.path.join(affine_config_path, "affiner_config.json"), "w") as f:
+            configs.append(config)
+            json.dump(configs, f, indent=4)
+    else:
+        with open(os.path.join(affine_config_path, "affiner_config.json"), "r") as f:
+            try:
+                configs = json.load(f)
+            except json.JSONDecodeError:
+                configs = []
+            if config in configs:
+                print("Config already exists, loading affiner from path: ")
+                affiner_path = os.path.join(affine_config_path, f"affiner_{config_to_hash(config)}.pth")
+                if os.path.exists(affiner_path):
+                    affiner = torch.load(affiner_path)
+                else:
+                    raise ValueError(f"Affiner path {affiner_path} does not exist, which is unexpected")
+            else:
+                print("Config does not exist, appending a new config to affiner_config.json")
+                configs.append(config)
+                with open(os.path.join(affine_config_path, "affiner_config.json"), "w") as f2:
+                    json.dump(configs, f2, indent=4)
+
     indices = np.arange(len(dataset))
     if shuffle:
         np.random.shuffle(indices)

@@ -58,7 +58,7 @@ def create_dataset(
     print(f"Processing {total_samples} samples for ControlNet {preprocessor.cn_type} dataset...")
 
     for i, orig in enumerate(
-        tqdm(origin_data, total=total_samples, desc="Processing samples"), 1
+        tqdm(origin_data, total=total_samples, desc="Processing samples")
     ):
         with open(orig, "r") as file:
             d = json.load(file)

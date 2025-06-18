@@ -47,21 +47,15 @@ def create_dataset(
         tqdm(dataset, total=total_samples, desc="Processing samples")
     ):
         input_image = sample["image"]
+        prompt = ""
         if "answer" in sample and sample["answer"]:
-            prompt = ""
             for ans in sample["answer"]: 
-                prompt += ans
-        elif "caption" in sample:
-            prompt = sample["caption"]
-        else:
-            prompt = None
-
-        if prompt is None:
-            if enable_no_prompt:
-                prompt = ""
-            else:
-                continue
-
+                prompt += (ans+" ")
+        # for debug only
+        # if i < 6:
+        #     print(f"prompt: {prompt}")
+        #     if i == 5:
+        #         return
         # Process image with ControlNet preprocessor
         try:
             control_map = preprocessor.process(image=input_image)
@@ -179,5 +173,4 @@ if __name__ == "__main__":
         enable_no_prompt=args.enable_no_prompt,
     )
 
-    print(f"\nControlNet dataset created at: {dataset_dir}")
     print("Done!")

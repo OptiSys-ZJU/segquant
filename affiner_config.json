@@ -1,0 +1,56 @@
+[
+    {
+        "solver": {
+            "type": "mserel",
+            "blocksize": 8,
+            "alpha": 0.5,
+            "lambda1": 0.1,
+            "lambda2": 0.1,
+            "sample_mode": "interpolate",
+            "percentile": 100,
+            "greater": true,
+            "scale": 1,
+            "verbose": true
+        },
+        "stepper": {
+            "type": "blockwise",
+            "max_timestep": 50,
+            "sample_size": 1,
+            "recurrent": true,
+            "noise_target": "uncond",
+            "enable_latent_affine": false,
+            "enable_timesteps": null
+        },
+        "extra_args": {
+            "controlnet_conditioning_scale": 0,
+            "guidance_scale": 7
+        }
+    },
+    {
+        "solver": {
+            "type": "mserel",
+            "blocksize": 8,
+            "alpha": 0.5,
+            "lambda1": 0.1,
+            "lambda2": 0.1,
+            "sample_mode": "interpolate",
+            "percentile": 100,
+            "greater": true,
+            "scale": 1,
+            "verbose": true
+        },
+        "stepper": {
+            "type": "blockwise",
+            "max_timestep": 20,
+            "sample_size": 1,
+            "recurrent": true,
+            "noise_target": "uncond",
+            "enable_latent_affine": false,
+            "enable_timesteps": null
+        },
+        "extra_args": {
+            "controlnet_conditioning_scale": 0,
+            "guidance_scale": 7
+        }
+    }
+]
