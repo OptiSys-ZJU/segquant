@@ -1,0 +1,27 @@
+models:
+  sd3:
+    base_model:
+      repo_id: "stabilityai/stable-diffusion-3-medium-diffusers"
+      local_path: "../stable-diffusion-3-medium-diffusers"
+    controlnet:
+      repo_id: "InstantX/SD3-Controlnet-Canny"
+      local_path: "../SD3-Controlnet-Canny"
+  
+  flux:
+    base_model:
+      repo_id: "black-forest-labs/FLUX.1-dev"
+      local_path: "../FLUX.1-dev"
+    controlnet:
+      repo_id: "InstantX/FLUX.1-dev-Controlnet-Canny"
+      local_path: "../FLUX.1-dev-Controlnet-Canny"
+  
+  sdxl:
+    base_model:
+      repo_id: "stabilityai/stable-diffusion-xl-base-1.0"
+      local_path: "../stable-diffusion-xl-base-1.0"
+
+download_settings:
+  cache_dir: "./model_cache"
+  force_download: false
+  offline_mode: false
+  use_auth_token: false  # Set to true if you need HF authentication 

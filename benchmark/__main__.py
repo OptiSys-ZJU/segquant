@@ -1,6 +1,5 @@
 import os
 import torch
-from torch import nn
 from backend.torch.modules.controlnet_sd3 import SD3ControlNetModel
 from backend.torch.modules.transformer_sd3 import SD3Transformer2DModel
 from benchmark import trace_pic
@@ -18,6 +17,8 @@ from backend.torch.modules.transformer_flux import FluxTransformer2DModel
 from backend.torch.modules.unet_2d_condition import UNet2DConditionModel
 from backend.torch.models.stable_diffusion_xl import StableDiffusionXLModel
 from backend.torch.utils import randn_tensor
+from huggingface_hub import snapshot_download, try_to_load_from_cache
+import argparse
 
 calib_args = {
     "max_timestep": 50,
@@ -27,6 +28,72 @@ calib_args = {
     "guidance_scale": 7,
     "shuffle": False,
 }
+
+
+def check_model_exists(repo_id, local_path=None, model_type=None):
+    """
+    Check if model exists locally or in HuggingFace cache and validate structure.
+    
+    Args:
+        repo_id (str): HuggingFace repository ID
+        local_path (str, optional): Local path to check
+        model_type (str, optional): Type of model for validation
+    
+    Returns:
+        tuple: (exists, path) where exists is bool and path is str or None
+    """
+    # Check local path first
+    if local_path and os.path.exists(local_path):
+        print(f"Found valid local model at: {local_path}")
+        return True, local_path
+    
+    # Check HuggingFace cache
+    try:
+        cached_path = try_to_load_from_cache(repo_id, filename="config.json")
+        if cached_path is not None:
+            # Get the parent directory (model directory)
+            model_cache_dir = os.path.dirname(cached_path)
+            print(f"Found valid cached model at: {model_cache_dir}")
+            return True, model_cache_dir
+    except Exception as e:
+        print(f"Cache check failed for {repo_id}: {e}")
+    
+    print(f"Model {repo_id} not found locally or in cache")
+    return False, None
+
+def auto_download_model(repo_id, local_path=None, model_type=None):
+    """
+    Automatically download model from HuggingFace Hub with existence check.
+    
+    Args:
+        repo_id (str): HuggingFace repository ID
+        local_path (str, optional): Local path to check first
+        model_type (str, optional): Type of model for validation
+    
+    Returns:
+        str: Path to the model (local or downloaded)
+    """
+    # Check if model exists and we're not forcing download
+    exists, existing_path = check_model_exists(repo_id, local_path, model_type)
+    if exists:
+        return existing_path
+    
+    try:        
+        print(f"Downloading model from: {repo_id}")
+        # Download to default cache directory
+        cache_dir = snapshot_download(repo_id=repo_id)
+        
+        print(f"Model downloaded and validated at: {cache_dir}")
+        return cache_dir
+    except Exception as e:
+        print(f"Failed to download {repo_id}: {e}")
+        # Try to find existing model as fallback
+        exists, existing_path = check_model_exists(repo_id, local_path, model_type)
+        if exists:
+            print(f"Using existing model at: {existing_path}")
+            return existing_path
+        else:
+            raise RuntimeError(f"Cannot load model {repo_id} - download failed and no existing model found")
 
 def get_randn_latents(model_type):
     if model_type == 'flux':
@@ -48,19 +115,44 @@ def get_randn_latents(model_type):
 
 def get_full_model(model_type):
     if model_type == 'sd3':
+        model_path = auto_download_model(
+            "stabilityai/stable-diffusion-3-medium-diffusers", 
+            "../stable-diffusion-3-medium-diffusers",
+            model_type='sd3'
+        )
+        controlnet_path = auto_download_model(
+            "InstantX/SD3-Controlnet-Canny", 
+            "../SD3-Controlnet-Canny",
+            model_type='controlnet'
+        )
         model_real = StableDiffusion3ControlNetModel.from_repo(
-            ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
+            (model_path, controlnet_path),
             "cuda:0",
         )
     elif model_type == 'flux':
+        model_path = auto_download_model(
+            "black-forest-labs/FLUX.1-dev", 
+            "../FLUX.1-dev",
+            model_type='flux'
+        )
+        controlnet_path = auto_download_model(
+            "InstantX/FLUX.1-dev-Controlnet-Canny", 
+            "../FLUX.1-dev-Controlnet-Canny",
+            model_type='controlnet'
+        )
         model_real = FluxControlNetModel.from_repo(
-            ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"),
+            (model_path, controlnet_path),
             "cuda:0",
             enable_control=False,
         )
     elif model_type == 'sdxl':
+        model_path = auto_download_model(
+            "stabilityai/stable-diffusion-xl-base-1.0", 
+            "../stable-diffusion-xl-base-1.0",
+            model_type='sdxl'
+        )
         model_real = StableDiffusionXLModel.from_repo(
-            "../stable-diffusion-xl-base-1.0", "cuda:0"
+            model_path, "cuda:0"
         )
     else:
         raise ValueError(f'[{model_type} not found]')
@@ -390,5 +482,23 @@ def run_sdxl():
     root_dir = 'sdxl_tmp_linear'
     run_any_module(sd3xl_config, model_type, quant_layer, per_layer_mode, root_dir)
 
+def main():
+    parser = argparse.ArgumentParser(description='Benchmark script with automatic model downloading')
+    parser.add_argument('--model-type', choices=['sd3', 'flux', 'sdxl'], default='sdxl',
+                       help='Type of model to use')
+    parser.add_argument('--cache-dir', type=str, default=None,
+                       help='Custom cache directory for downloaded models')
+    
+    args = parser.parse_args()
+    
+    # Set cache directory if specified
+    if args.cache_dir:
+        os.environ['HF_HOME'] = args.cache_dir
+    
+    model_type = args.model_type
+    
+    model_real = get_full_model(model_type)
+    
+
 if __name__ == "__main__":
-    run_flux()
+    main()
