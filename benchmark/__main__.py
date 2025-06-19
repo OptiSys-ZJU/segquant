@@ -5,7 +5,7 @@ from backend.torch.modules.controlnet_sd3 import SD3ControlNetModel
 from backend.torch.modules.transformer_sd3 import SD3Transformer2DModel
 from benchmark import trace_pic
 from segquant.config import Calibrate, DType, Optimum, SegPattern
-from segquant.torch.affiner import process_affiner
+from segquant.torch.affiner import load_affiner
 from segquant.sample.sampler import QDiffusionSampler
 from segquant.torch.calibrate_set import generate_calibrate_set, load_calibrate_set
 from segquant.torch.quantization import quantize
