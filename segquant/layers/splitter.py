@@ -55,7 +55,7 @@ class BaseSplitter:
         if the segmentation mode is "weight". Raises a ValueError if the mode is "input".
         """
         if not self.seg_input:
-            return weight.split(self.split_sizes, dim=int(self.seg_input))
+            return list(weight.split(self.split_sizes, dim=int(self.seg_input)))
         raise ValueError("Spliter: split_weight not work")
 
     def concat_weight(self, weight_chunks: List[torch.Tensor]):

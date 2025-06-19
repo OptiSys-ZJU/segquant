@@ -101,6 +101,13 @@ class BaseCalibSet(Dataset):
         )
 
 
+def load_calibrate_set(dump_path, compress=True,):
+    if not os.path.exists(dump_path):
+        return None
+    else:
+        print(f"[INFO] calibset [{dump_path}] found, loading...")
+        return BaseCalibSet(folder=dump_path, compress=compress)
+
 def generate_calibrate_set(
     model,
     sampler,

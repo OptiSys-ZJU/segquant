@@ -12,6 +12,7 @@ from torch import nn
 model_map = {
     "dit": lambda x: x.transformer,
     "controlnet": lambda x: x.controlnet,
+    "unet": lambda x: x.unet,
 }
 
 

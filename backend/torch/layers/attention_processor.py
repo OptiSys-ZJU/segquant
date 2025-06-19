@@ -3375,13 +3375,13 @@ class AttnProcessor2_0:
         if attn.spatial_norm is not None:
             hidden_states = attn.spatial_norm(hidden_states, temb)
 
-        input_ndim = hidden_states.ndim
-
-        if input_ndim == 4:
-            batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(
-                batch_size, channel, height * width
-            ).transpose(1, 2)
+        if torch._C._get_tracing_state() is None and not isinstance(hidden_states, torch.fx.Proxy):
+            input_ndim = hidden_states.dim()
+            if input_ndim == 4:
+                batch_size, channel, height, width = hidden_states.shape
+                hidden_states = hidden_states.view(
+                    batch_size, channel, height * width
+                ).transpose(1, 2)
 
         batch_size, sequence_length, _ = (
             hidden_states.shape
@@ -3445,10 +3445,11 @@ class AttnProcessor2_0:
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
 
-        if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(
-                batch_size, channel, height, width
-            )
+        if torch._C._get_tracing_state() is None and not isinstance(hidden_states, torch.fx.Proxy):
+            if input_ndim == 4:
+                hidden_states = hidden_states.transpose(-1, -2).reshape(
+                    batch_size, channel, height, width
+                )
 
         if attn.residual_connection:
             hidden_states = hidden_states + residual

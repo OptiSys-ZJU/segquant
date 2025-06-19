@@ -247,7 +247,10 @@ class Upsample2D(nn.Module):
             deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
             deprecate("scale", "1.0.0", deprecation_message)
 
-        assert hidden_states.shape[1] == self.channels
+        ch = hidden_states.shape[1]
+        if isinstance(ch, int):
+            if ch != self.channels:
+                raise ValueError(f"Expected channels {self.channels}, but got {ch}")
 
         if self.norm is not None:
             hidden_states = self.norm(hidden_states.permute(0, 2, 3, 1)).permute(
@@ -259,15 +262,15 @@ class Upsample2D(nn.Module):
 
         # Cast to float32 to as 'upsample_nearest2d_out_frame' op does not support bfloat16 until PyTorch 2.1
         # https://github.com/pytorch/pytorch/issues/86679#issuecomment-1783978767
-        dtype = hidden_states.dtype
-        if dtype == torch.bfloat16 and version.parse(torch.__version__) < version.parse(
-            "2.1.0"
-        ):
-            hidden_states = hidden_states.to(torch.float32)
+        # dtype = hidden_states.dtype
+        # if dtype == torch.bfloat16 and version.parse(torch.__version__) < version.parse(
+        #     "2.1.0"
+        # ):
+        #     hidden_states = hidden_states.to(torch.float32)
 
         # upsample_nearest_nhwc fails with large batch sizes. see https://github.com/huggingface/diffusers/issues/984
-        if hidden_states.shape[0] >= 64:
-            hidden_states = hidden_states.contiguous()
+        # if hidden_states.shape[0] >= 64:
+        hidden_states = hidden_states.contiguous()
 
         # if `output_size` is passed we force the interpolation output
         # size and do not make use of `scale_factor=2`
@@ -279,8 +282,8 @@ class Upsample2D(nn.Module):
                 if output_size is None
                 else max([f / s for f, s in zip(output_size, hidden_states.shape[-2:])])
             )
-            if hidden_states.numel() * scale_factor > pow(2, 31):
-                hidden_states = hidden_states.contiguous()
+            # if hidden_states.numel() * scale_factor > pow(2, 31):
+            hidden_states = hidden_states.contiguous()
 
             if output_size is None:
                 hidden_states = F.interpolate(
@@ -292,10 +295,10 @@ class Upsample2D(nn.Module):
                 )
 
         # Cast back to original dtype
-        if dtype == torch.bfloat16 and version.parse(torch.__version__) < version.parse(
-            "2.1.0"
-        ):
-            hidden_states = hidden_states.to(dtype)
+        # if dtype == torch.bfloat16 and version.parse(torch.__version__) < version.parse(
+        #     "2.1.0"
+        # ):
+        #     hidden_states = hidden_states.to(dtype)
 
         # TODO(Suraj, Patrick) - clean up after weight dicts are correctly renamed
         if self.use_conv:
@@ -379,7 +382,10 @@ class Downsample2D(nn.Module):
         if len(args) > 0 or kwargs.get("scale", None) is not None:
             deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
             deprecate("scale", "1.0.0", deprecation_message)
-        assert hidden_states.shape[1] == self.channels
+        ch = hidden_states.shape[1]
+        if isinstance(ch, int):
+            if ch != self.channels:
+                raise ValueError(f"Expected channels {self.channels}, but got {ch}")
 
         if self.norm is not None:
             hidden_states = self.norm(hidden_states.permute(0, 2, 3, 1)).permute(
@@ -390,7 +396,10 @@ class Downsample2D(nn.Module):
             pad = (0, 1, 0, 1)
             hidden_states = F.pad(hidden_states, pad, mode="constant", value=0)
 
-        assert hidden_states.shape[1] == self.channels
+        ch = hidden_states.shape[1]
+        if isinstance(ch, int):
+            if ch != self.channels:
+                raise ValueError(f"Expected channels {self.channels}, but got {ch}")
 
         hidden_states = self.conv(hidden_states)
 
