@@ -10,7 +10,7 @@ from segquant.solver.blockwise_affiner import BlockwiseAffiner
 from segquant.subset_wrapper import SubsetWrapper
 import os
 import torch 
-import pickle
+from tqdm import tqdm
 
 def config_to_key(config):
     """
@@ -114,7 +114,7 @@ def load_affiner(
             raise ValueError(f"Unknown stepper type: {config['stepper']['type']}")
 
     if config["stepper"]["recurrent"]:
-        for _ in range(config["stepper"]["max_timestep"]):
+        for _ in tqdm(range(config["stepper"]["max_timestep"]), desc="Learning Affiner Parameters"):
             affiner.learning_real(
                 model_real=model_real,
                 data_loader=dataset.get_dataloader(),
