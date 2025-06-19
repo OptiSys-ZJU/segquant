@@ -10,6 +10,13 @@ from segquant.solver.blockwise_affiner import BlockwiseAffiner
 from segquant.subset_wrapper import SubsetWrapper
 import os
 import torch 
+import pickle
+
+def config_to_key(config):
+    """
+    Convert the config to a key string.
+    """
+    return json.dumps(config, sort_keys=True)
 
 
 def load_affiner(
@@ -48,23 +55,36 @@ def load_affiner(
                 configs = []
 
     # check if the config already exists
-    if config in configs:
+    config_key = config_to_key(config)
+    config_exists = any(config_to_key(c) == config_key for c in configs)
+    
+    if config_exists:
         print("Config already exists, loading affiner from path: ", affiner_dicts_path)
         if os.path.exists(affiner_dicts_path):
             # set up the affiner
-            affiner_dicts = torch.load(affiner_dicts_path)
-            affiner_dict = affiner_dicts[config]
-            # TODO: not class method, need to fix
-            affiner = BlockwiseAffiner.load_state_dict(affiner_dict)
-            return affiner
+            try:
+                affiner_dicts = torch.load(affiner_dicts_path)
+                # dicts can not be key , need to map the config to json string
+                if config_key in affiner_dicts:
+                    affiner_state = affiner_dicts[config_key]
+                    affiner = BlockwiseAffiner.create_and_load(config, affiner_state)
+                    return affiner
+                else:
+                    print(f"Warning: Config exists in JSON but not in affiner_dicts.pt. Creating new affiner.")
+            except (torch.serialization.pickle.UnpicklingError, RuntimeError, FileNotFoundError) as e:
+                print(f"Error loading affiner_dicts.pt: {e}. Creating new affiner.")
+                # Continue to create new affiner
         else:
             raise ValueError(f"Affiner path {affiner_dicts_path} does not exist, which is unexpected")
 
     else:
         print("Config does not exist, appending a new config to affiner_config.json")
         configs.append(config)
-        with open(os.path.join(affine_config_path, "affiner_config.json"), "w") as f2:
-            json.dump(configs, f2, indent=4)
+        try:
+            with open(os.path.join(affine_config_path, "affiner_config.json"), "w") as f2:
+                json.dump(configs, f2, indent=4)
+        except (IOError, OSError) as e:
+            print(f"Warning: Failed to save config to JSON: {e}")
         # continue to create a new affiner
         print("[INFO]Creating a new affiner")
     
@@ -130,14 +150,22 @@ def load_affiner(
     affiner.finish_learning()
 
     # save the affiner
-    if os.path.exists(affiner_dicts_path):
-        affiner_dicts = torch.load(affiner_dicts_path)
-        affiner_dicts[config] = affiner.state_dict()
+    try:
+        if os.path.exists(affiner_dicts_path):
+            try:
+                affiner_dicts = torch.load(affiner_dicts_path)
+            except (torch.serialization.pickle.UnpicklingError, RuntimeError) as e:
+                print(f"Warning: Failed to load existing affiner_dicts.pt: {e}. Creating new file.")
+                affiner_dicts = {}
+        else:
+            # create a new affiner_dicts.pt
+            affiner_dicts = {}
+        
+        affiner_dicts[config_to_key(config)] = affiner.state_dict()
         torch.save(affiner_dicts, affiner_dicts_path)
-    else:
-        # create a new affiner_dicts.pt
-        affiner_dicts = {}
-        affiner_dicts[config] = affiner.state_dict()
-        torch.save(affiner_dicts, affiner_dicts_path)
+        print(f"Successfully saved affiner state to {affiner_dicts_path}")
+    except (IOError, OSError) as e:
+        print(f"Error: Failed to save affiner state: {e}")
+        # Continue without saving
 
     return affiner

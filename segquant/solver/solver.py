@@ -309,25 +309,8 @@ class MSERelSolver(BaseSolver):
             quant, K, b, self.percentile, self.greater, self.scale, self.verbose
         )
 
-    def state_dict(self):
-        """
-        Return the state dictionary of the solver.
-        """
-        # for inference only
-        return {
-            "solution": self.solution,
-            "percentile": self.percentile,
-            "greater": self.greater,
-            "scale": self.scale,
-            "verbose": self.verbose,
-        }
+    def get_solution(self):
+        return self.solution
     
-    def load_state_dict(self, state_dict):
-        """
-        Load the state dictionary of the solver.
-        """
-        self.solution = state_dict["solution"]
-        self.percentile = state_dict["percentile"]
-        self.greater = state_dict["greater"]
-        self.scale = state_dict["scale"]
-        self.verbose = state_dict["verbose"]
+    def set_solution(self, solution):
+        self.solution = solution
