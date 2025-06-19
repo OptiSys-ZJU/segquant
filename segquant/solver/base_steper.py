@@ -64,3 +64,17 @@ class BaseSteper:
         latents = self.scheduler.step(noise_pred, t, latents)[0]
 
         return latents
+
+    def state_dict(self):
+        """
+        Return the state dictionary of the steper.
+        """
+        return {
+            "max_timestep": self.max_timestep,
+        }
+    
+    def load_state_dict(self, state_dict):
+        """
+        Load the state dictionary of the steper.
+        """
+        self.max_timestep = state_dict["max_timestep"]

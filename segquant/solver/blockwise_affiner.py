@@ -79,12 +79,18 @@ class BlockwiseAffiner(RecurrentSteper):
         print(f"{'Noise preds buffer:':20} {len(self.noise_preds_real)} x deque")
         print(f"{'=' * 40}")
 
-    # save the dict of affiner
-    def save_solver_dict(self, path):
-        """Save the configuration of the BlockwiseAffiner."""
-        self.solver[0].save_dict(path)
-
-    # load the dict of affiner
-    def load_solver_dict(self, path):
-        """Load the configuration of the BlockwiseAffiner."""
-        self.solver[0].load_dict(path)
+    def state_dict(self):
+        """
+        Return the state dictionary of the BlockwiseAffiner.
+        """
+        return {
+            **super().state_dict(),
+            "blocksize": self.blocksize,
+        }
+    
+    def load_state_dict(self, state_dict):
+        """
+        Load the state dictionary of the BlockwiseAffiner.
+        """
+        super().load_state_dict(state_dict)
+        self.blocksize = state_dict["blocksize"]

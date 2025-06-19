@@ -143,7 +143,7 @@ def calculate_ir(img_path, prompt):
 
 def generate_metric(path1, path2, prompt_dir):
     print(path1, path2)
-    # fid = calculate_fid(path1, path2)
+    fid = calculate_fid(path1, path2)
     names1 = os.listdir(path1)
     names2 = os.listdir(path2)
     common_names = sorted(set(names1) & set(names2))
@@ -181,7 +181,7 @@ def generate_metric(path1, path2, prompt_dir):
 
 
     result = {
-        #"FID": fid,
+        "FID": fid,
         "LPIPS": np.mean(lpips_scores) if lpips_scores else None,
         "PSNR": np.mean(psnr_scores) if psnr_scores else None,
         "SSIM": np.mean(ssim_scores) if ssim_scores else None,

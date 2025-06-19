@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from benchmark import trace_pic
 from benchmark.config import BenchmarkConfig,CalibrationConfig,AffineConfig,QuantizationConfigs,QUANT_METHOD_CHOICES,DATASET_TYPE_CHOICES
-from segquant.torch.affiner import process_affiner
+from segquant.torch.affiner import load_affiner
 from segquant.sample.sampler import QDiffusionSampler, model_map
 from segquant.torch.calibrate_set import generate_calibrate_set
 from segquant.torch.quantization import quantize
@@ -171,7 +171,7 @@ def run_module(benchmark, affine_config, calibration_config, continue_process):
         )
         # learning better affine
         print(f"[INFO] learning better affine...")
-        affiner = process_affiner(
+        affiner = load_affiner(
             affine_config, benchmark.dataset, model_real, model_quant, latents=benchmark.latents, shuffle=True
         )
         print(f"[INFO] affine learning completed")

@@ -308,3 +308,34 @@ class RecurrentSteper(BaseSteper):
                 )
 
         return latents
+
+    def state_dict(self):
+        """
+        Return the state dictionary of the steper.
+        """
+        # only for inference
+        return {
+            **super().state_dict(),
+            "fsm": self.fsm.state_dict(),
+            "solver": self.solver.state_dict(),
+            "enable_timesteps": self.enable_timesteps,
+            "recurrent": self.recurrent,
+            "replay": self.replay,
+            "noise_target": self.noise_target,
+            "enable_latent_affine": self.enable_latent_affine,
+            "latent_diff": self.latent_diff,
+        }
+    
+    def load_state_dict(self, state_dict):
+        """
+        Load the state dictionary of the steper.
+        """
+        super().load_state_dict(state_dict)
+        self.fsm.load_state_dict(state_dict["fsm"])
+        self.solver.load_state_dict(state_dict["solver"])
+        self.enable_timesteps = state_dict["enable_timesteps"]
+        self.recurrent = state_dict["recurrent"]
+        self.replay = state_dict["replay"]
+        self.noise_target = state_dict["noise_target"]
+        self.enable_latent_affine = state_dict["enable_latent_affine"]
+        self.latent_diff = state_dict["latent_diff"]

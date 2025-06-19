@@ -44,6 +44,20 @@ class StateMachine:
         }
         return new_state in valid[self._state]
 
+    def state_dict(self):
+        """
+        Return the state dictionary of the state machine.
+        """
+        return {
+            "state": self._state,
+        }
+    
+    def load_state_dict(self, state_dict):
+        """
+        Load the state dictionary of the state machine.
+        """
+        self._state = state_dict["state"]
+
 
 def solver_trans(from_stages, to_stage):
     """Decorator to manage state transitions in the solver.
