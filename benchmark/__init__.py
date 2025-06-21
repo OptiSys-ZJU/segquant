@@ -3,7 +3,7 @@ from tqdm import tqdm
 import torch
 
 
-def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, continue_process=True, **kwargs):
+def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, reprocess=False, **kwargs):
     os.makedirs(path, exist_ok=True)
     count = 0
     if max_num is not None:
@@ -12,16 +12,16 @@ def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, co
     else:
         max_num = len(data_loader.dataset)
     
-    if continue_process:
-        print(f"[INFO] continue_process is True, continue processsing from path: {path}")
+    if not reprocess:
+        print(f"[INFO] reprocess is False, will continue processsing if there are images left undone")
         if len(os.listdir(path)) > max_num:
             raise ValueError("max_num is less than the number of images in the path")
         pbar = tqdm(
             total = max_num - len(os.listdir(path)),
-            desc="Tracing images that are left undone",
+            desc="Tracing images",
         )
     else:
-        print(f"[INFO] continue_process is False, tracing all images")
+        print(f"[INFO] reprocess is True, tracing all images")
         pbar = tqdm(
             total=max_num if max_num is not None else len(data_loader.dataset),
             desc="Tracing images",
@@ -30,7 +30,7 @@ def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, co
     # Get model device to ensure inputs are on the same device
     model_device = next(model.parameters()).device
 
-    if continue_process:
+    if not reprocess:
         continue_id = len(os.listdir(path))
 
 
@@ -40,7 +40,7 @@ def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, co
                 pbar.close()
                 print("Max_num already reached, exiting...")
                 return
-            if continue_process and count < continue_id:
+            if not reprocess and count < continue_id:
                 count += 1
                 continue
             print(f"[INFO] Processing {count}th image...")

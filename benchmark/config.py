@@ -24,7 +24,7 @@ QUANT_CONFIG_CHOICES = ["W4A4", "W4A8", "W8A4", "W8A8", "W4A16", "W8A16"]
 
 class CalibrationConfig:
     MAX_TIMESTEP = 50
-    SAMPLE_SIZE = 256
+    SAMPLE_SIZE = 1
     TIMESTEP_PER_SAMPLE = 50
     CONTROLNET_CONDITIONING_SCALE = 0
     GUIDANCE_SCALE = 7
@@ -333,7 +333,8 @@ class BenchmarkConfig:
                  generate_real_pics=False, 
                  enable_affine=False, 
                  per_layer_mode=False, 
-                 quant_config=None):
+                 quant_config=None,
+                 reprocess=False):
         # Validate inputs
         if model_type not in MODEL_TYPE_CHOICES:
             raise ValueError(f"Invalid model_type: {model_type}")
@@ -355,19 +356,21 @@ class BenchmarkConfig:
         self.enable_affine = enable_affine
         self.per_layer_mode = per_layer_mode
         self.quant_config = quant_config
+        self.reprocess = reprocess
         
         # Legacy properties for compatibility
         self.benchmark_size = num_images
         self.max_timestep = CalibrationConfig.MAX_TIMESTEP
+        self.gpu_id = 0
         
         # Generate paths
-        self.result_dir = self._get_result_dir()
+        # self.result_dir = self._get_result_dir()
         self.dataset = self._get_dataset()
         self.model_quant_config = self._get_model_quant_config()
         self.latents = self._get_latents()
         
         # Legacy property for compatibility
-        self.res_dir = self.result_dir
+        # self.res_dir = self.result_dir
         
     def _get_result_dir(self):
         """Generate result directory path with quantization info"""
@@ -414,8 +417,9 @@ class BenchmarkConfig:
         from backend.torch.utils import randn_tensor
         
         # check if latent.pt exitst
-        latent_path = f"../segquant/benchmark_record/main_expr/{self.model_type}/latent/{self.layer_type}.pt"
+        latent_path = f"../segquant/benchmark_record/main_expr/{self.model_type}/latent.pt"
         if os.path.exists(latent_path):
+            print(f"[INFO] Latent found at {latent_path}, loading latent...")
             return torch.load(latent_path)
         
         # generate latent
@@ -470,5 +474,7 @@ class BenchmarkConfig:
                 f"  generate_real_pics={self.generate_real_pics}\n"
                 f"  enable_affine={self.enable_affine}\n"
                 f"  per_layer_mode={self.per_layer_mode}\n"
-                f"  result_dir={self.result_dir}\n"
+                # f"  result_dir={self.result_dir}\n"
+                f"  pic_store_path={self.get_pic_store_path()}\n"
+                f"  model_quant_path={self.get_model_quant_path()}\n"
                 f")")

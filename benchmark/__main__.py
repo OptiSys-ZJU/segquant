@@ -256,7 +256,7 @@ def run_benchmark(benchmark_config):
         print(f"[INFO] Benchmark configuration: {benchmark_config}")
         
         # Create directories
-        os.makedirs(benchmark_config.result_dir, exist_ok=True)
+        # os.makedirs(benchmark_config.result_dir, exist_ok=True)
         os.makedirs(os.path.dirname(benchmark_config.get_model_quant_path()), exist_ok=True)
         os.makedirs(benchmark_config.get_pic_store_path(), exist_ok=True)
         
@@ -264,6 +264,7 @@ def run_benchmark(benchmark_config):
         calib_args = CalibrationConfig.to_dict()
         
         # Generate real pics if requested
+        print(f"[INFO] generate_real_pics")
         if benchmark_config.generate_real_pics:
             model = ModelManager.get_full_model(
                 benchmark_config.model_type, f"cuda:{benchmark_config.gpu_id}"
@@ -277,6 +278,7 @@ def run_benchmark(benchmark_config):
                 controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
                 guidance_scale=calib_args["guidance_scale"],
                 num_inference_steps=benchmark_config.max_timestep,
+                reprocess=benchmark_config.reprocess,
             )
             del model
             print("Real model pics generated")
@@ -331,6 +333,7 @@ def run_benchmark(benchmark_config):
             controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
             guidance_scale=calib_args["guidance_scale"],
             num_inference_steps=benchmark_config.max_timestep,
+            reprocess=benchmark_config.reprocess,
         )
         del model
         print("Benchmark completed")
@@ -400,8 +403,24 @@ def parse_args():
         choices=QUANT_CONFIG_CHOICES,
         help='Weight/Activation bit configuration (e.g., W4A4, W8A8). If not specified, runs baseline test'
     )
+
+    # continue processing
+    parser.add_argument(
+        '--reprocess',
+        action='store_true',
+        help='Continue the process from the last checkpoint'
+    )
+    
+    # allow affine
+    parser.add_argument(
+        '--enable_affine',
+        action='store_true',
+        help='Enable affine transformation learning'
+    )
+    
     
     return parser.parse_args()
+
 
 
 def main_expr():
@@ -432,7 +451,8 @@ def main_expr():
         generate_real_pics=args.real,
         enable_affine=args.enable_affine,
         per_layer_mode=args.per_layer_mode,
-        quant_config=args.quant_config
+        quant_config=args.quant_config,
+        reprocess=args.reprocess,
     )
     
     
