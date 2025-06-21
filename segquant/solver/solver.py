@@ -308,3 +308,9 @@ class MSERelSolver(BaseSolver):
         return affine_with_percentile_scale(
             quant, K, b, self.percentile, self.greater, self.scale, self.verbose
         )
+
+    def get_solution(self):
+        return self.solution
+    
+    def set_solution(self, solution):
+        self.solution = solution

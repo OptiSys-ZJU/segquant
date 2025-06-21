@@ -1,5 +1,6 @@
 import time
-
+import os
+import random
 from tqdm import tqdm  # To measure processing time
 from dataset.processor import ControlNetPreprocessor
 from datasets import load_dataset
@@ -9,8 +10,6 @@ def create_dataset(
     preprocessor,
     dataset,
     output_dir,
-    cn_type="canny",
-    limit=None,
     enable_no_prompt=False,
 ):
     """
@@ -30,7 +29,7 @@ def create_dataset(
     import json
 
     # Create output directories
-    dataset_dir = os.path.join(output_dir, f"coco_{cn_type}")
+    dataset_dir = output_dir
     images_dir = os.path.join(dataset_dir, "images")
     controls_dir = os.path.join(dataset_dir, "controls")
 
@@ -41,35 +40,29 @@ def create_dataset(
     # Prepare metadata
     metadata = []
 
-    # Determine how many samples to process
-    total_samples = len(dataset) if limit is None else min(limit, len(dataset))
-    print(f"Processing {total_samples} samples for ControlNet {cn_type} dataset...")
-
+    total_samples = len(dataset)
+    print(f"Processing {total_samples} samples for ControlNet {preprocessor.cn_type} dataset...")
     # Process each sample
     for i, sample in enumerate(
         tqdm(dataset, total=total_samples, desc="Processing samples")
     ):
         input_image = sample["image"]
+        prompt = ""
         if "answer" in sample and sample["answer"]:
-            prompt = sample["answer"][0]
-        elif "caption" in sample:
-            prompt = sample["caption"]
-        else:
-            prompt = None
-
-        if prompt is None:
-            if enable_no_prompt:
-                prompt = ""
-            else:
-                continue
-
+            for ans in sample["answer"]: 
+                prompt += (ans+" ")
+        # for debug only
+        # if i < 6:
+        #     print(f"prompt: {prompt}")
+        #     if i == 5:
+        #         return
         # Process image with ControlNet preprocessor
         try:
-            control_map = preprocessor.process(cn_type=cn_type, image=input_image)
+            control_map = preprocessor.process(image=input_image)
 
             # Save original image and control map
-            image_filename = f"image_{i:06d}.png"
-            control_filename = f"control_{i:06d}.png"
+            image_filename = f"image_{i:06d}.jpg"
+            control_filename = f"control_{i:06d}.jpg"
 
             input_image.save(os.path.join(images_dir, image_filename))
             control_map.save(os.path.join(controls_dir, control_filename))
@@ -96,16 +89,14 @@ def create_dataset(
     print(f"Total processed samples: {len(metadata)}")
     return dataset_dir
 
-
-if __name__ == "__main__":
+def parse_args():
     import argparse
-
     # Set up command line arguments
     parser = argparse.ArgumentParser(description="Create ControlNet dataset from COCO")
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./controlnet_datasets",
+        default="../dataset/controlnet_datasets",
         help="Directory to save the processed dataset",
     )
     parser.add_argument(
@@ -116,7 +107,7 @@ if __name__ == "__main__":
         help="Type of control map to generate",
     )
     parser.add_argument(
-        "--limit", type=int, default=None, help="Maximum number of samples to process"
+        "--sample_size", type=int, default=5000, help="Maximum number of samples to process"
     )
     parser.add_argument(
         "--enable_blur",
@@ -126,7 +117,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        default="lmms-lab/COCO-Caption2017",
+        default="COCO-Caption2017",
         help="Dataset to use (default: COCO-Caption2017)",
     )
     parser.add_argument(
@@ -139,15 +130,27 @@ if __name__ == "__main__":
         help="Kernel size used to blur the image before Canny edge detection (must be odd)",
     )
     parser.add_argument("--enable_no_prompt", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument("--random_sample", action="store_true")
+    return parser.parse_args()
+
+if __name__ == "__main__":
+    args = parse_args()
 
     print("Loading dataset...")
-    start_time = time.time()
 
     # Load the dataset
     try:
-        dataset = load_dataset(args.dataset, split=args.split, trust_remote_code=True)
-        print(f"Dataset loaded successfully in {time.time() - start_time:.2f} seconds.")
+        # determine the total number of samples
+        dataset = load_dataset(os.path.join("../dataset", args.dataset), split=args.split, trust_remote_code=True)
+        # random sample
+        if args.sample_size is not None and args.random_sample:
+            total_samples = min(args.sample_size, len(dataset))
+            indices = random.sample(range(len(dataset)), total_samples)
+            dataset = dataset.select(indices)  # HuggingFace way
+        elif args.sample_size is not None:
+            dataset = dataset.select(range(args.sample_size))
+            
+        dataset.name = args.dataset
         print(f"Number of examples: {len(dataset)}")
         print("Dataset features:", dataset.features)
     except Exception as e:
@@ -159,18 +162,15 @@ if __name__ == "__main__":
 
     # Initialize preprocessor
     preprocessor = ControlNetPreprocessor(
-        enable_blur=args.enable_blur, blur_kernel_size=args.blur_kernel_size
+        enable_blur=args.enable_blur, blur_kernel_size=args.blur_kernel_size, cn_type=args.cn_type
     )
 
     # Create ControlNet dataset
     dataset_dir = create_dataset(
         preprocessor=preprocessor,
         dataset=dataset,
-        output_dir=args.output_dir,
-        cn_type=args.cn_type,
-        limit=args.limit,
+        output_dir=os.path.join(args.output_dir, f"{args.dataset}-{args.cn_type}"),
         enable_no_prompt=args.enable_no_prompt,
     )
 
-    print(f"\nControlNet dataset created at: {dataset_dir}")
     print("Done!")

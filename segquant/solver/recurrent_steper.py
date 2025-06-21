@@ -308,3 +308,4 @@ class RecurrentSteper(BaseSteper):
                 )
 
         return latents
+

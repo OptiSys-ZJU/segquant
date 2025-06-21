@@ -3,8 +3,8 @@ import argparse
 import torch
 from torch import nn
 from benchmark import trace_pic
-from benchmark.config import BenchmarkConfig,CalibrationConfig,AffineConfig,QuantizationConfigs
-from segquant.torch.affiner import process_affiner
+from benchmark.config import BenchmarkConfig,CalibrationConfig,AffineConfig,QuantizationConfigs,QUANT_METHOD_CHOICES,DATASET_TYPE_CHOICES
+from segquant.torch.affiner import load_affiner
 from segquant.sample.sampler import QDiffusionSampler, model_map
 from segquant.torch.calibrate_set import generate_calibrate_set
 from segquant.torch.quantization import quantize
@@ -103,38 +103,47 @@ def quant_model(
         )
     return model_real
 
-def run_module(benchmark, affine_config, calibration_config):
+def run_module(benchmark, affine_config, calibration_config, continue_process):
     # No need to quant, generate real pics
     if benchmark.generate_real_pics:
         model_real = StableDiffusion3ControlNetModel.from_repo(
             ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), f"cuda:{benchmark.gpu_id}"
         )
         # generate real pics
-        real_dir = f"../segquant/benchmark_record/run_real_module" 
-        pic_path = os.path.join(real_dir, "pics/real")
-        print(f"[INFO] generating real pics in [{pic_path}]...")
+        print(f"[INFO] generating real pics with model_real")
         trace_pic(
             model_real,
-            pic_path,
-            benchmark.dataset.get_dataloader(),
+            os.path.join(f"../segquant/benchmark_record/{benchmark.dataset_type}/run_real_module", f"pics/real"),
+            benchmark.dataset.get_dataloader(batch_size=16),
             benchmark.latents,
             max_num=benchmark.benchmark_size,
+            continue_process=continue_process,
             controlnet_conditioning_scale=benchmark.controlnet_conditioning_scale,
             guidance_scale=benchmark.guidance_scale,
             num_inference_steps=benchmark.max_timestep,
         )
-        print(f"[INFO] real pics generated in [{pic_path}]")
+        print(f"[INFO] real pics generated with model_real")
         del model_real
         return
     
     # Need to quant
     # set up parameters
     quant_config = QuantizationConfigs.get_config(benchmark.quant_method)
-    affine = quant_config["affine"]
+    affine = quant_config["default"]["affine"]
     # setting up model path
     quant_layer_type="dit" if quant_config["default"]["dit"] else "controlnet"
-    model_quant_path = f"model/{quant_layer_type}/model_quant_{benchmark.quant_method}.pt"
-    model_quant_path = os.path.join(benchmark.res_dir, model_quant_path)
+    # to see if model_quant_path have "affine" keywords
+    if "affine" in benchmark.quant_method: # if have affine, delete affine from quant_method
+        quant_method = benchmark.quant_method.replace("_affine", "")
+    else:
+        quant_method = benchmark.quant_method
+    if "affine" in benchmark.res_dir:
+        model_dir = benchmark.res_dir.replace("_affine", "")
+    else:
+        model_dir = benchmark.res_dir
+    model_quant_path = f"model/{quant_layer_type}/model_quant_{quant_method}.pt"
+    model_quant_path = os.path.join(model_dir, model_quant_path)
+    
     # quantize or load model
     model_quant = quant_or_load(model_quant_path, quant_config, benchmark.dataset, calibration_config, benchmark.gpu_id)
     # affine or not, different process
@@ -146,9 +155,10 @@ def run_module(benchmark, affine_config, calibration_config):
         trace_pic(
             model_quant,
             os.path.join(benchmark.res_dir, f"pics/quant_{benchmark.quant_method}"),
-            benchmark.dataset.get_dataloader(),
+            benchmark.dataset.get_dataloader(batch_size=16),
             benchmark.latents,
             max_num=benchmark.benchmark_size,
+            continue_process=continue_process,
             controlnet_conditioning_scale=benchmark.controlnet_conditioning_scale,
             guidance_scale=benchmark.guidance_scale,
             num_inference_steps=benchmark.max_timestep,
@@ -161,7 +171,7 @@ def run_module(benchmark, affine_config, calibration_config):
         )
         # learning better affine
         print(f"[INFO] learning better affine...")
-        affiner = process_affiner(
+        affiner = load_affiner(
             affine_config, benchmark.dataset, model_real, model_quant, latents=benchmark.latents, shuffle=True
         )
         print(f"[INFO] affine learning completed")
@@ -172,10 +182,11 @@ def run_module(benchmark, affine_config, calibration_config):
         trace_pic(
             model_quant,
             os.path.join(benchmark.res_dir, f"pics/quant_{benchmark.quant_method}"),
-            benchmark.dataset.get_dataloader(),
+            benchmark.dataset.get_dataloader(batch_size=16),
             benchmark.latents,
             steper=affiner,
             max_num=benchmark.benchmark_size,
+            continue_process=continue_process,
             controlnet_conditioning_scale=benchmark.controlnet_conditioning_scale,
             guidance_scale=benchmark.guidance_scale,
             num_inference_steps=benchmark.max_timestep,
@@ -190,10 +201,7 @@ def parse_args():
     parser.add_argument(
         "-q", "--quant_method", 
         type=str,
-        choices=["int8smooth", "int8smooth_seg", "int8smooth_dual", 
-                 "int8smooth_affine", "int8smooth_seg_dual", "int8smooth_seg_dual_affine", 
-                 "fp8", "fp8_seg", "fp8_dual", "fp8_affine", 
-                 "fp8_seg_dual", "fp8_seg_dual_affine"],  # 根据你的QuantMethod调整
+        choices=QUANT_METHOD_CHOICES,  # 根据你的QuantMethod调整
         default="int8smooth",
         help="Quantization method"
     )
@@ -201,7 +209,7 @@ def parse_args():
     parser.add_argument(
         "-d", "--dataset_type",
         type=str, 
-        choices=["COCO", "MJHQ", "DCI"],  # 根据你的BenchmarkType调整
+        choices=DATASET_TYPE_CHOICES,  # 根据你的BenchmarkType调整
         default="COCO",
         help="Dataset type"
     )
@@ -219,7 +227,17 @@ def parse_args():
         default=0,
         help="GPU ID"
     )
-
+    parser.add_argument(
+        "-c", "--continue_process",
+        action="store_false",
+        help="Continue processing from the last image"
+    )
+    parser.add_argument(
+        "-n", "--benchmark_size",
+        type=int,
+        default=5000,
+        help="Benchmark size"
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -230,6 +248,8 @@ if __name__ == "__main__":
         dataset_type=args.dataset_type,
         generate_real_pics=args.real, # No quant, generate real pics
         gpu_id=args.gpu_id,
+        benchmark_size=args.benchmark_size,
     )
-    run_module(benchmark, AffineConfig.to_dict(), CalibrationConfig.to_dict())
+    print(f"[INFO] benchmark: {benchmark}")
+    run_module(benchmark, AffineConfig.to_dict(), CalibrationConfig.to_dict(), args.continue_process)
     
