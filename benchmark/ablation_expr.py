@@ -232,6 +232,12 @@ def parse_args():
         action="store_false",
         help="Continue processing from the last image"
     )
+    parser.add_argument(
+        "-n", "--benchmark_size",
+        type=int,
+        default=5000,
+        help="Benchmark size"
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -242,6 +248,7 @@ if __name__ == "__main__":
         dataset_type=args.dataset_type,
         generate_real_pics=args.real, # No quant, generate real pics
         gpu_id=args.gpu_id,
+        benchmark_size=args.benchmark_size,
     )
     print(f"[INFO] benchmark: {benchmark}")
     run_module(benchmark, AffineConfig.to_dict(), CalibrationConfig.to_dict(), args.continue_process)

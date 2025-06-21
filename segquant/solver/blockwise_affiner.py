@@ -2,7 +2,6 @@
 This module implements the BlockwiseAffiner class, which extends the RecurrentSteper
 to perform blockwise affine transformations for latent variables during the sampling process.
 """
-import torch
 from segquant.solver.recurrent_steper import RecurrentSteper
 from segquant.solver.solver import MSERelSolver
 
