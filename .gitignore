@@ -11,3 +11,4 @@ calibset_record/
 *.log
 .pylintrc
 a.txt
+*.pyc

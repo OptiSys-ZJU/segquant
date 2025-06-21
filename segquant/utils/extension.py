@@ -174,7 +174,6 @@ def load_real_quant_int4_ext(verbose=False, required=False):
     ext.create_quantized_weights = types.MethodType(create_quantized_weights, ext)
     return ext, ('Wint4Aint4',)
 
-
 def load_real_quant_mix_ext(verbose=False, required=False):
     """
     Load the real quantization extension for MIX quantization.
