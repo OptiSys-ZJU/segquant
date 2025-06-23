@@ -197,27 +197,26 @@ def run_module(benchmark, affine_config, calibration_config, continue_process):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Benchmark Configuration")
-    # 量化方法参数
+    # quant method
     parser.add_argument(
         "-q", "--quant_method", 
         type=str,
-        choices=QUANT_METHOD_CHOICES,  # 根据你的QuantMethod调整
+        choices=QUANT_METHOD_CHOICES,
         default="int8smooth",
         help="Quantization method"
     )
-    # 数据集类型参数
+    # BenchmarkType
     parser.add_argument(
         "-d", "--dataset_type",
         type=str, 
-        choices=DATASET_TYPE_CHOICES,  # 根据你的BenchmarkType调整
+        choices=DATASET_TYPE_CHOICES,
         default="COCO",
         help="Dataset type"
     )
-    
-    # 布尔值参数
+
     parser.add_argument(
         "-r", "--real",
-        action="store_true",  # 如果指定则为True
+        action="store_true",
         help="Generate real pictures without quantization"
     )
 
