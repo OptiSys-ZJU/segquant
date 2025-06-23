@@ -2,8 +2,6 @@
 
 This script processes a dataset (e.g. COCO-Caption2017) to generate ControlNet-compatible training data, such as Canny edge maps or depth maps.
 
----
-
 ## Usage
 
 ```bash
@@ -22,8 +20,6 @@ python -m coco.preprocess \
   --split val
 ```
 
----
-
 ## Command Line Arguments
 
 | Argument | Type | Default | Description |
@@ -38,14 +34,10 @@ python -m coco.preprocess \
 | `--enable_no_prompt` | flag | `False` | If set, removes prompts from the output. |
 | `--random_sample` | flag | `False` | If set, randomly samples from the dataset instead of sequential order. |
 
----
-
 ## Notes
 
 - **Canny mode** uses OpenCV edge detection; enabling `--enable_blur` can improve edge clarity.
 - This tool is often used to generate paired image/control map datasets for ControlNet training or finetuning.
-
----
 
 ## Dependencies
 
@@ -54,8 +46,6 @@ Make sure to install any required packages before running the script:
 ```bash
 pip install opencv-python tqdm
 ```
-
----
 
 ## Output Structure
 

@@ -2,8 +2,6 @@
 
 This module provides essential APIs for model quantization, calibration dataset generation, and affiner loading.
 
----
-
 ## quantize
 
 ```python
@@ -29,8 +27,6 @@ Quantizes the given PyTorch model using calibration data and optional configurat
 
 **Returns**:
 - The quantized model (`nn.Module`).
-
----
 
 ## calibrate
 
@@ -79,8 +75,6 @@ Loads a previously saved calibration dataset from disk.
 
 **Returns**:
 - `BaseCalibSet` if found, otherwise `None`.
-
----
 
 ## affiner
 
@@ -177,8 +171,6 @@ default_quantize_config = {
   - `type` (`DType`) — Data type used in quantization (see below).
   - `axis` (`int` or `None`) — Channel-wise quantization axis; `None` means per-tensor.
 
----
-
 ### `DType` Values
 
 Supported quantization data types:
@@ -191,8 +183,6 @@ Supported quantization data types:
 - `FP8E5M2` – 8-bit float (E5M2)
 - `FP16` – 16-bit float
 
----
-
 ### `Optimum` Values
 
 Quantization optimization strategies:
@@ -201,7 +191,6 @@ Quantization optimization strategies:
 - `SMOOTH` – SmoothQuant (`alpha`)
 - `SVD` – SVDQuant (`low_rank`)
 - `SMOOTH` and `SVD` support `search_alpha_config`
----
 
 ### `Calibrate` Values
 
@@ -209,8 +198,6 @@ Calibration algorithms for scale computation:
 
 - `AMAX` – Use absolute max of activation or weight
 - `GPTQ` – Use GPTQ
-
----
 
 ### `SegPattern` Values
 
