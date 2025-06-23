@@ -74,26 +74,10 @@ class AutoencoderKL(nn.Module):
     def from_config(cls, config_path, weight_path):
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-            model = cls(
-                in_channels=config["in_channels"],
-                out_channels=config["out_channels"],
-                down_block_types=tuple(config["down_block_types"]),
-                up_block_types=tuple(config["up_block_types"]),
-                block_out_channels=tuple(config["block_out_channels"]),
-                layers_per_block=config["layers_per_block"],
-                act_fn=config["act_fn"],
-                latent_channels=config["latent_channels"],
-                norm_num_groups=config["norm_num_groups"],
-                sample_size=config["sample_size"],
-                scaling_factor=config["scaling_factor"],
-                shift_factor=config["shift_factor"],
-                latents_mean=config["latents_mean"],
-                latents_std=config["latents_std"],
-                force_upcast=config["force_upcast"],
-                use_quant_conv=config["use_quant_conv"],
-                use_post_quant_conv=config["use_post_quant_conv"],
-            )
-
+            valid_params = inspect.signature(cls.__init__).parameters
+            valid_keys = set(valid_params) - {'self'}
+            kwargs = {k: v for k, v in config.items() if k in valid_keys}
+            model = cls(**kwargs)
             model_state_dict = model.state_dict()
             weights = load_file(weight_path)
             for name, param in weights.items():
@@ -130,6 +114,8 @@ class AutoencoderKL(nn.Module):
         for key, value in locals().items():
             if key in init_params:
                 setattr(self.config, key, value)
+        
+        self.dtype = torch.float16
 
         # pass init params to Encoder
         self.encoder = Encoder(

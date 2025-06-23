@@ -45,6 +45,8 @@ from torch.fx.passes.shape_prop import ShapeProp
 from torch._subclasses.fake_tensor import FakeTensorMode
 import torch.nn.functional as F
 
+from backend.torch.layers.activations import GEGLU
+
 
 LinearInfo = namedtuple("LinearInfo", ["found", "name", "in_features", "out_features"])
 ChunkInfo = namedtuple("ChunkInfo", ["found", "chunks"])
@@ -70,7 +72,7 @@ class SegQuantPatternDetector:
         act_funcs=None,
     ):
         self.model = model
-        self.acts = acts if acts is not None else [nn.SiLU, nn.GELU]
+        self.acts = acts if acts is not None else [nn.SiLU, nn.GELU, GEGLU]
         self.act_funcs = act_funcs if act_funcs is not None else [F.silu, F.gelu]
 
         sig = inspect.signature(self.model.forward)
@@ -80,15 +82,26 @@ class SegQuantPatternDetector:
             "block_controlnet_hidden_states",
             "controlnet_block_samples",
             "controlnet_single_block_samples",
+            "down_block_additional_residuals",
+            "down_intrablock_additional_residuals",
+            "added_cond_kwargs",
+            "cross_attention_kwargs",
         ]
 
         for key in expand_keys:
             value = concrete.get(key, None)
-            if isinstance(value, (list, tuple)):
+            if isinstance(value, (list, tuple, dict)):
                 concrete.update(
                     {f"{key}_{i+1}": tensor for i, tensor in enumerate(value)}
                 )
                 del concrete[key]
+        
+        # for sdxl
+        concrete['timestep_cond'] = None
+        concrete['cross_attention_kwargs'] = None
+        concrete['attention_mask'] = None
+        concrete['encoder_attention_mask'] = None
+        concrete['mid_block_additional_residual'] = None
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
@@ -135,7 +148,7 @@ class SegQuantPatternDetector:
         ):
             chunks = node.args[1] if len(node.args) > 1 else node.kwargs.get("chunks")
             dim = node.kwargs.get("dim", 0)
-            if dim == 1:
+            if dim == 1 or dim == -1:
                 return ChunkInfo(True, chunks)
         return ChunkInfo(False, None)
 
@@ -190,6 +203,12 @@ class SegQuantPatternDetector:
                 return ActInfo(True, node.target)
         elif node.op == "call_function" and node.target in self.act_funcs:
             return ActInfo(True, node.target)
+        if 'nn_module_stack' in node.meta:
+            modules = list(node.meta['nn_module_stack'].values())
+            if modules:
+                last_module = modules[-1][1]
+                if last_module in self.acts:
+                    return ActInfo(True, last_module)
         return ActInfo(False, None)
 
     def _find_pattern(self, node, pattern_type):
@@ -317,7 +336,7 @@ if __name__ == "__main__":
     from typing import Optional
     from backend.torch.layers.activations import GELU
 
-    class MyModel2(nn.Module):
+    class FeedForward(nn.Module):
         def __init__(
             self,
             dim: int,
@@ -331,9 +350,7 @@ if __name__ == "__main__":
             if inner_dim is None:
                 inner_dim = int(dim * mult)
             dim_out = dim_out if dim_out is not None else dim
-
-            act_fn = GELU(dim, inner_dim, bias=bias)
-
+            act_fn = GEGLU(dim, inner_dim, bias=bias)
             self.net = nn.ModuleList([])
             # project in
             self.net.append(act_fn)
@@ -342,7 +359,7 @@ if __name__ == "__main__":
             # project out
             self.net.append(nn.Linear(inner_dim, dim_out, bias=bias))
 
-        def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
             for module in self.net:
                 hidden_states = module(hidden_states)
             return hidden_states
@@ -367,14 +384,11 @@ if __name__ == "__main__":
             return out
 
     search_patterns = [
-        "linear_to_chunk",
-        "linear_to_split",
-        "concat_to_linear",
-        "stack_to_linear",
+        # "linear_to_chunk",
         "activation_to_linear",
     ]
     detector = SegQuantPatternDetector(
-        MyModel2(dim=10),
+        FeedForward(dim=10),
         example_inputs=(torch.randn(2, 10),),
         search_patterns_lst=search_patterns,
     )

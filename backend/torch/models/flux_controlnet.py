@@ -1237,8 +1237,8 @@ class FluxControlNetModel(nn.Module):
                         joint_attention_kwargs=self.joint_attention_kwargs,
                     )
                 else:
-                    controlnet_block_samples = torch.zeros(1, device=device)
-                    controlnet_single_block_samples = torch.zeros(1, device=device)
+                    controlnet_block_samples = None
+                    controlnet_single_block_samples = None
 
                 guidance = (
                     torch.tensor([guidance_scale], device=device)

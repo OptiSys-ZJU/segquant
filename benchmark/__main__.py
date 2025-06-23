@@ -1,418 +1,464 @@
 import os
 import torch
-from torch import nn
+import argparse
+import sys
+sys.path.append('../')
+
 from benchmark import trace_pic
-from segquant.config import DType, Optimum, SegPattern
-from segquant.torch.affiner import process_affiner
-from segquant.sample.sampler import QDiffusionSampler, model_map
-from segquant.torch.calibrate_set import generate_calibrate_set
+from benchmark.config import (
+    BenchmarkConfig, CalibrationConfig, ModelConfigs, AffineConfig,
+    MODEL_TYPE_CHOICES, LAYER_TYPE_CHOICES, DATASET_TYPE_CHOICES, QUANT_CONFIG_CHOICES
+)
+from segquant.torch.affiner import load_affiner
+from segquant.sample.sampler import QDiffusionSampler
+from segquant.torch.calibrate_set import generate_calibrate_set, load_calibrate_set
 from segquant.torch.quantization import quantize
-from dataset.coco.coco_dataset import COCODataset
-from backend.torch.models.stable_diffusion_3_controlnet import (
-    StableDiffusion3ControlNetModel,
-)
+from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
 from backend.torch.models.flux_controlnet import FluxControlNetModel
-from backend.torch.utils import randn_tensor
-
-calib_args = {
-    "max_timestep": 50,
-    "sample_size": 1,
-    "timestep_per_sample": 50,
-    "controlnet_conditioning_scale": 0,
-    "guidance_scale": 7,
-    "shuffle": False,
-}
-
-quant_config = {
-    "default": {
-        "enable": True,
-        "input_dtype": DType.INT4,
-        "weight_dtype": DType.INT4,
-        "opt": Optimum.SVD,
-        "seglinear": False,
-        "real_quant": True,
-        "search_patterns": [],
-        "input_axis": None,
-        "weight_axis": None,
-        "alpha": 0.5,
-        "low_rank": 32,
-    },
-
-    "*transformer_blocks.*.attn.to_k*": {
-        "enable": False,
-    },
-    "*transformer_blocks.*.attn.to_v*": {
-        "enable": False,
-    },
-    "*transformer_blocks.*.norm1.linear*": {
-        "enable": False,
-    },
-    "*transformer_blocks.*.norm1_context.linear*": {
-        "enable": False,
-    },
-
-    "*single_transformer_blocks.*.attn.to_k*": {
-        "enable": False,
-    },
-    "*single_transformer_blocks.*.attn.to_v*": {
-        "enable": False,
-    },
-    "*single_transformer_blocks.*.norm.linear*": {
-        "enable": False,
-    },
-}
-
-# latents = randn_tensor(
-#     (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
-# )
-latents = randn_tensor(
-    (1, 4096, 64,), device=torch.device("cuda:0"), dtype=torch.float16
-)
+from backend.torch.models.stable_diffusion_xl import StableDiffusionXLModel
+from backend.torch.modules.controlnet_sd3 import SD3ControlNetModel
+from backend.torch.modules.transformer_sd3 import SD3Transformer2DModel
+from backend.torch.modules.controlnet_flux import FluxControlNetModel as ControlNetFlux
+from backend.torch.modules.transformer_flux import FluxTransformer2DModel
+from backend.torch.modules.unet_2d_condition import UNet2DConditionModel
+from huggingface_hub import snapshot_download, try_to_load_from_cache
 
 
-def quant_model(
-    model_real: nn.Module, quant_layer: str, config, dataset, calibargs: dict
-) -> nn.Module:
-    calib_key = (
-        f"maxT{calibargs['max_timestep']}_"
-        f"sz{calibargs['sample_size']}_"
-        f"tps{calibargs['timestep_per_sample']}_"
-        f"cond{calibargs['controlnet_conditioning_scale']}_"
-        f"gs{calibargs['guidance_scale']}_"
-        f"{'shuffle' if calibargs['shuffle'] else 'noshuffle'}"
-    )
-    calibset_path = os.path.join("calibset_record", "flux", quant_layer, calib_key)
-    sampler = QDiffusionSampler()
-    sample_dataloader = dataset.get_dataloader(
-        batch_size=1, shuffle=calibargs["shuffle"]
-    )
-    calibset = generate_calibrate_set(
-        model_real,
-        sampler,
-        sample_dataloader,
-        quant_layer,
-        calibset_path,
-        max_timestep=calibargs["max_timestep"],
-        sample_size=calibargs["sample_size"],
-        timestep_per_sample=calibargs["timestep_per_sample"],
-        controlnet_conditioning_scale=calibargs["controlnet_conditioning_scale"],
-        guidance_scale=calibargs["guidance_scale"],
-
-
-        latents=latents,
-    )
-
-    calib_loader = calibset.get_dataloader(batch_size=1)
-    if quant_layer == "dit":
-        model_real.transformer = quantize(
-            model_map[quant_layer](model_real), calib_loader, config, True
-        )
-    else:
-        model_real.controlnet = quantize(
-            model_map[quant_layer](model_real), calib_loader, config, True
-        )
-    return model_real
-
-
-def run_seg_module():
-    root_dir = "tmp_test_linear"
-    os.makedirs(root_dir, exist_ok=True)
+class ModelManager:
+    """Handles model loading and management"""
     
-    dataset = COCODataset(
-        path="../dataset/controlnet_datasets/coco_canny", cache_size=16
-    )
+    @staticmethod
+    def check_model_exists(repo_id, local_path=None):
+        """Check if model exists locally or in HuggingFace cache"""
+        if local_path and os.path.exists(local_path):
+            print(f"Found valid local model at: {local_path}")
+            return True, local_path
+        
+        try:
+            cached_path = try_to_load_from_cache(repo_id, filename="config.json")
+            if cached_path is not None:
+                model_cache_dir = os.path.dirname(cached_path)
+                print(f"Found valid cached model at: {model_cache_dir}")
+                return True, model_cache_dir
+        except Exception as e:
+            print(f"Cache check failed for {repo_id}: {e}")
+        
+        print(f"Model {repo_id} not found locally or in cache")
+        return False, None
 
-    max_timestep = 50
-    max_num = 1
+    @staticmethod
+    def auto_download_model(repo_id, local_path=None):
+        """Automatically download model with existence check"""
+        exists, existing_path = ModelManager.check_model_exists(repo_id, local_path)
+        if exists:
+            return existing_path
+        
+        try:        
+            print(f"Downloading model from: {repo_id}")
+            cache_dir = snapshot_download(repo_id=repo_id)
+            print(f"Model downloaded at: {cache_dir}")
+            return cache_dir
+        except Exception as e:
+            print(f"Failed to download {repo_id}: {e}")
+            exists, existing_path = ModelManager.check_model_exists(repo_id, local_path)
+            if exists:
+                print(f"Using existing model at: {existing_path}")
+                return existing_path
+            else:
+                raise RuntimeError(f"Cannot load model {repo_id} - download failed and no existing model found")
 
-    ### 0
-    pic_path = os.path.join(root_dir, "pics/real")
-    if not os.path.exists(pic_path):
-        # model_real = StableDiffusion3ControlNetModel.from_repo(
-        #     ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
-        # )
-        model_real = FluxControlNetModel.from_repo(
-            ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"), "cpu", enable_control=False,
+    @staticmethod
+    def get_full_model(model_type, device="cuda:0"):
+        """Get full model for the specified type"""
+        if model_type == 'sd3':
+            model_path = ModelManager.auto_download_model(
+                "stabilityai/stable-diffusion-3-medium-diffusers", 
+                "../stable-diffusion-3-medium-diffusers"
+            )
+            controlnet_path = ModelManager.auto_download_model(
+                "InstantX/SD3-Controlnet-Canny", 
+                "../SD3-Controlnet-Canny"
+            )
+            return StableDiffusion3ControlNetModel.from_repo(
+                (model_path, controlnet_path), device
+            )
+        elif model_type == 'flux':
+            model_path = ModelManager.auto_download_model(
+                "black-forest-labs/FLUX.1-dev", 
+                "../FLUX.1-dev"
+            )
+            controlnet_path = ModelManager.auto_download_model(
+                "InstantX/FLUX.1-dev-Controlnet-Canny", 
+                "../FLUX.1-dev-Controlnet-Canny"
+            )
+            return FluxControlNetModel.from_repo(
+                (model_path, controlnet_path), device, enable_control=False
+            )
+        elif model_type == 'sdxl':
+            model_path = ModelManager.auto_download_model(
+                "stabilityai/stable-diffusion-xl-base-1.0", 
+                "../stable-diffusion-xl-base-1.0"
+            )
+            return StableDiffusionXLModel.from_repo(model_path, device)
+        else:
+            raise ValueError(f'Unknown model type: {model_type}')
+
+    @staticmethod
+    def get_part_model(model_type, layer_type, device="cuda:0"):
+        """Get specific layer/component of the model"""
+        if model_type == 'sd3':
+            if layer_type == 'dit':
+                return SD3Transformer2DModel.from_config(
+                    "../stable-diffusion-3-medium-diffusers/transformer/config.json",
+                    "../stable-diffusion-3-medium-diffusers/transformer/diffusion_pytorch_model.safetensors",
+                ).half().to(device)
+            elif layer_type == 'controlnet':
+                return SD3ControlNetModel.from_config(
+                    "../SD3-Controlnet-Canny/config.json",
+                    "../SD3-Controlnet-Canny/diffusion_pytorch_model.safetensors",
+                ).half().to(device)
+        elif model_type == 'flux':
+            if layer_type == 'dit':
+                return FluxTransformer2DModel.from_config(
+                    "../FLUX.1-dev/transformer/config.json",
+                    "../FLUX.1-dev/transformer/diffusion_pytorch_model*.safetensors",
+                    "../FLUX.1-dev/transformer/diffusion_pytorch_model.safetensors.index.json",
+                ).half().to(device)
+            elif layer_type == 'controlnet':
+                return ControlNetFlux.from_config(
+                    "../FLUX.1-dev-Controlnet-Canny/config.json",
+                    "../FLUX.1-dev-Controlnet-Canny/diffusion_pytorch_model.safetensors",
+                ).half().to(device)
+        elif model_type == 'sdxl':
+            if layer_type == 'unet':
+                return UNet2DConditionModel.from_config(
+                    "../stable-diffusion-xl-base-1.0/unet/config.json",
+                    "../stable-diffusion-xl-base-1.0/unet/diffusion_pytorch_model.fp16.safetensors",
+                ).half().to(device)
+        
+        raise ValueError(f'Unknown combination: model_type={model_type}, layer_type={layer_type}')
+
+    @staticmethod
+    def get_full_model_with_quantized_part(model_type, layer_type, model_part, device="cuda:0"):
+        """Get full model with quantized component"""
+        if model_type == 'flux':
+            if layer_type == 'dit':
+                return FluxControlNetModel.from_repo(
+                    ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"), 
+                    device, enable_control=False, transformer=model_part
+                )
+            elif layer_type == 'controlnet':
+                return FluxControlNetModel.from_repo(
+                    ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"), 
+                    device, enable_control=True, controlnet=model_part
+                )
+        elif model_type == 'sd3':
+            if layer_type == 'dit':
+                return StableDiffusion3ControlNetModel.from_repo(
+                    ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), 
+                    device, transformer=model_part
+                )
+            elif layer_type == 'controlnet':
+                return StableDiffusion3ControlNetModel.from_repo(
+                    ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), 
+                    device, controlnet=model_part
+                )
+        elif model_type == 'sdxl':
+            if layer_type == 'unet':
+                return StableDiffusionXLModel.from_repo(
+                    "../stable-diffusion-xl-base-1.0", device, unet=model_part
+                )
+        
+        raise ValueError(f'Unknown combination: model_type={model_type}, layer_type={layer_type}')
+
+
+class QuantizationManager:
+    """Handles model quantization and calibration"""
+    
+    @staticmethod
+    def quant_or_load(benchmark_config, model_target_path, quant_config, calib_args):
+        """Quantize or load quantized model"""
+        if not os.path.exists(model_target_path):
+            print(f"[INFO] {model_target_path} not found, start quantizing...")
+            print('Quantization config:')
+            print(quant_config)
+            
+            quantized_model = QuantizationManager.get_quantized_model(
+                benchmark_config, quant_config, calib_args
+            )
+            os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
+            torch.save(quantized_model, model_target_path)
+            print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
+        else:
+            print(f"[INFO] {model_target_path} found, start loading...")
+            quantized_model = torch.load(model_target_path, weights_only=False)
+        
+        return quantized_model
+
+    @staticmethod
+    def get_quantized_model(benchmark_config, quant_config, calib_args):
+        """Generate quantized model"""
+        calib_key = (
+            f"maxT{calib_args['max_timestep']}_"
+            f"sz{calib_args['sample_size']}_"
+            f"tps{calib_args['timestep_per_sample']}_"
+            f"cond{calib_args['controlnet_conditioning_scale']}_"
+            f"gs{calib_args['guidance_scale']}_"
+            f"{'shuffle' if calib_args['shuffle'] else 'noshuffle'}"
         )
-        model_real = model_real.to("cuda")
 
-        print(f"[INFO] generating pics in [{pic_path}]...")
+        calibset_path = os.path.join(
+            "../segquant/calibset_record", 
+            benchmark_config.model_type, 
+            benchmark_config.layer_type, 
+            calib_key
+        )
+        
+        calibset = load_calibrate_set(calibset_path)
+        if calibset is None:
+            sampler = QDiffusionSampler()
+            sample_dataloader = benchmark_config.dataset.get_dataloader(
+                batch_size=1, shuffle=calib_args["shuffle"]
+            )
+            model_real = ModelManager.get_full_model(
+                benchmark_config.model_type, f"cuda:{benchmark_config.gpu_id}"
+            )
+            calibset = generate_calibrate_set(
+                model_real,
+                sampler,
+                sample_dataloader,
+                benchmark_config.layer_type,
+                calibset_path,
+                max_timestep=calib_args["max_timestep"],
+                sample_size=calib_args["sample_size"],
+                timestep_per_sample=calib_args["timestep_per_sample"],
+                controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
+                guidance_scale=calib_args["guidance_scale"],
+                latents=benchmark_config.latents,
+            )
+            del model_real
+
+        calib_loader = calibset.get_dataloader(batch_size=1)
+        model = ModelManager.get_part_model(
+            benchmark_config.model_type, 
+            benchmark_config.layer_type, 
+            f"cuda:{benchmark_config.gpu_id}"
+        )
+        return quantize(
+            model, calib_loader, quant_config, 
+            per_layer_mode=benchmark_config.per_layer_mode, verbose=True
+        )
+
+
+def run_benchmark(benchmark_config):
+    """Main benchmark execution function"""
+    with torch.no_grad():
+        print(f"[INFO] Benchmark configuration: {benchmark_config}")
+        
+        # Create directories
+        # os.makedirs(benchmark_config.result_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(benchmark_config.get_model_quant_path()), exist_ok=True)
+        os.makedirs(benchmark_config.get_pic_store_path(), exist_ok=True)
+        
+        # Prepare calibration arguments
+        calib_args = CalibrationConfig.to_dict()
+        
+        # Generate real pics if requested
+        print(f"[INFO] generate_real_pics")
+        if benchmark_config.generate_real_pics:
+            model = ModelManager.get_full_model(
+                benchmark_config.model_type, f"cuda:{benchmark_config.gpu_id}"
+            )
+            trace_pic(
+                model,
+                benchmark_config.get_pic_store_path(),
+                benchmark_config.dataset.get_dataloader(),
+                benchmark_config.latents,
+                max_num=benchmark_config.benchmark_size,
+                controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
+                guidance_scale=calib_args["guidance_scale"],
+                num_inference_steps=benchmark_config.max_timestep,
+                reprocess=benchmark_config.reprocess,
+            )
+            del model
+            print("Real model pics generated")
+            return
+
+        # Quantization workflow (if quant_config specified) or baseline
+        if benchmark_config.quant_config:
+            print(f"Running quantization with {benchmark_config.quant_config}")
+            quant_config = benchmark_config.model_quant_config
+        else:
+            print("Running baseline test (using original model config)")
+            quant_config = ModelConfigs.get_config(benchmark_config.model_type)
+        
+        model_quant_path = benchmark_config.get_model_quant_path()
+        
+        model_part = QuantizationManager.quant_or_load(
+            benchmark_config, model_quant_path, quant_config, calib_args
+        )
+        
+        model = ModelManager.get_full_model_with_quantized_part(
+            benchmark_config.model_type, 
+            benchmark_config.layer_type, 
+            model_part, 
+            f"cuda:{benchmark_config.gpu_id}"
+        )
+        
+        # Handle affine if enabled
+        if benchmark_config.enable_affine:
+            model_real = ModelManager.get_full_model(benchmark_config.model_type, "cpu")
+            print("[INFO] Learning affine transformation...")
+            affiner = load_affiner(
+                AffineConfig.to_dict(), 
+                benchmark_config.dataset, 
+                model_real, 
+                model, 
+                latents=benchmark_config.latents, 
+                shuffle=True
+            )
+            print("[INFO] Affine learning completed")
+            del model_real
+        else:
+            affiner = None
+        
+        # Generate quantized pics
         trace_pic(
-            model_real,
-            pic_path,
-            dataset.get_dataloader(),
-            latents,
-            max_num=max_num,
+            model,
+            benchmark_config.get_pic_store_path(),
+            benchmark_config.dataset.get_dataloader(),
+            benchmark_config.latents,
+            max_num=benchmark_config.benchmark_size,
+            steper=affiner,
             controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
             guidance_scale=calib_args["guidance_scale"],
-            num_inference_steps=max_timestep,
+            num_inference_steps=benchmark_config.max_timestep,
+            reprocess=benchmark_config.reprocess,
         )
-        del model_real
-        print("model_real completed")
-    else:
-        print(f"[INFO] found pics in [{pic_path}], skip")
+        del model
+        print("Benchmark completed")
 
-    def quant_or_load(model_target_path, target_config):
-        if not os.path.exists(model_target_path):
-            print(f"[INFO] {model_target_path} not found, start quantizing...")
 
-            # model = StableDiffusion3ControlNetModel.from_repo(
-            #     ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-            #     "cuda:0",
-            # )
-            model = FluxControlNetModel.from_repo(
-                ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"),
-                "cuda:0",
-                enable_control=False,
-            )
-            target_model = quant_model(
-                model, "dit", target_config, dataset, calib_args
-            ).to("cpu")
-
-            os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
-            torch.save(target_model.transformer, model_target_path)
-            print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
-        else:
-            print(f"[INFO] {model_target_path} found, start loading...")
-            # target_model = StableDiffusion3ControlNetModel.from_repo(
-            #     ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-            #     "cpu",
-            # )
-            target_model = FluxControlNetModel.from_repo(
-                ("../FLUX.1-dev", "../FLUX.1-dev-Controlnet-Canny"),
-                "cuda:0",
-            )
-            target_model.transformer = torch.load(model_target_path, weights_only=False)
-
-        return target_model
-
-    ### 1
-    model_quant_path = os.path.join(root_dir, "model/dit/model_quant.pt")
-    model_quant = quant_or_load(model_quant_path, quant_config)
-    model_quant = model_quant.to("cuda")
-    trace_pic(
-        model_quant,
-        os.path.join(root_dir, "pics/quant"),
-        dataset.get_dataloader(),
-        latents,
-        max_num=max_num,
-        controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
-        guidance_scale=calib_args["guidance_scale"],
-        num_inference_steps=max_timestep,
+def parse_args():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='Unified Benchmark for Diffusion Models')
+    
+    parser.add_argument(
+        '-m', '--model-type', 
+        type=str, 
+        choices=MODEL_TYPE_CHOICES,
+        default='sdxl',
+        help='Model type to benchmark'
     )
-    del model_quant
-    print("model_quant completed")
-
-    ### 2
-    # quant_config_with_seg = {
-    #     "default": {
-    #         "enable": True,
-    #         "input_dtype": DType.INT8,
-    #         "weight_dtype": DType.INT8,
-    #         "opt": Optimum.SMOOTH,
-    #         "seglinear": True,
-    #         "real_quant": True,
-    #         "search_patterns": SegPattern.seg(),
-    #         "input_axis": None,
-    #         "weight_axis": None,
-    #         "alpha": 0.5,
-    #     },
-    # }
-    # model_quant_seg_path = os.path.join(root_dir, "model/dit/model_quant_seg.pt")
-    # model_quant_seg = quant_or_load(model_quant_seg_path, quant_config_with_seg)
-    # model_quant_seg = model_quant_seg.to("cuda")
-    # trace_pic(
-    #     model_quant_seg,
-    #     os.path.join(root_dir, "pics/quant_seg"),
-    #     dataset.get_dataloader(),
-    #     latents,
-    #     max_num=max_num,
-    #     controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
-    #     guidance_scale=calib_args["guidance_scale"],
-    #     num_inference_steps=max_timestep,
-    # )
-    # del model_quant_seg
-    # print("model_quant_seg completed")
-
-
-def run_dual_scale_module():
-    root_dir = "benchmark_record/run_dual_scale_module"
-    os.makedirs(root_dir, exist_ok=True)
-
-    dataset = COCODataset(
-        path="../dataset/controlnet_datasets/coco_canny", cache_size=16
+    
+    parser.add_argument(
+        '-l', '--layer-type',
+        type=str,
+        help='Layer type to quantize (auto-detected if not specified)'
+    )
+    
+    parser.add_argument(
+        '-d', '--dataset-type',
+        type=str, 
+        choices=DATASET_TYPE_CHOICES,
+        default='COCO',
+        help='Dataset type for calibration and evaluation'
+    )
+    
+    parser.add_argument(
+        '-r', '--real',
+        action='store_true',
+        help='Generate real pictures without quantization'
+    )
+    
+    parser.add_argument(
+        '-n', '--benchmark-size',
+        type=int,
+        default=1,
+        help='Number of images to generate for benchmark'
+    )
+    
+    parser.add_argument(
+        '--per-layer-mode',
+        action='store_true',
+        help='Enable per-layer quantization mode'
+    )
+    
+    parser.add_argument(
+        '--enable-affine',
+        action='store_true',
+        help='Enable affine transformation learning'
+    )
+    
+    parser.add_argument(
+        '--cache-dir',
+        type=str,
+        help='Custom cache directory for models'
+    )
+    
+    # Quantization configuration 
+    parser.add_argument(
+        '-q', '--quant-config', 
+        type=str,
+        choices=QUANT_CONFIG_CHOICES,
+        help='Weight/Activation bit configuration (e.g., W4A4, W8A8). If not specified, runs baseline test'
     )
 
-    max_timestep = 50
-    max_num = 1024
-
-    # ### 0
-    # model_real = StableDiffusion3ControlNetModel.from_repo(('../stable-diffusion-3-medium-diffusers', '../SD3-Controlnet-Canny'), 'cpu')
-    # model_real = model_real.to('cuda')
-    # latents = torch.load('../latents.pt')
-    # pic_path = os.path.join(root_dir, 'pics/real')
-    # if not os.path.exists(pic_path):
-    #     print(f'[INFO] generating pics in [{pic_path}]...')
-    #     trace_pic(model_real, pic_path, dataset.get_dataloader(), latents, max_num=max_num,
-    #             controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
-    #     print('model_real completed')
-    # else:
-    #     print(f'[INFO] found pics in [{pic_path}], skip')
-
-    def quant_or_load(model_target_path, target_config):
-        if not os.path.exists(model_target_path):
-            print(f"[INFO] {model_target_path} not found, start quantizing...")
-
-            model = StableDiffusion3ControlNetModel.from_repo(
-                ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-                "cuda:0",
-            )
-            target_model = quant_model(
-                model, "dit", target_config, dataset, calib_args
-            ).to("cpu")
-
-            os.makedirs(os.path.dirname(model_target_path), exist_ok=True)
-            torch.save(target_model.transformer, model_target_path)
-            print(f"[INFO] Model quantizing ok, saved to {model_target_path}")
-        else:
-            print(f"[INFO] {model_target_path} found, start loading...")
-            target_model = StableDiffusion3ControlNetModel.from_repo(
-                ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"),
-                "cpu",
-            )
-            target_model.transformer = torch.load(model_target_path, weights_only=False)
-
-        return target_model
-
-    # ### 1
-    # model_quant_path = os.path.join(root_dir, 'model/dit/model_quant.pt')
-    # model_quant = quant_or_load(model_quant_path, quant_config)
-    # model_quant = model_quant.to('cuda')
-    # latents = torch.load('../latents.pt')
-    # trace_pic(model_quant, os.path.join(root_dir, 'pics/quant'), dataset.get_dataloader(), latents, max_num=max_num,
-    #           controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"], guidance_scale=calib_args["guidance_scale"], num_inference_steps=max_timestep)
-    # del model_quant
-    # print('model_quant completed')
-
-    ### 2
-    quant_config_with_dual_scale = {
-        "default": {
-            "enable": True,
-            "input_dtype": DType.INT8,
-            "weight_dtype": DType.INT8,
-            "opt": Optimum.SMOOTH,
-            "seglinear": True,
-            "search_patterns": [SegPattern.ACTIVATION2LINEAR],
-            "input_axis": None,
-            "weight_axis": None,
-            "alpha": 0.5,
-        },
-    }
-    model_quant_dual_scale_path = os.path.join(
-        root_dir, "model/dit/model_quant_dual_scale.pt"
+    # continue processing
+    parser.add_argument(
+        '--reprocess',
+        action='store_true',
+        help='Continue the process from the last checkpoint'
     )
-    model_quant_dual_scale = quant_or_load(
-        model_quant_dual_scale_path, quant_config_with_dual_scale
+    
+    # allow affine
+    parser.add_argument(
+        '--enable_affine',
+        action='store_true',
+        help='Enable affine transformation learning'
     )
-    model_quant_dual_scale = model_quant_dual_scale.to("cuda")
-    latents = torch.load("../latents.pt")
-    trace_pic(
-        model_quant_dual_scale,
-        os.path.join(root_dir, "pics/quant_dual_scale"),
-        dataset.get_dataloader(),
-        latents,
-        max_num=max_num,
-        controlnet_conditioning_scale=calib_args["controlnet_conditioning_scale"],
-        guidance_scale=calib_args["guidance_scale"],
-        num_inference_steps=max_timestep,
-    )
-    del model_quant_dual_scale
-    print("model_quant_dual_scale completed")
+    
+    
+    return parser.parse_args()
 
 
-def run_affiner_module():
 
-    latents = randn_tensor(
-        (1, 16, 128, 128,), device=torch.device("cuda:0"), dtype=torch.float16
+def main_expr():
+    """Main entry point"""
+    args = parse_args()
+    
+    # Set cache directory if specified
+    if args.cache_dir:
+        os.environ['HF_HOME'] = args.cache_dir
+    
+    # Validate layer type
+    if args.layer_type and args.layer_type not in LAYER_TYPE_CHOICES[args.model_type]:
+        print(f"Error: layer_type '{args.layer_type}' not valid for model_type '{args.model_type}'")
+        print(f"Valid choices: {LAYER_TYPE_CHOICES[args.model_type]}")
+        return
+    
+    # Auto-detect layer type if not specified
+    if not args.layer_type:
+        defaults = {"sd3": "dit", "flux": "dit", "sdxl": "unet"}
+        args.layer_type = defaults.get(args.model_type, "dit")
+    
+    # Create benchmark configuration
+    benchmark_config = BenchmarkConfig(
+        model_type=args.model_type,
+        layer_type=args.layer_type,
+        dataset_type=args.dataset_type,
+        num_images=args.benchmark_size,
+        generate_real_pics=args.real,
+        enable_affine=args.enable_affine,
+        per_layer_mode=args.per_layer_mode,
+        quant_config=args.quant_config,
+        reprocess=args.reprocess,
     )
-    dataset = COCODataset(
-        path="../dataset/controlnet_datasets/coco_canny", cache_size=16
-    )
-
-    model_quant = StableDiffusion3ControlNetModel.from_repo(
-        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
-    )
-    model_quant.transformer = torch.load(
-        "benchmark_record/run_seg_module/model/dit/model_quant_seg.pt",
-        weights_only=False,
-    )
-    model_real = StableDiffusion3ControlNetModel.from_repo(
-        ("../stable-diffusion-3-medium-diffusers", "../SD3-Controlnet-Canny"), "cpu"
-    )
-
-    config = {
-        "solver": {
-            "type": "mserel",
-            "blocksize": 8,
-            "alpha": 0.5,
-            "lambda1": 0.1,
-            "lambda2": 0.1,
-            "sample_mode": "interpolate",
-            "percentile": 100,
-            "greater": True,
-            "scale": 1,
-            "verbose": True,
-        },
-        "stepper": {
-            "type": "blockwise",
-            "max_timestep": 30,
-            "sample_size": 1,
-            "recurrent": True,
-            "noise_target": "uncond",
-            "enable_latent_affine": False,
-            "enable_timesteps": None,
-        },
-        "extra_args": {"controlnet_conditioning_scale": 0, "guidance_scale": 7,},
-    }
-
-    affiner = process_affiner(
-        config, dataset, model_real, model_quant, latents=latents, shuffle=False
-    )
-
-    #############################################
-    max_num = 1
-    model_quant = model_quant.to("cuda")
-    trace_pic(
-        model_quant,
-        "affine_pics/blockaffine",
-        dataset.get_dataloader(),
-        latents,
-        steper=affiner,
-        max_num=max_num,
-        num_inference_steps=config["stepper"]["max_timestep"],
-        **config["extra_args"],
-    )
-    trace_pic(
-        model_quant,
-        "affine_pics/quant",
-        dataset.get_dataloader(),
-        latents,
-        max_num=max_num,
-        num_inference_steps=config["stepper"]["max_timestep"],
-        **config["extra_args"],
-    )
-    del model_quant
-    model_real = model_real.to("cuda")
-    trace_pic(
-        model_real,
-        "affine_pics/real",
-        dataset.get_dataloader(),
-        latents,
-        max_num=max_num,
-        num_inference_steps=config["stepper"]["max_timestep"],
-        **config["extra_args"],
-    )
+    
+    
+    # Run benchmark
+    run_benchmark(benchmark_config)
 
 
 if __name__ == "__main__":
-    run_seg_module()
+    main_expr()

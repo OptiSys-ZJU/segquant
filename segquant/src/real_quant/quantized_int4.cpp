@@ -1,62 +1,24 @@
-#include <ATen/ATen.h>
-#include <torch/extension.h>
-#include <cutlass/numeric_types.h>
+#include <cutlass/util/device_memory.h>
+#include "seg_utils.h"
 
-template<typename T>
-at::Tensor real_quantized_quantize_weights(at::Tensor weights, float scale_w);
-template<>
-at::Tensor real_quantized_quantize_weights<cutlass::int4b_t>(at::Tensor weights, float scale_w);
+INSTANTIATE_QUANTIZE_WEIGHTS(cutlass::int4b_t)
+#define SPECIALIZATION(A, W, SX, SW) \
+    template<> at::Tensor real_quantized_gemm_scaled<A, W, SX, SW>(at::Tensor, at::Tensor, SX, SW); \
+    template<> at::Tensor real_quantized_gemm_dual_scaled<A, W, SX, SW>(at::Tensor, at::Tensor, SX, SX, SW);
 
-template<typename T>
-at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
-template<>
-at::Tensor real_quantized_gemm_scaled<cutlass::int4b_t>(at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w);
+#define EXPAND_SW(A, W, SX) \
+    SPECIALIZATION(A, W, SX, float) \
+    SPECIALIZATION(A, W, SX, at::Tensor)
 
-template<typename T>
-at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w);
-template<>
-at::Tensor real_quantized_gemm_dual_scaled<cutlass::int4b_t>(at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w);
+#define EXPAND_SX(A, W) \
+    EXPAND_SW(A, W, float) \
+    EXPAND_SW(A, W, at::Tensor)
+
+#define X(A, W) EXPAND_SX(A, W)
+X(cutlass::int4b_t, cutlass::int4b_t)
+#undef X
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("real_quantized_quantize_weights",
-        [](at::Tensor weights, float scale_w) {
-            TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
-            TORCH_CHECK(weights.numel() % 2 == 0, "Quantization to int4 requires the number of elements to be even");
-            return real_quantized_quantize_weights<cutlass::int4b_t>(weights, scale_w);
-        },
-        "Quantize weights to int4 format",
-        py::arg("weights"),
-        py::arg("scale_w")
-    );
-
-    m.def("real_quantized_gemm_scaled",
-        [](at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w) {
-            TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
-            TORCH_CHECK(inputs.is_cuda(), "inputs must be a CUDA tensor");
-            TORCH_CHECK(weights.dtype() == at::kByte, "weights tensor must be uint8");
-
-            return real_quantized_gemm_scaled<cutlass::int4b_t>(inputs, weights, scale_x, scale_w);
-        },
-        "Run scaled int8 GEMM",
-        py::arg("inputs"),
-        py::arg("weights"),
-        py::arg("scale_x"),
-        py::arg("scale_w")
-    );
-
-    m.def("real_quantized_gemm_dual_scaled",
-        [](at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w) {
-            TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
-            TORCH_CHECK(inputs.is_cuda(), "inputs must be a CUDA tensor");
-            TORCH_CHECK(weights.dtype() == at::kByte, "weights tensor must be int8");
-
-            return real_quantized_gemm_dual_scaled<cutlass::int4b_t>(inputs, weights, pos_scale_x, neg_scale_x, scale_w);
-        },
-        "Run dual scaled int8 GEMM",
-        py::arg("inputs"),
-        py::arg("weights"),
-        py::arg("pos_scale_x"),
-        py::arg("neg_scale_x"),
-        py::arg("scale_w")
-    );
+    register_quantweight_module<cutlass::int4b_t>(m);
+    register_gemm_module<cutlass::int4b_t, cutlass::int4b_t>(m, "Wint4Aint4");
 }

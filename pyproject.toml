@@ -11,7 +11,7 @@ authors = [
 ]
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 
 dependencies = [
     "datasets >=2.21, <3.0",
@@ -26,6 +26,7 @@ dependencies = [
     "scipy >=1.14, <1.15",
     "torch >=2.6, <2.7",
     "torchvision >=0.21, <0.22",
+    "torchmetrics==1.7.3",
     "transformers >=4.42, <5.0",
     "tqdm >=4.66, <5.0",
     "zstandard >=0.23, <0.24"

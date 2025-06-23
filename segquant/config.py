@@ -20,9 +20,11 @@ class DType(Enum):
     INT4 = "int4"
     INT6 = "int6"
     INT8 = "int8"
+    INT16 = "int16"
     FP8E5M2 = "fpe5m2"
     FP8E4M3 = "fpe4m3"
     FP16 = "fp16"
+    BF16 = "bf16"
 
 
 class Optimum(Enum):
@@ -30,6 +32,11 @@ class Optimum(Enum):
     DEFAULT = "default"
     SMOOTH = "smooth"
     SVD = "svd"
+
+class Calibrate(Enum):
+    """Calibrate methods for quantization."""
+    AMAX = "amax"
+    GPTQ = "gptq"
 
 
 class SegPattern(Enum):
@@ -65,13 +72,23 @@ class SegPattern(Enum):
 default_quantize_config = {
     "default": {
         "enable": True,
-        "input_dtype": DType.INT8,
-        "weight_dtype": DType.INT8,
-        "opt": Optimum.SMOOTH,
         "seglinear": True,
-        "real_quant": False,
-        "input_axis": None,
-        "weight_axis": None,
         "search_patterns": SegPattern.all(),
+        "real_quant": False,
+        "opt": {
+            "type": Optimum.SMOOTH,
+            "alpha": 0.5,
+        },
+        "calib": {
+            "type": Calibrate.AMAX,
+        },
+        "input_quant": {
+            "type": DType.INT8,
+            "axis": None,
+        },
+        "weight_quant": {
+            "type": DType.INT8,
+            "axis": None,
+        },
     },
 }

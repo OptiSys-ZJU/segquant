@@ -45,6 +45,7 @@ class StateMachine:
         return new_state in valid[self._state]
 
 
+
 def solver_trans(from_stages, to_stage):
     """Decorator to manage state transitions in the solver.
     Args:

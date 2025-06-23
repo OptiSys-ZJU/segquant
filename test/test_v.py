@@ -1,6 +1,6 @@
 import torch
 
-from segquant.torch.affiner import process_affiner
+from segquant.torch.affiner import load_affiner
 
 
 if __name__ == "__main__":
@@ -52,7 +52,7 @@ if __name__ == "__main__":
         "extra_args": {"controlnet_conditioning_scale": 0, "guidance_scale": 7,},
     }
 
-    affiner = process_affiner(
+    affiner = load_affiner(
         config, dataset, model_real, model_quant, latents=latents, shuffle=False
     )
 

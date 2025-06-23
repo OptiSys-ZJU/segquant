@@ -2,7 +2,6 @@
 This module implements the BlockwiseAffiner class, which extends the RecurrentSteper
 to perform blockwise affine transformations for latent variables during the sampling process.
 """
-
 from segquant.solver.recurrent_steper import RecurrentSteper
 from segquant.solver.solver import MSERelSolver
 
@@ -78,3 +77,39 @@ class BlockwiseAffiner(RecurrentSteper):
         print(f"{'Device:':20} {self.device}")
         print(f"{'Noise preds buffer:':20} {len(self.noise_preds_real)} x deque")
         print(f"{'=' * 40}")
+
+    
+    def state_dict(self):
+        """Save the learned state of the BlockwiseAffiner."""
+        return {
+            "solver_solution": [s.get_solution() for s in self.solver],
+            "fsm_state": self.fsm.state,
+            "latent_diff": self.latent_diff,
+        }
+    
+    def load_learned_state(self, affiner_state):
+        """Load the learned state of the BlockwiseAffiner."""
+        state_dict = affiner_state
+        for i, solution in enumerate(state_dict["solver_solution"]):
+            self.solver[i].set_solution(solution)
+        self.fsm.state = state_dict["fsm_state"]
+        self.latent_diff = state_dict["latent_diff"]
+
+    @classmethod
+    def create_and_load(cls, config, affiner_state, latents=None):
+        """Create a BlockwiseAffiner and load the learned state."""
+        # Extract stepper config from full config
+        affiner = cls(
+            max_timestep=config["stepper"]["max_timestep"],
+            blocksize=config["solver"]["blocksize"],
+            sample_size=config["stepper"]["sample_size"],
+            solver_type=config["solver"]["type"],
+            solver_config=config["solver"],
+            latents=latents,
+            recurrent=config["stepper"]["recurrent"],
+            noise_target=config["stepper"]["noise_target"],
+            enable_latent_affine=config["stepper"]["enable_latent_affine"],
+            enable_timesteps=config["stepper"]["enable_timesteps"],
+        )
+        affiner.load_learned_state(affiner_state)
+        return affiner
