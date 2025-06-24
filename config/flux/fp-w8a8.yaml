@@ -1,0 +1,76 @@
+baseline:
+  default:
+    enable: true
+    seglinear: false
+    search_patterns: []
+    real_quant: true
+    opt:
+      type: "default"
+    calib:
+      type: "amax"
+    input_quant:
+      type: "fpe4m3"
+    weight_quant:
+      type: "fpe4m3"  
+
+baseline-ptqd:
+  default:
+    enable: true
+    seglinear: false
+    search_patterns: []
+    real_quant: true
+    opt:
+      type: "default"
+    calib:
+      type: "amax"
+    input_quant:
+      type: "fpe4m3"
+    weight_quant:
+      type: "fpe4m3"  
+    affine: "ptqd"
+
+baseline-tac:
+  default:
+    enable: true
+    seglinear: false
+    search_patterns: []
+    real_quant: true
+    opt:
+      type: "default"
+    calib:
+      type: "amax"
+    input_quant:
+      type: "fpe4m3"
+    weight_quant:
+      type: "fpe4m3"  
+    affine: "tac"
+
+segquant-amax:
+  default:
+    enable: true
+    seglinear: true
+    search_patterns: ["linear_to_chunk", "linear_to_split", "concat_to_linear", "stack_to_linear", "activation_to_linear"]
+    real_quant: true
+    opt:
+      type: "default"
+    calib:
+      type: "amax"
+    input_quant:
+      type: "fpe4m3"
+    weight_quant:
+      type: "fpe4m3"
+
+segquant-gptq:
+  default:
+    enable: true
+    seglinear: true
+    search_patterns: ["linear_to_chunk", "linear_to_split", "concat_to_linear", "stack_to_linear", "activation_to_linear"]
+    real_quant: true
+    opt:
+      type: "default"
+    calib:
+      type: "gptq"
+    input_quant:
+      type: "fpe4m3"
+    weight_quant:
+      type: "fpe4m3"
