@@ -157,7 +157,6 @@ def generate_metric(path1, path2, prompt_dir):
     # similarity metrics
     lpips_scores, psnr_scores, ssim_scores = [], [], []
 
-    debug_count = 5
     for name in tqdm(common_names, desc="Calculating metrics"):
         img1_path = os.path.join(path1, name)
         img2_path = os.path.join(path2, name)
@@ -174,11 +173,6 @@ def generate_metric(path1, path2, prompt_dir):
         ssim_scores.append(calculate_ssim(img1, img2))
         metric_iqa.update(img_tensor.to(torch.float32).unsqueeze(0))
         metric_score.update(img_tensor.to(torch.float32).unsqueeze(0), prompt)
-        # TODO: only for debug, remove this later
-        debug_count -= 1
-        if debug_count == 0:
-            break
-
 
     result = {
         "FID": fid,
