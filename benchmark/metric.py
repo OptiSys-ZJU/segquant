@@ -194,8 +194,8 @@ if __name__ == "__main__":
             json.dump({}, f)
 
     result = json.load(open("../segquant/benchmark_record/metric.json"))
-    for dataset in DATASET_TYPE_CHOICES:
-        for method in QUANT_METHOD_CHOICES:
+    for dataset in tqdm(DATASET_TYPE_CHOICES, desc="Processing datasets"):
+        for method in tqdm(QUANT_METHOD_CHOICES, desc=f"Methods for {dataset}", leave=False):
             real_dir = f"../segquant/benchmark_record/{dataset}/run_real_module/pics/real"
             quant_dir = f"../segquant/benchmark_record/{dataset}/run_{method}_module/pics/quant_{method}"
             prompt_dir = os.path.join(BenchmarkConfig.DATASET_PATH[dataset], "metadata.json")
@@ -209,6 +209,3 @@ if __name__ == "__main__":
                 else:
                     print(f"{dataset}_{method} already in metric.json")
     print(result)
-    # with open("../segquant/benchmark_record/metric.json", "w") as f:
-    #     json.dump(result, f)
-    #     print("Successfully saved json file at ../segquant/benchmark_record/metric.json")
