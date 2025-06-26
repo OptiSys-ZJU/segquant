@@ -9,7 +9,7 @@ from collections import deque
 
 import torch
 from segquant.solver.base_steper import BaseSteper
-from segquant.solver.solver import BaseSolver
+from segquant.solver.solver import BaseSolver, MSERelSolver
 from segquant.solver.state import Stage, StateMachine, solver_trans
 
 
@@ -31,6 +31,20 @@ class RecurrentSteper(BaseSteper):
         enable_timesteps (list): List of timesteps to enable learning.
         device (str): Device to run the model on (e.g., 'cuda:0').
     """
+
+    @staticmethod
+    def get_solver_type(solver_type):
+        if solver_type == "mserel":
+            return MSERelSolver
+        elif solver_type == "ptqd":
+            from baseline.ptqd import PTQDSolver
+            return PTQDSolver
+        elif solver_type == "tac":
+            from baseline.tac_diffusion import TACSolver
+            return TACSolver
+        else:
+            raise ValueError(f"[Error] Unknown solver type: {solver_type}")
+
     def __init__(
         self,
         max_timestep,
@@ -81,7 +95,7 @@ class RecurrentSteper(BaseSteper):
             noise_target=pickle_file["config"]["noise_target"],
             enable_latent_affine=pickle_file["config"]["enable_latent_affine"],
             enable_timesteps=pickle_file["config"]["enable_timesteps"],
-            solver_type=pickle_file["config"]["solver_type"],
+            solver_type=cls.get_solver_type(pickle_file["config"]["solver_type"]),
             solver_config=pickle_file["config"]["solver_config"],
             latents=latents,
             device=device,
@@ -90,8 +104,8 @@ class RecurrentSteper(BaseSteper):
         stepper.fsm.state = Stage.FINAL
         stepper.latent_diff = pickle_file["data"]["latent_diff"]
 
-        for s in stepper.solver:
-            s.load(pickle_file["data"]["solution"])
+        for s, sol in zip(stepper.solver, pickle_file["data"]["solution"]):
+            s.load(sol)
 
         return stepper
 

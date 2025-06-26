@@ -48,7 +48,6 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, affiner_t
         torch.cuda.empty_cache()
 
     model_quant = get_full_model_with_quantized_part(model_type, layer_type, quantized_model, device="cpu")
-    model_real = get_full_model(model_type, device="cpu")
 
     ### learning
     affiner_path = os.path.join(exp_root_dir, affiner_type)
@@ -60,6 +59,7 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, affiner_t
         affiner = load_affiner(affiner_dump_path)
     else:
         print("Creating new affiner...")
+        model_real = get_full_model(model_type, device="cpu")
         affiner = create_affiner(
             affiner_config, 
             dataset=get_dataset(dataset_type, dataset_root_dir),
@@ -73,7 +73,7 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, affiner_t
     ##### run inference
     print("Running inference...")
     model_quant = model_quant.to("cuda:0")
-    pic_path = os.path.join(exp_root_dir, 'pic')
+    pic_path = os.path.join(affiner_path, 'pic')
     dataset = get_dataset(dataset_type, dataset_root_dir)
 
     trace_pic(

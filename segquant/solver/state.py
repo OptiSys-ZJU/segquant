@@ -27,6 +27,10 @@ class StateMachine:
         """Current state of the state machine."""
         return self._state
 
+    @state.setter
+    def state(self, value):
+        self._state = value
+
     def transition_to(self, new_state):
         """Transition to a new state if valid."""
         if self._is_valid_transition(new_state):

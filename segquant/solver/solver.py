@@ -83,7 +83,7 @@ def affine_with_threshold(quant, K, b=None, threshold=1, verbose=False):
         replaced_ratio = mask.sum().item() / mask.numel()
         if verbose:
             print(
-                f"[Affine Replace] Threshold={threshold.item():.4f}, "
+                f"[Affine Replace] Threshold={threshold:.4f}, "
                 f"Replace Ratio={replaced_ratio*100:.2f}%"
             )
         return out.to(dtype=pre_type)

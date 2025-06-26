@@ -21,7 +21,8 @@ class PTQDSolver(BaseSolver):
         flatten_error = error.flatten()
 
         slope, _intercept, _r_value, _p_value, _std_err = stats.linregress(
-            flatten_data, flatten_error
+            flatten_data.cpu().numpy(),
+            flatten_error.cpu().numpy()
         )
         slope = torch.tensor(slope).to(quantized.device)
 
@@ -75,7 +76,6 @@ class PTQD(RecurrentSteper):
             latents=latents,
             noise_target=config['config']["noise_target"],
             enable_timesteps=config['config']["enable_timesteps"],
-            enable_latent_affine=config['config']["enable_latent_affine"],
             device=device,
         )
 
