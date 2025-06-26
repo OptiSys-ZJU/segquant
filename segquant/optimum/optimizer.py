@@ -548,8 +548,8 @@ class SmoothOptimizer(BaseOptimizer):
         if self.seg_mode == 'weight':
             self.input_chunk_indices = [0] * self.chunks
             weight_chunks = origin_weight.split(self.chunksizes, dim=0)
-            for i, w in enumerate(self.weight_chunks):
-                w.copy_(weight_chunks[i])
+            for i in range(len(self.weight_chunks)):
+                self.weight_chunks[i] = weight_chunks[i].clone()
         elif self.seg_mode == 'input':
             self.weight_chunks = [origin_weight.clone()]
 

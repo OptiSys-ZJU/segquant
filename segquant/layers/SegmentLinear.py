@@ -216,6 +216,17 @@ class SegmentLinear(nn.Module):
 
         return output_chunks
 
+    def to(self, device):
+        if isinstance(device, str):
+            device = torch.device(device)
+        if device.type == 'cuda':
+            self.to_cuda()
+        elif device.type == 'cpu':
+            self.to_cpu()
+        else:
+            raise ValueError(f"Unsupported device type: {device.type}")
+        return self
+
     def to_cpu(self):
         self.optimizer.to_cpu()
         self.bias_data = self.bias_data.to('cpu')
@@ -235,7 +246,6 @@ class SegmentLinear(nn.Module):
             res = sum(quantized_output_chunks)
         else:
             raise ValueError("seg_mode not found")
-
         return (res + self.bias_data if self.bias else res)
 
 def create_segment_linear(
