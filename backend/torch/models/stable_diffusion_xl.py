@@ -40,6 +40,7 @@ from backend.torch.utils import (
     PipelineImageInput,
 )
 from backend.torch.scheduler import EulerDiscreteScheduler
+from segquant.solver.base_steper import BaseSteper
 
 # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.rescale_noise_cfg
 def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
@@ -835,6 +836,9 @@ class StableDiffusionXLModel(nn.Module):
         negative_target_size: Optional[Tuple[int, int]] = None,
         clip_skip: Optional[int] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        early_stop: int = None,
+        replay_timestep: int = None,
+        steper: BaseSteper = None,
         **kwargs,
     ):
         r"""
@@ -1145,8 +1149,23 @@ class StableDiffusionXLModel(nn.Module):
             ).to(device=device, dtype=latents.dtype)
 
         self._num_timesteps = len(timesteps)
+        if steper is not None:
+            steper.register_scheduler(self.scheduler)
         with tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
+                if replay_timestep is not None:
+                    if i < replay_timestep:
+                        if i == len(timesteps) - 1 or (
+                            (i + 1) > num_warmup_steps
+                            and (i + 1) % self.scheduler.order == 0
+                        ):
+                            progress_bar.update()
+                        continue
+
+                if early_stop is not None:
+                    if i == early_stop:
+                        break
+
                 if self.interrupt:
                     continue
 
@@ -1167,18 +1186,32 @@ class StableDiffusionXLModel(nn.Module):
                     timestep_cond=timestep_cond,
                 )[0]
 
-                # perform guidance
-                if self.do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+                if steper is not None:
+                    assert self.guidance_rescale == 0.0, "Steper does not support guidance rescale"
 
-                if self.do_classifier_free_guidance and self.guidance_rescale > 0.0:
-                    # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
-                    noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=self.guidance_rescale)
+                    latents = steper.step_forward(
+                        latents=latents,
+                        noise_pred=noise_pred,
+                        i=i,
+                        t=t,
+                        num_inference_steps=num_inference_steps,
+                        do_classifier_free_guidance=self.do_classifier_free_guidance,
+                        guidance_scale=self.guidance_scale,
+                        extra_step_kwargs=extra_step_kwargs,
+                    )
+                else:
+                    # perform guidance
+                    if self.do_classifier_free_guidance:
+                        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                        noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-                # compute the previous noisy sample x_t -> x_t-1
-                latents_dtype = latents.dtype
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs)[0]
+                    if self.do_classifier_free_guidance and self.guidance_rescale > 0.0:
+                        # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
+                        noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=self.guidance_rescale)
+                    # compute the previous noisy sample x_t -> x_t-1
+                    latents_dtype = latents.dtype
+                    latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs)[0]
+
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
                         # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272

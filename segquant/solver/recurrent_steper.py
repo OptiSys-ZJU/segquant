@@ -285,6 +285,7 @@ class RecurrentSteper(BaseSteper):
         num_inference_steps,
         do_classifier_free_guidance,
         guidance_scale,
+        extra_step_kwargs=None,
     ):
         if self.scheduler is None:
             raise ValueError("[Error] BlockwiseAffiner: scheduler not register")
@@ -306,7 +307,7 @@ class RecurrentSteper(BaseSteper):
                     do_classifier_free_guidance=do_classifier_free_guidance,
                     guidance_scale=guidance_scale,
                 )
-                latents = self.scheduler.step(noise_pred, t, latents)[0]
+                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs)[0]
             else:
                 this_noise_pred = self._get_noise(
                     noise_pred,
@@ -332,7 +333,7 @@ class RecurrentSteper(BaseSteper):
                 noise_pred = noise_pred_uncond + guidance_scale * (
                     noise_pred_text - noise_pred_uncond
                 )
-            latents = self.scheduler.step(noise_pred, t, latents)[0]
+            latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs)[0]
 
         if self.enable_latent_affine and (i in self.enable_timesteps):
             if self.fsm.state == Stage.FINAL:
