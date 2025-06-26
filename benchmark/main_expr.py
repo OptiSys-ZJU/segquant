@@ -95,13 +95,12 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, c
         print(f"Partial model file {part_model_path} already exists. Skipping creation.")
         quantized_model = torch.load(part_model_path, weights_only=False)
     else:
-        print(f"Creating partial model file: {part_model_path}, need to be quantized.")
-        part_model = get_part_model(model_type, layer_type, device="cuda:0")
-
         ### find calibrate data
         calibset = get_calibrate_data(
             dataset_type, model_type, layer_type, dataset_root_dir, calibrate_root_dir, calib_config
         )
+        print(f"Creating partial model file: {part_model_path}, need to be quantized.")
+        part_model = get_part_model(model_type, layer_type, device="cuda:0")
         print(f"Calibrate set loaded with {len(calibset)} samples.")
         calib_loader = calibset.get_dataloader(batch_size=1)
         quantized_model = quantize(

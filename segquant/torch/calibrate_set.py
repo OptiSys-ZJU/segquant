@@ -114,7 +114,7 @@ def generate_calibrate_set(
     sample_dataloader,
     calib_layer,
     dump_path=None,
-    chunk_size=400,
+    chunk_size=100,
     compress=True,
     **kwargs,
 ):
