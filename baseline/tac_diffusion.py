@@ -18,7 +18,6 @@ class TACSolver(BaseSolver):
             self.verbose = config["verbose"]
 
         self.record = None
-        self.solution = None
 
     def learn(self, real, quant):
         quantized = quant.to(torch.float32)
@@ -62,6 +61,22 @@ class TACSolver(BaseSolver):
 
 
 class TACDiffution(RecurrentSteper):
+    @classmethod
+    def from_config(cls, config, latents=None, device="cuda:0"):
+        assert config["type"] == "tac", "only tac stepper worked"
+        return cls(
+            max_timestep=config["config"]["max_timestep"],
+            sample_size=config["config"]["sample_size"],
+            solver_type=config["config"]["solver_type"],
+            solver_config=config["config"]["solver_config"],
+            latents=latents,
+            recurrent=config["config"]["recurrent"],
+            noise_target=config["config"]["noise_target"],
+            enable_latent_affine=config["config"]["enable_latent_affine"],
+            enable_timesteps=config["config"]["enable_timesteps"],
+            device=device,
+        )
+
     def __init__(
         self,
         max_timestep,
@@ -89,9 +104,18 @@ class TACDiffution(RecurrentSteper):
                 enable_timesteps,
                 device,
             )
+            self.solver_config = solver_config
         else:
             raise ValueError()
         self.print_config()
+    
+    def dump(self, path):
+        """Save the learned state of the TACSolver stepper."""
+        super_dict = super().dump()
+        super_dict['config']['solver_type'] = 'tac'
+        super_dict['config']['solver_config'] = self.solver_config
+        torch.save(super_dict, path)
+        print(f"TACDiffution stepper record saved to {path}")
 
     def print_config(self):
         print("TACDiffution Configuration:")

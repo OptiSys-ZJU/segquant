@@ -13,38 +13,6 @@ baseline:
     weight_quant:
       type: "int8"  
 
-baseline-ptqd:
-  default:
-    enable: true
-    seglinear: false
-    search_patterns: []
-    real_quant: true
-    opt:
-      type: "default"
-    calib:
-      type: "amax"
-    input_quant:
-      type: "int8"
-    weight_quant:
-      type: "int8"  
-    affine: "ptqd"
-
-baseline-tac:
-  default:
-    enable: true
-    seglinear: false
-    search_patterns: []
-    real_quant: true
-    opt:
-      type: "default"
-    calib:
-      type: "amax"
-    input_quant:
-      type: "int8"
-    weight_quant:
-      type: "int8"  
-    affine: "tac"
-
 ptq4dit:
   default:
     enable: true

@@ -9,7 +9,6 @@ class PTQDSolver(BaseSolver):
         super().__init__()
 
         self.record = None
-        self.solution = None
 
     def learn(self, real, quant):
         quantized = quant.to(torch.float32)
@@ -67,6 +66,19 @@ class PTQDSolver(BaseSolver):
 
 
 class PTQD(RecurrentSteper):
+    @classmethod
+    def from_config(cls, config, latents=None, device="cuda:0"):
+        assert config['type'] == "ptqd", "Config type must be 'ptqd' for PTQD stepper."
+        return cls(
+            max_timestep=config['config']["max_timestep"],
+            sample_size=config['config']["sample_size"],
+            latents=latents,
+            noise_target=config['config']["noise_target"],
+            enable_timesteps=config['config']["enable_timesteps"],
+            enable_latent_affine=config['config']["enable_latent_affine"],
+            device=device,
+        )
+
     def __init__(
         self,
         max_timestep,
@@ -89,6 +101,14 @@ class PTQD(RecurrentSteper):
             device,
         )
         self.print_config()
+
+    def dump(self, path):
+        """Save the learned state of the PTQD stepper."""
+        super_dict = super().dump()
+        super_dict['config']['solver_type'] = 'ptqd'
+        super_dict['config']['solver_config'] = None
+        torch.save(super_dict, path)
+        print(f"PTQD stepper record saved to {path}")
 
     def print_config(self):
         print("PTQD Configuration:")

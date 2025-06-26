@@ -74,9 +74,49 @@ class RecurrentSteper(BaseSteper):
 
         self.sample_count = 0
 
+    @classmethod
+    def load_from_file(cls, pickle_file, latents, device):
+        stepper = cls(
+            max_timestep=pickle_file["config"]["max_timestep"],
+            noise_target=pickle_file["config"]["noise_target"],
+            enable_latent_affine=pickle_file["config"]["enable_latent_affine"],
+            enable_timesteps=pickle_file["config"]["enable_timesteps"],
+            solver_type=pickle_file["config"]["solver_type"],
+            solver_config=pickle_file["config"]["solver_config"],
+            latents=latents,
+            device=device,
+        )
+
+        stepper.fsm.state = Stage.FINAL
+        stepper.latent_diff = pickle_file["data"]["latent_diff"]
+
+        for s in stepper.solver:
+            s.load(pickle_file["data"]["solution"])
+
+        return stepper
+
+    def dump(self):
+        if self.fsm.state == Stage.FINAL:
+            return {
+                "config": {
+                    "max_timestep": self.max_timestep,
+                    "enable_timesteps": self.enable_timesteps,
+                    "noise_target": self.noise_target,
+                    "enable_latent_affine": self.enable_latent_affine,
+                },
+                "data": {
+                    "latent_diff": self.latent_diff,
+                    "solution": [s.dump() for s in self.solver],
+                }
+            }
+        else:
+            raise RuntimeError(
+                f"[RecurrentSteper] dump called in invalid FSM state[{self.fsm.state}]"
+            )
+
     def learning(self, model, data_loader, **kwargs):
         """Learning step for the model with the provided data loader."""
-        model.to(torch.device(self.device))
+        model = model.to(torch.device(self.device))
         self.sample_count = 0
 
         def run():
@@ -111,7 +151,7 @@ class RecurrentSteper(BaseSteper):
                     self.sample_count += 1
 
         run()
-        model.to(torch.device("cpu"))
+        model = model.to(torch.device("cpu"))
 
     @solver_trans([Stage.INIT, Stage.WAIT_QUANT], Stage.WAIT_REAL)
     def learning_real(self, model_real, data_loader, **kwargs):
@@ -124,7 +164,7 @@ class RecurrentSteper(BaseSteper):
         self.learning(model_quant, data_loader, **kwargs)
 
     def _replay(self, model, data_loader, **kwargs):
-        model.to(torch.device(self.device))
+        model = model.to(torch.device(self.device))
         if self.recurrent:
             if "latents" in kwargs:
                 del kwargs["latents"]
@@ -154,7 +194,7 @@ class RecurrentSteper(BaseSteper):
         else:
             print("[Warning] Recurrent disabled, replay not work.")
 
-        model.to(torch.device("cpu"))
+        model = model.to(torch.device("cpu"))
 
     @solver_trans([Stage.WAIT_QUANT], Stage.WAIT_REAL)
     def replay_real(self, model_real, data_loader, **kwargs):

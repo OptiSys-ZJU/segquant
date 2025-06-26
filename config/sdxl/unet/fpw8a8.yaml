@@ -13,38 +13,6 @@ baseline:
     weight_quant:
       type: "fpe4m3"  
 
-baseline-ptqd:
-  default:
-    enable: true
-    seglinear: false
-    search_patterns: []
-    real_quant: true
-    opt:
-      type: "default"
-    calib:
-      type: "amax"
-    input_quant:
-      type: "fpe4m3"
-    weight_quant:
-      type: "fpe4m3"  
-    affine: "ptqd"
-
-baseline-tac:
-  default:
-    enable: true
-    seglinear: false
-    search_patterns: []
-    real_quant: true
-    opt:
-      type: "default"
-    calib:
-      type: "amax"
-    input_quant:
-      type: "fpe4m3"
-    weight_quant:
-      type: "fpe4m3"  
-    affine: "tac"
-
 segquant-amax:
   default:
     enable: true

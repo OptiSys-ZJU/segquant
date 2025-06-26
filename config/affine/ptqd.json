@@ -1,0 +1,18 @@
+{
+    "type": "ptqd",
+
+    "config": {
+        "max_timestep": 50,
+        "sample_size": 256,
+        "enable_timesteps": null,
+        "noise_target": "all",
+        "recurrent": false,
+        "enable_latent_affine": false,
+        "solver_type": "ptqd",
+        "solver_config": null
+    },
+    "extra_args": {
+        "controlnet_conditioning_scale": 0,
+        "guidance_scale": 7
+    }
+}

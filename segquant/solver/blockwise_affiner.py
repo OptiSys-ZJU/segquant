@@ -2,6 +2,7 @@
 This module implements the BlockwiseAffiner class, which extends the RecurrentSteper
 to perform blockwise affine transformations for latent variables during the sampling process.
 """
+import torch
 from segquant.solver.recurrent_steper import RecurrentSteper
 from segquant.solver.solver import MSERelSolver
 
@@ -25,6 +26,23 @@ class BlockwiseAffiner(RecurrentSteper):
         enable_timesteps (list, optional): Specific timesteps to enable.
         device (str): Device to run the computations on, default is "cuda:0".
     """
+    @classmethod
+    def from_config(cls, config, latents=None, device="cuda:0"):
+        assert config["type"] == "blockwise", "only blockwise stepper worked"
+        return cls(
+            max_timestep=config["config"]["max_timestep"],
+            blocksize=config["config"]['solver_config']["blocksize"],
+            sample_size=config["config"]["sample_size"],
+            solver_type=config["config"]["solver_type"],
+            solver_config=config["config"]["solver_config"],
+            latents=latents,
+            recurrent=config["config"]["recurrent"],
+            noise_target=config["config"]["noise_target"],
+            enable_latent_affine=config["config"]["enable_latent_affine"],
+            enable_timesteps=config["config"]["enable_timesteps"],
+            device=device,
+        )
+
     def __init__(
         self,
         max_timestep,
@@ -52,6 +70,7 @@ class BlockwiseAffiner(RecurrentSteper):
                 enable_timesteps,
                 device,
             )
+            self.solver_config = solver_config
         else:
             raise ValueError()
         self.blocksize = blocksize
@@ -78,38 +97,10 @@ class BlockwiseAffiner(RecurrentSteper):
         print(f"{'Noise preds buffer:':20} {len(self.noise_preds_real)} x deque")
         print(f"{'=' * 40}")
 
-    
-    def state_dict(self):
-        """Save the learned state of the BlockwiseAffiner."""
-        return {
-            "solver_solution": [s.get_solution() for s in self.solver],
-            "fsm_state": self.fsm.state,
-            "latent_diff": self.latent_diff,
-        }
-    
-    def load_learned_state(self, affiner_state):
-        """Load the learned state of the BlockwiseAffiner."""
-        state_dict = affiner_state
-        for i, solution in enumerate(state_dict["solver_solution"]):
-            self.solver[i].set_solution(solution)
-        self.fsm.state = state_dict["fsm_state"]
-        self.latent_diff = state_dict["latent_diff"]
-
-    @classmethod
-    def create_and_load(cls, config, affiner_state, latents=None):
-        """Create a BlockwiseAffiner and load the learned state."""
-        # Extract stepper config from full config
-        affiner = cls(
-            max_timestep=config["stepper"]["max_timestep"],
-            blocksize=config["solver"]["blocksize"],
-            sample_size=config["stepper"]["sample_size"],
-            solver_type=config["solver"]["type"],
-            solver_config=config["solver"],
-            latents=latents,
-            recurrent=config["stepper"]["recurrent"],
-            noise_target=config["stepper"]["noise_target"],
-            enable_latent_affine=config["stepper"]["enable_latent_affine"],
-            enable_timesteps=config["stepper"]["enable_timesteps"],
-        )
-        affiner.load_learned_state(affiner_state)
-        return affiner
+    def dump(self, path):
+        """Save the learned state of the BlockwiseAffiner stepper."""
+        super_dict = super().dump()
+        super_dict['config']['solver_type'] = 'mserel'
+        super_dict['config']['solver_config'] = self.solver_config
+        torch.save(super_dict, path)
+        print(f"BlockwiseAffiner stepper record saved to {path}")

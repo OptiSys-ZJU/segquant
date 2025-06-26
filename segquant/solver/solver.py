@@ -95,7 +95,7 @@ class BaseSolver:
     This class defines the interface for learning and solving quantization problems.
     """
     def __init__(self):
-        pass
+        self.solution = None
 
     def learn(self, real, quant):
         """
@@ -113,6 +113,17 @@ class BaseSolver:
         Returns:
             torch.Tensor: The transformed tensor after applying the learned parameters.
         """
+    
+    def dump(self):
+        return self.solution
+
+    def load(self, solution):
+        """
+        Load the solution into the solver.
+        Args:
+            solution (tuple): The solution parameters to be loaded.
+        """
+        self.solution = solution
 
 
 class MSERelSolver(BaseSolver):
@@ -147,7 +158,6 @@ class MSERelSolver(BaseSolver):
             self.verbose = config["verbose"]
 
         self.record = None
-        self.solution = None
 
     def _solve_single(self, e, e_hat):
         A = self.alpha + (1 - self.alpha) / (e ** 2 + 1e-8)
