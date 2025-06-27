@@ -43,7 +43,6 @@ def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, re
             if not reprocess and count < continue_id:
                 count += 1
                 continue
-            print(f"[INFO] Processing {count}th image...")
             prompt, _, control = b
             # print(f"id: {id}, prompt: {prompt}") # testcode for debug
             # id += 1 # testcode for debug
