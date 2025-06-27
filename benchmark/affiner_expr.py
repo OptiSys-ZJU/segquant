@@ -13,6 +13,7 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, affiner_t
     print(f"Running base experiment: {exp_all_name}")
     print(f"Affiner Type: {affiner_type}")
     print(f"Affiner Config: {affiner_config}")
+    print("shuffle: ", shuffle)
     print('--------------------------')
     print(f"Root Directory: {root_dir}")
     print(f"Dataset Root Directory: {dataset_root_dir}")

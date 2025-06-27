@@ -118,6 +118,7 @@ class PTQD(RecurrentSteper):
         print(f"{'Max timestep:':20} {self.max_timestep}")
         print(f"{'Sample size:':20} {self.sample_size}")
         print(f"{'Noise target:':20} {self.noise_target}")
+        print(f"{'Recurrent:':20} {self.recurrent}")
         print(f"{'Enabled timesteps:':20} {self.enable_timesteps}")
         print(f"{'Device:':20} {self.device}")
         print(f"{'Noise preds buffer:':20} {len(self.noise_preds_real)} x deque")
