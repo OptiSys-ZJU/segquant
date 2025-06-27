@@ -285,7 +285,7 @@ class RecurrentSteper(BaseSteper):
         num_inference_steps,
         do_classifier_free_guidance,
         guidance_scale,
-        extra_step_kwargs=None,
+        extra_step_kwargs={},
     ):
         if self.scheduler is None:
             raise ValueError("[Error] BlockwiseAffiner: scheduler not register")

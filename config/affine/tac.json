@@ -10,9 +10,9 @@
         "solver_type": "tac",
         "solver_config": {
             "type": "tac",
-            "lambda1": 0.5,
+            "lambda1": 0.8,
             "lambda2": 0.1,
-            "threshold": 1,
+            "threshold": 4,
             "verbose": true
         }
     },

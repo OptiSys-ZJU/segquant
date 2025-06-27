@@ -37,7 +37,6 @@ def create_affiner(
         affiner: The trained affiner instance.
     """
 
-    # if affiner_config not exists, continue and create a new affiner
     indices = np.arange(len(dataset))
     if shuffle:
         np.random.shuffle(indices)

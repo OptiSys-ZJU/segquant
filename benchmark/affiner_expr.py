@@ -6,7 +6,7 @@ from benchmark import trace_pic
 from benchmark.utils import get_dataset, get_full_model, get_full_model_with_quantized_part
 import os
 
-def run_experiment(dataset_type, model_type, layer_type, exp_all_name, affiner_type, affiner_config, affiner_name='', max_num=None, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets'):
+def run_experiment(dataset_type, model_type, layer_type, exp_all_name, affiner_type, affiner_config, affiner_name='', max_num=None, shuffle=True, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets'):
     print(f"Dataset: {dataset_type}")
     print(f"Model Type: {model_type}")
     print(f"Layer Type: {layer_type}")
@@ -66,7 +66,8 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, affiner_t
             model_real=model_real,
             model_quant=model_quant,
             latents=latents,
-            dump_path=affiner_dump_path
+            dump_path=affiner_dump_path,
+            shuffle=shuffle,
         )
         del model_real
 
@@ -104,7 +105,7 @@ if __name__ == "__main__":
     parser.add_argument('-n', '--max-num', type=int, default=None, help='Maximum number of samples to process')
     parser.add_argument('-r', '--root-dir', type=str, default='../benchmark_results', help='Root directory for benchmark results')
     parser.add_argument('--dataset-root', type=str, default='../dataset/controlnet_datasets', help='Root directory for datasets')
-
+    parser.add_argument('--dis-shuffle', action='store_false', dest='shuffle', help='Disable shuffling of the dataset')
 
     args = parser.parse_args()
     dataset_type = args.dataset_type
@@ -138,5 +139,6 @@ if __name__ == "__main__":
         affiner_name=affiner_name,
         max_num=max_num,
         root_dir=root_dir,
-        dataset_root_dir=dataset_root_dir
+        dataset_root_dir=dataset_root_dir,
+        shuffle=args.shuffle,
     )
