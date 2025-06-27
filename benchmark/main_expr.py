@@ -75,7 +75,7 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, c
     latents_path = os.path.join(latent_root_dir, 'latents.pt')
     if os.path.exists(latents_path):
         latents = torch.load(latents_path)
-        print(f"Loaded latents with shape: {latents.shape}")
+        print(f"Loaded latents with shape: {latents.shape}, path: {latents_path}")
     else:
         print(f"Latents file {latents_path} does not exist. Generating new latents.")
         latents = get_latents(model_type, device="cuda:0")
