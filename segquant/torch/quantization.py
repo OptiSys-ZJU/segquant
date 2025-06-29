@@ -6,11 +6,15 @@ linear layers and pattern detection for advanced quantization techniques.
 
 import fnmatch
 import torch
+import uuid
 from torch import nn
 from tqdm import tqdm
 from segquant.config import default_quantize_config
 from segquant.layers.SegmentLinear import create_segment_linear, SegmentLinear
 from segquant.pattern_detector import SegQuantPatternDetector
+
+def generate_run_id():
+    return str(uuid.uuid4())
 
 class _EarlyStopForward(Exception):
     pass
@@ -177,6 +181,7 @@ def _search_linears(
     to_search_linears: dict,
     calib_data_loader: torch.utils.data.DataLoader,
     device,
+    dump_search=False,
 ):
     hooks = []
     err_map = {k: [] for k in to_search_linears}
@@ -214,6 +219,22 @@ def _search_linears(
     for n in list(to_search_linears):
         if to_search_linears[n].optimizer.search_step(err_map[n], origin_weight=nn_linears[n].weight.data):
             del to_search_linears[n]
+
+    if dump_search:
+        alpha_map = {} 
+        for k, v in to_search_linears.items():
+            if hasattr(v.optimizer, 'alpha'):
+                alpha_map[k] = {
+                    'candidate_alphas': v.optimizer.candidate_alphas,
+                    'alpha': v.optimizer.alpha,
+                    'opt_err': v.optimizer.opt_err,
+                    'opt_alpha': v.optimizer.opt_alpha,
+                }
+                print(f"[Search Linears] {k} alpha: {v.optimizer.alpha}, opt_err: {v.optimizer.opt_err}, opt_alpha: {v.optimizer.opt_alpha}")
+        
+        filename = f"search_dump_{generate_run_id()}.pt"
+        torch.save(alpha_map, filename)
+        print(f"[Search Linears] Dumped search results to {filename}")
 
 def _trace_linear(
     model: nn.Module,
@@ -390,6 +411,8 @@ def quantize(
     per_layer_mode=False,
     verbose=False,
     example=None,
+    dump_search=False,
+    search_recovery_file=None,
 ):
     """
     Quantize the model using the provided calibration data loader and configuration.
@@ -472,6 +495,8 @@ def quantize(
         )
     del linears
     if per_layer_mode:
+        assert search_recovery_file is None, "search_recovery_file is not supported in per_layer_mode"
+
         for linear_name, seglinear in tqdm(to_calib_linears.items(), desc="[Quantize Linears]"):
             quantize_linear(model, calib_data_loader, linear_name, seglinear, device)
             if torch.cuda.is_available():
@@ -493,17 +518,31 @@ def quantize(
             k: v for k, v in to_calib_linears.items()
             if v.opt_type in ('smooth', 'svd')
         }
+
+        to_search_linears = {
+            k: v for k, v in to_calib_linears.items()
+            if hasattr(v.optimizer, 'search_alpha') and v.optimizer.search_alpha
+        }
+
+        # search_recovery_file
+        if search_recovery_file is not None:
+            alpha_map = torch.load(search_recovery_file, weights_only=False)
+            for k, v in alpha_map.items():
+                if k in to_search_linears:
+                    to_search_linears[k].optimizer.candidate_alphas = v['candidate_alphas']
+                    to_search_linears[k].optimizer.alpha = v['alpha']
+                    to_search_linears[k].optimizer.opt_err = v['opt_err']
+                    to_search_linears[k].optimizer.opt_alpha = v['opt_alpha']
+                    print(f"[Search Recovery] {k} alpha: {v['alpha']}, opt_err: {v['opt_err']}, opt_alpha: {v['opt_alpha']}")
+                else:
+                    print("[Warning] Search recovery file contains keys not in to_search_linears:", k)
+
         if to_smooth_linears:
             if verbose:
                 print("start trace ...")
             _trace_linears(model, to_smooth_linears, calib_data_loader, device)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-
-        to_search_linears = {
-            k: v for k, v in to_calib_linears.items()
-            if hasattr(v.optimizer, 'search_alpha') and v.optimizer.search_alpha
-        }
 
         while to_search_linears:
             if to_search_linears:
@@ -517,7 +556,7 @@ def quantize(
             _calib_linears(model, to_search_linears, calib_data_loader, device)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            _search_linears(model, to_search_linears, calib_data_loader, device)
+            _search_linears(model, to_search_linears, calib_data_loader, device, dump_search=dump_search)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 

@@ -52,7 +52,7 @@ def run_real_baseline(dataset_type, model_type, calib_config, max_num=None, root
     del model
     print("Real completed")
 
-def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, calib_config, max_num=None, per_layer_mode=False, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets', calibrate_root_dir='calibset_record'):
+def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, calib_config, max_num=None, per_layer_mode=False, dump_search=False, search_recovery_file=None, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets', calibrate_root_dir='calibset_record'):
     print(f"Dataset: {dataset_type}")
     print(f"Model Type: {model_type}")
     print(f"Layer Type: {layer_type}")
@@ -105,7 +105,8 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, c
         calib_loader = calibset.get_dataloader(batch_size=1)
         quantized_model = quantize(
             part_model, calib_loader, config, 
-            per_layer_mode=per_layer_mode, verbose=True
+            per_layer_mode=per_layer_mode, verbose=True,
+            dump_search=dump_search, search_recovery_file=search_recovery_file,
         )
         torch.save(quantized_model, part_model_path)
         print(f"Partial model saved to {part_model_path}")
@@ -145,6 +146,8 @@ if __name__ == "__main__":
     parser.add_argument('-C', '--calibrate-config', type=str, default='config/calibrate_config.json', help='Path to the calibration configuration file')
     parser.add_argument('-n', '--max-num', type=int, default=None, help='Maximum number of samples to process')
     parser.add_argument('-p', '--per-layer-mode', action='store_true', help='Run in per-layer quantization mode')
+    parser.add_argument('--dump-search', action='store_true', help='Dump search results for quantization')
+    parser.add_argument('--search-recovery-file', type=str, default=None, help='File to recover search results for quantization')
     parser.add_argument('-r', '--root-dir', type=str, default='../benchmark_results', help='Root directory for benchmark results')
     parser.add_argument('--dataset-root', type=str, default='../dataset/controlnet_datasets', help='Root directory for datasets')
     parser.add_argument('--calibrate-root', type=str, default='../calibset_record', help='Root directory for calibration sets')
@@ -158,6 +161,8 @@ if __name__ == "__main__":
     root_dir = args.root_dir
     max_num = args.max_num
     per_layer_mode = args.per_layer_mode
+    dump_search = args.dump_search
+    search_recovery_file = args.search_recovery_file
     dataset_root_dir = args.dataset_root
     calibrate_root_dir = args.calibrate_root
 
@@ -187,7 +192,10 @@ if __name__ == "__main__":
             run_experiment(
                 dataset_type, model_type, layer_type, exp_all_name, 
                 configs[exp_all_name], calib_config, max_num=max_num, 
-                per_layer_mode=per_layer_mode, root_dir=root_dir, 
+                per_layer_mode=per_layer_mode,
+                dump_search=dump_search,
+                search_recovery_file=search_recovery_file,
+                root_dir=root_dir, 
                 dataset_root_dir=dataset_root_dir, calibrate_root_dir=calibrate_root_dir
             )
         else:
