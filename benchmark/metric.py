@@ -1,3 +1,4 @@
+import argparse
 import os
 import json
 from tqdm import tqdm
@@ -13,11 +14,12 @@ from PIL import Image
 from pytorch_fid import fid_score
 from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import structural_similarity as ssim
-from benchmark.config import QUANT_METHOD_CHOICES,DATASET_TYPE_CHOICES,BenchmarkConfig
 from benchmark import ImageReward as RM
 import datasets
 
+from benchmark.utils import get_dataset_prompt_metadata_file
 
+lpips_model = lpips.LPIPS(net="alex")
 class PromptImageDataset(data.Dataset):
     def __init__(self, ref_dataset: datasets.Dataset, gen_dirpath: str):
         super(data.Dataset, self).__init__()
@@ -93,12 +95,6 @@ def compute_image_reward(
     result = {"image_reward": sum(scores) / len(scores)}
     return result
 
-
-
-
-lpips_model = lpips.LPIPS(net="alex")
-
-
 def calculate_fid(real_dir, fake_dir, batch_size=50, device=None):
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -141,13 +137,16 @@ def calculate_ir(img_path, prompt):
         score = model.score(prompt, img_path)
     return score
 
-def generate_metric(path1, path2, prompt_dir):
-    print(path1, path2)
+def generate_metric(path1, path2, prompt_meta):
+    print('real:', path1, 'quant:', path2)
+    print('prompt_meta:', prompt_meta)
     fid = calculate_fid(path1, path2)
     names1 = os.listdir(path1)
     names2 = os.listdir(path2)
     common_names = sorted(set(names1) & set(names2))
-    metainfo = json.load(open(prompt_dir))
+    print('total images:', len(common_names))
+    with open(prompt_meta, 'r') as f:
+        metainfo = json.load(f)
     # setting up device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # quality metrics
@@ -188,24 +187,53 @@ def generate_metric(path1, path2, prompt_dir):
 
 
 if __name__ == "__main__":
-    # create a new metric.json file if not exists
-    if not os.path.exists("../segquant/benchmark_record/metric.json"):
-        with open("../segquant/benchmark_record/metric.json", "w") as f:
-            json.dump({}, f)
+    parser = argparse.ArgumentParser(description='Metrics for Diffusion Models')
+    parser.add_argument('-d', '--dataset-type', type=str, default='COCO', choices=['COCO', 'MJHQ', 'DCI'], help='Type of the dataset to use')
+    parser.add_argument('-m', '--model-type', type=str, default='sd3', choices=['flux', 'sd3', 'sdxl'], help='Type of the model to benchmark')
+    
+    parser.add_argument('-l', '--layer-type', type=str, default='dit', choices=['dit', 'controlnet', 'unet'], help='Type of the layer to benchmark')
+    parser.add_argument('-q', '--quant-type', type=str, default='int8w8a8', help='Type of the quant to benchmark')
+    parser.add_argument('-e', '--exp-name', type=str, default='baseline', help='Name of the experiment')
+    parser.add_argument('-a', '--affine-dir', type=str, default=None, help='Path to the affine directory')
 
-    result = json.load(open("../segquant/benchmark_record/metric.json"))
-    for dataset in tqdm(DATASET_TYPE_CHOICES, desc="Processing datasets"):
-        for method in tqdm(QUANT_METHOD_CHOICES, desc=f"Methods for {dataset}", leave=False):
-            real_dir = f"../segquant/benchmark_record/{dataset}/run_real_module/pics/real"
-            quant_dir = f"../segquant/benchmark_record/{dataset}/run_{method}_module/pics/quant_{method}"
-            prompt_dir = os.path.join(BenchmarkConfig.DATASET_PATH[dataset], "metadata.json")
-            if os.path.exists(real_dir) and os.path.exists(quant_dir):
-                if f"{dataset}_{method}" not in result:
-                    print(f"Updating {dataset}_{method} to metric.json")
-                    result[f"{dataset}_{method}"] = generate_metric(real_dir, quant_dir, prompt_dir)
-                    # save immediately
-                    with open("../segquant/benchmark_record/metric.json", "w") as f:
-                        json.dump(result, f)
-                else:
-                    print(f"{dataset}_{method} already in metric.json")
-    print(result)
+    parser.add_argument('-r', '--root-dir', type=str, default='../benchmark_results', help='Root directory for benchmark results')
+    parser.add_argument('--dataset-root', type=str, default='../dataset/controlnet_datasets', help='Root directory for datasets')
+
+    args = parser.parse_args()
+    dataset_type = args.dataset_type
+    model_type = args.model_type
+
+    layer_type = args.layer_type
+    quant_type = args.quant_type
+    exp_name = args.exp_name
+    affine_dir = args.affine_dir
+
+    root_dir = args.root_dir
+    dataset_root_dir = args.dataset_root
+
+    # check real dir
+    real_dir = os.path.join(root_dir, dataset_type, model_type, "real")
+    if not os.path.exists(real_dir):
+        raise FileNotFoundError(f"Real directory {real_dir} does not exist.")
+    # check quant dir
+    exp_all_name = f'{model_type}-{layer_type}-{quant_type}-{exp_name}'
+    if affine_dir is not None:
+        quant_dir = os.path.join(root_dir, dataset_type, model_type, layer_type, exp_all_name, affine_dir)
+    else:
+        quant_dir = os.path.join(root_dir, dataset_type, model_type, layer_type, exp_all_name)
+    if not os.path.exists(quant_dir):
+        raise FileNotFoundError(f"Quant directory {quant_dir} does not exist.")
+    
+    # check prompt metadata file
+    metadata_file = get_dataset_prompt_metadata_file(dataset_type, dataset_root_dir)
+    if not os.path.exists(metadata_file):
+        raise FileNotFoundError(f"Metadata file {metadata_file} does not exist.")
+    
+    # generate metrics
+    res = generate_metric(os.path.join(real_dir, 'pic'), os.path.join(quant_dir, 'pic'), metadata_file)
+    
+    dump_file = os.path.join(quant_dir, 'metric.json')
+    with open(dump_file, 'w') as f:
+        json.dump(res, f, indent=4)
+    print(f"Metrics saved to {dump_file}")
+    print("Metrics:", res)

@@ -33,7 +33,6 @@ def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, re
     if not reprocess:
         continue_id = len(os.listdir(path))
 
-
     for batch in data_loader:
         for b in batch:
             if max_num is not None and count >= max_num:
@@ -44,8 +43,6 @@ def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, re
                 count += 1
                 continue
             prompt, _, control = b
-            # print(f"id: {id}, prompt: {prompt}") # testcode for debug
-            # id += 1 # testcode for debug
             # Ensure control image is on the correct device
             if hasattr(control, 'to'):
                 # It's already a tensor

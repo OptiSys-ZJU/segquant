@@ -129,6 +129,16 @@ def get_dataset(dataset_type, dataset_root_dir):
     
     return dataset
 
+def get_dataset_prompt_metadata_file(dataset_type, dataset_root_dir):
+    if dataset_type == "COCO":
+        return os.path.join(dataset_root_dir, 'COCO-Caption2017-canny', 'metadata.json')
+    elif dataset_type == "MJHQ":
+        return os.path.join(dataset_root_dir, 'MJHQ-30K-canny', 'metadata.json')
+    elif dataset_type == "DCI":
+        return os.path.join(dataset_root_dir, 'DCI-canny', 'metadata.json')
+    else:
+        raise ValueError(f"Unsupported dataset type: {dataset_type}")
+
 def get_calibrate_data(dataset_type, model_type, layer_type, dataset_root_dir, calibrate_root_dir, calib_args):
     calib_key = (
         f"maxT{calib_args['max_timestep']}_"
