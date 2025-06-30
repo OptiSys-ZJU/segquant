@@ -27,6 +27,7 @@ nohup python3 -m benchmark.main_expr \
     -e "$EXP_TAG" \
     --config-dir config \
     -C config/calibrate_config.json \
+    "${@:7}" \
     > "$LOG_NAME" 2>&1 &
 
 echo "Launched with log: $LOG_NAME"
