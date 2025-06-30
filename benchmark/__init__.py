@@ -3,7 +3,7 @@ from tqdm import tqdm
 import torch
 
 
-def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, reprocess=False, **kwargs):
+def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, force_process_pics=False, **kwargs):
     os.makedirs(path, exist_ok=True)
     count = 0
     if max_num is not None:
@@ -12,8 +12,8 @@ def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, re
     else:
         max_num = len(data_loader.dataset)
     
-    if not reprocess:
-        print(f"[INFO] reprocess is False, will continue processsing if there are images left undone")
+    if not force_process_pics:
+        print(f"[INFO] processing images in Partial mode, max_num: {max_num}")
         if len(os.listdir(path)) > max_num:
             raise ValueError("max_num is less than the number of images in the path")
         pbar = tqdm(
@@ -21,7 +21,7 @@ def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, re
             desc="Tracing images",
         )
     else:
-        print(f"[INFO] reprocess is True, tracing all images")
+        print(f"[INFO] processing images in Full mode, max_num: {max_num}")
         pbar = tqdm(
             total=max_num if max_num is not None else len(data_loader.dataset),
             desc="Tracing images",
@@ -30,8 +30,9 @@ def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, re
     # Get model device to ensure inputs are on the same device
     model_device = next(model.parameters()).device
 
-    if not reprocess:
+    if not force_process_pics:
         continue_id = len(os.listdir(path))
+        print(f"[INFO] continue_id: {continue_id}")
 
     for batch in data_loader:
         for b in batch:
@@ -39,7 +40,7 @@ def trace_pic(model, path=None, data_loader=None, latents=None, max_num=None, re
                 pbar.close()
                 print("Max_num already reached, exiting...")
                 return
-            if not reprocess and count < continue_id:
+            if not force_process_pics and count < continue_id:
                 count += 1
                 continue
             prompt, _, control = b

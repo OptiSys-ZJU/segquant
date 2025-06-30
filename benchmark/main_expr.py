@@ -7,7 +7,7 @@ from benchmark.yaml_parser import parse_yaml
 from benchmark.utils import get_dataset, get_latents, get_calibrate_data, get_full_model, get_part_model, get_full_model_with_quantized_part
 from segquant.torch.quantization import quantize
 
-def run_real_baseline(dataset_type, model_type, calib_config, max_num=None, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets'):
+def run_real_baseline(dataset_type, model_type, calib_config, max_num=None, force_process_pics=False, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets'):
     print(f"Dataset: {dataset_type}")
     print(f"Model Type: {model_type}")
 
@@ -19,7 +19,7 @@ def run_real_baseline(dataset_type, model_type, calib_config, max_num=None, root
     latents_path = os.path.join(latent_root_dir, 'latents.pt')
     if os.path.exists(latents_path):
         latents = torch.load(latents_path)
-        print(f"Loaded latents with shape: {latents.shape}")
+        print(f"Loaded latents with shape: {latents.shape}, path: {latents_path}")
     else:
         print(f"Latents file {latents_path} does not exist. Generating new latents.")
         latents = get_latents(model_type, device="cuda:0")
@@ -45,6 +45,7 @@ def run_real_baseline(dataset_type, model_type, calib_config, max_num=None, root
         dataset.get_dataloader(),
         latents,
         max_num=max_num,
+        force_process_pics=force_process_pics,
         controlnet_conditioning_scale=calib_config["controlnet_conditioning_scale"],
         guidance_scale=calib_config["guidance_scale"],
         num_inference_steps=calib_config['max_timestep'],
@@ -52,7 +53,7 @@ def run_real_baseline(dataset_type, model_type, calib_config, max_num=None, root
     del model
     print("Real completed")
 
-def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, calib_config, max_num=None, per_layer_mode=False, dump_search=False, search_recovery_file=None, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets', calibrate_root_dir='calibset_record'):
+def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, calib_config, max_num=None, per_layer_mode=False, dump_search=False, search_recovery_file=None, force_process_pics=False, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets', calibrate_root_dir='calibset_record'):
     print(f"Dataset: {dataset_type}")
     print(f"Model Type: {model_type}")
     print(f"Layer Type: {layer_type}")
@@ -127,6 +128,7 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, c
         dataset.get_dataloader(),
         latents,
         max_num=max_num,
+        force_process_pics=force_process_pics,
         controlnet_conditioning_scale=calib_config["controlnet_conditioning_scale"],
         guidance_scale=calib_config["guidance_scale"],
         num_inference_steps=calib_config['max_timestep'],
@@ -152,6 +154,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset-root', type=str, default='../dataset/controlnet_datasets', help='Root directory for datasets')
     parser.add_argument('--calibrate-root', type=str, default='../calibset_record', help='Root directory for calibration sets')
     parser.add_argument('-R', '--run-real-baseline', action='store_true', help='Run the real baseline experiment without quantization')
+    parser.add_argument('--force-process-pics',action='store_true', help='Force processing pictures even if they already exist')
     args = parser.parse_args()
     dataset_type = args.dataset_type
     model_type = args.model_type
@@ -165,6 +168,7 @@ if __name__ == "__main__":
     search_recovery_file = args.search_recovery_file
     dataset_root_dir = args.dataset_root
     calibrate_root_dir = args.calibrate_root
+    force_process_pics = args.force_process_pics
 
     calib_config_path = args.calibrate_config
     if not os.path.exists(calib_config_path):
@@ -176,7 +180,9 @@ if __name__ == "__main__":
         # Run the real baseline experiment without quantization
         run_real_baseline(
             dataset_type, model_type, calib_config, 
-            max_num=max_num, root_dir=root_dir, 
+            max_num=max_num,
+            force_process_pics=force_process_pics,
+            root_dir=root_dir, 
             dataset_root_dir=dataset_root_dir
         )
     else:
@@ -195,6 +201,7 @@ if __name__ == "__main__":
                 per_layer_mode=per_layer_mode,
                 dump_search=dump_search,
                 search_recovery_file=search_recovery_file,
+                force_process_pics=force_process_pics,
                 root_dir=root_dir, 
                 dataset_root_dir=dataset_root_dir, calibrate_root_dir=calibrate_root_dir
             )

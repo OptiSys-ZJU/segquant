@@ -6,7 +6,7 @@ from benchmark import trace_pic
 from benchmark.utils import get_dataset, get_full_model, get_full_model_with_quantized_part
 import os
 
-def run_experiment(dataset_type, model_type, layer_type, exp_all_name, affiner_type, affiner_config, affiner_name='', max_num=None, shuffle=True, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets'):
+def run_experiment(dataset_type, model_type, layer_type, exp_all_name, affiner_type, affiner_config, affiner_name='', max_num=None, shuffle=True, force_process_pics=False, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets'):
     print(f"Dataset: {dataset_type}")
     print(f"Model Type: {model_type}")
     print(f"Layer Type: {layer_type}")
@@ -84,6 +84,7 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, affiner_t
         dataset.get_dataloader(),
         latents,
         max_num=max_num,
+        force_process_pics=force_process_pics,
         steper=affiner,
         controlnet_conditioning_scale=affiner_config['extra_args']["controlnet_conditioning_scale"],
         guidance_scale=affiner_config['extra_args']["guidance_scale"],
@@ -107,6 +108,7 @@ if __name__ == "__main__":
     parser.add_argument('-r', '--root-dir', type=str, default='../benchmark_results', help='Root directory for benchmark results')
     parser.add_argument('--dataset-root', type=str, default='../dataset/controlnet_datasets', help='Root directory for datasets')
     parser.add_argument('--dis-shuffle', action='store_false', dest='shuffle', help='Disable shuffling of the dataset')
+    parser.add_argument('--force-process-pics',action='store_true', help='Force processing pictures even if they already exist')
 
     args = parser.parse_args()
     dataset_type = args.dataset_type
@@ -117,9 +119,10 @@ if __name__ == "__main__":
     affiner_type = args.affiner_type
     affiner_config = args.affiner_config
     affiner_name = args.affiner_name
-
+    
     root_dir = args.root_dir
     max_num = args.max_num
+    force_process_pics = args.force_process_pics
     dataset_root_dir = args.dataset_root
 
     # load real and quant
@@ -139,6 +142,7 @@ if __name__ == "__main__":
         affiner_config=affiner_config,
         affiner_name=affiner_name,
         max_num=max_num,
+        force_process_pics=force_process_pics,
         root_dir=root_dir,
         dataset_root_dir=dataset_root_dir,
         shuffle=args.shuffle,
