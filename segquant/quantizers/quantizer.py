@@ -19,6 +19,16 @@ class BaseQuantizer(ABC):
     @abstractmethod
     def quantize(self, x):
         """Quantize the input tensor `x`."""
+    
+    @abstractmethod
+    def to(self, device):
+        """Move the quantizer to the specified device.
+        Args:
+            device (torch.device): The device to move the quantizer to.
+        Returns:
+            BaseQuantizer: The quantizer instance moved to the specified device.
+        """
+        return self
 
     def calibrate(self, x):
         """Calibrate the quantizer using the input tensor `x`.
@@ -130,6 +140,16 @@ class IntQuantizer(BaseQuantizer):
 
         self.dynamic = dynamic
         self.fake = fake
+    
+    def to(self, device):
+        if isinstance(self.zero_point, torch.Tensor):
+            self.zero_point = self.zero_point.to(device)
+        if isinstance(self.neg_scale, torch.Tensor):
+            self.neg_scale = self.neg_scale.to(device)
+        if isinstance(self.pos_scale, torch.Tensor):
+            self.pos_scale = self.pos_scale.to(device)
+        if isinstance(self.scale, torch.Tensor):
+            self.scale = self.scale.to(device)
 
     def reset(self):
         self.amax = None
@@ -379,6 +399,16 @@ class FloatQuantizer(BaseQuantizer):
         self.neg_amax = None
         self.pos_amax = None
         self.amax = None
+    
+    def to(self, device):
+        if isinstance(self.zero_point, torch.Tensor):
+            self.zero_point = self.zero_point.to(device)
+        if isinstance(self.neg_scale, torch.Tensor):
+            self.neg_scale = self.neg_scale.to(device)
+        if isinstance(self.pos_scale, torch.Tensor):
+            self.pos_scale = self.pos_scale.to(device)
+        if isinstance(self.scale, torch.Tensor):
+            self.scale = self.scale.to(device)
 
     def calibrate(self, x: torch.Tensor):
         epsilon = 1.0 / (1 << 24)

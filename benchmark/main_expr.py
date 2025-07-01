@@ -53,7 +53,7 @@ def run_real_baseline(dataset_type, model_type, calib_config, max_num=None, forc
     del model
     print("Real completed")
 
-def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, calib_config, max_num=None, tmp_device=None, dump_search=False, search_recovery_file=None, force_process_pics=False, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets', calibrate_root_dir='calibset_record'):
+def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, calib_config, calib_max_cache_size=1, calib_max_len=None, max_num=None, tmp_device=None, dump_search=False, search_recovery_file=None, force_process_pics=False, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets', calibrate_root_dir='calibset_record'):
     print(f"Dataset: {dataset_type}")
     print(f"Model Type: {model_type}")
     print(f"Layer Type: {layer_type}")
@@ -100,7 +100,7 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, c
     else:
         ### find calibrate data
         calibset = get_calibrate_data(
-            dataset_type, model_type, layer_type, dataset_root_dir, calibrate_root_dir, calib_config
+            dataset_type, model_type, layer_type, dataset_root_dir, calibrate_root_dir, calib_config, max_cache_size=calib_max_cache_size, max_len=calib_max_len
         )
         print(f"Creating partial model file: {part_model_path}, need to be quantized.")
         part_model = get_part_model(model_type, layer_type, device="cuda:0")
@@ -152,6 +152,8 @@ if __name__ == "__main__":
     parser.add_argument('-e', '--exp-name', type=str, default='baseline', help='Name of the experiment')
     parser.add_argument('-c', '--config-dir', type=str, default='config', help='Path to the configuration file')
     parser.add_argument('-C', '--calibrate-config', type=str, default='config/calibrate_config.json', help='Path to the calibration configuration file')
+    parser.add_argument('-Cc', '--calibrate-cache-size', type=int, default=1, help='Maximum cache size for calibration data')
+    parser.add_argument('-Cl', '--calibrate-max-len', type=int, default=None, help='Maximum length of calibration data')
     parser.add_argument('-n', '--max-num', type=int, default=None, help='Maximum number of samples to process')
     parser.add_argument('-md', '--multi_device', action='store_true', help='Run in multi-gpu mode')
     parser.add_argument('--dump-search', action='store_true', help='Dump search results for quantization')
@@ -218,7 +220,10 @@ if __name__ == "__main__":
 
             run_experiment(
                 dataset_type, model_type, layer_type, exp_all_name, 
-                configs[exp_all_name], calib_config, max_num=max_num, 
+                configs[exp_all_name],
+                calib_config, calib_max_cache_size=args.calibrate_cache_size,
+                calib_max_len=args.calibrate_max_len,
+                max_num=max_num, 
                 tmp_device=tmp_device,
                 dump_search=dump_search,
                 search_recovery_file=search_recovery_file,

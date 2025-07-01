@@ -112,10 +112,12 @@ class BaseOptimizer:
         for i, input_calibrator in enumerate(self.input_calibrators):
             input_calibrator.finish_calibrate()
             self.input_calibrators[i] = input_calibrator.quantizer
+            self.input_calibrators[i].reset()
 
         for i, weight_calibrator in enumerate(self.weight_calibrators):
             self.weight_chunks[i] = weight_calibrator.finish_calibrate(self.weight_chunks[i])
             self.weight_calibrators[i] = weight_calibrator.quantizer
+            self.weight_calibrators[i].reset()
 
         self.has_calibrated = True
 
@@ -124,9 +126,13 @@ class BaseOptimizer:
 
     def to_cpu(self):
         self.weight_chunks = [chunk.to('cpu') for chunk in self.weight_chunks]
+        self.input_calibrators = [calibrator.to('cpu') for calibrator in self.input_calibrators]
+        self.weight_calibrators = [calibrator.to('cpu') for calibrator in self.weight_calibrators]
     
     def to_cuda(self, device):
         self.weight_chunks = [chunk.to(device) for chunk in self.weight_chunks]
+        self.input_calibrators = [calibrator.to(device) for calibrator in self.input_calibrators]
+        self.weight_calibrators = [calibrator.to(device) for calibrator in self.weight_calibrators]
 
 class OptimizerRegistry:
     _registry = {}
