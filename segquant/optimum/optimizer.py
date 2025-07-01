@@ -112,12 +112,10 @@ class BaseOptimizer:
         for i, input_calibrator in enumerate(self.input_calibrators):
             input_calibrator.finish_calibrate()
             self.input_calibrators[i] = input_calibrator.quantizer
-            self.input_calibrators[i].reset()
 
         for i, weight_calibrator in enumerate(self.weight_calibrators):
             self.weight_chunks[i] = weight_calibrator.finish_calibrate(self.weight_chunks[i])
             self.weight_calibrators[i] = weight_calibrator.quantizer
-            self.weight_calibrators[i].reset()
 
         self.has_calibrated = True
 

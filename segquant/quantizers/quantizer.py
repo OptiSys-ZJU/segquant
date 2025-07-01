@@ -150,6 +150,15 @@ class IntQuantizer(BaseQuantizer):
             self.pos_scale = self.pos_scale.to(device)
         if isinstance(self.scale, torch.Tensor):
             self.scale = self.scale.to(device)
+        if isinstance(self.amax, torch.Tensor):
+            self.amax = self.amax.to(device)
+        if isinstance(self.amin, torch.Tensor):
+            self.amin = self.amin.to(device)
+        if isinstance(self.neg_amax, torch.Tensor):
+            self.neg_amax = self.neg_amax.to(device)
+        if isinstance(self.pos_amax, torch.Tensor):
+            self.pos_amax = self.pos_amax.to(device)
+        return self
 
     def reset(self):
         self.amax = None
@@ -409,6 +418,15 @@ class FloatQuantizer(BaseQuantizer):
             self.pos_scale = self.pos_scale.to(device)
         if isinstance(self.scale, torch.Tensor):
             self.scale = self.scale.to(device)
+        if isinstance(self.amax, torch.Tensor):
+            self.amax = self.amax.to(device)
+        if isinstance(self.amin, torch.Tensor):
+            self.amin = self.amin.to(device)
+        if isinstance(self.neg_amax, torch.Tensor):
+            self.neg_amax = self.neg_amax.to(device)
+        if isinstance(self.pos_amax, torch.Tensor):
+            self.pos_amax = self.pos_amax.to(device)
+        return self
 
     def calibrate(self, x: torch.Tensor):
         epsilon = 1.0 / (1 << 24)
