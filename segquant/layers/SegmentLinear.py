@@ -45,13 +45,16 @@ class SegmentLinear(nn.Module):
             self.origin_device = custom_weight_tensor.device
             ### use new space
             custom_weight_tensor = custom_weight_tensor.to(device).clone()
+            if torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    torch.cuda.synchronize(i)
         else:
             self.origin_device = torch.device('cpu')
             custom_weight_tensor = torch.randn([self.out_features, self.in_features])
         self.bias = bias
         self.bias_data = 0
         if custom_bias_tensor is not None:
-            self.bias_data = custom_bias_tensor
+            self.bias_data = custom_bias_tensor.to(device).clone()
 
         if seg_mode == "input":
             target_features = in_features
