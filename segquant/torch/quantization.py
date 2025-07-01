@@ -367,6 +367,7 @@ def quantize(
 
     # search_recovery_file
     if search_recovery_file is not None:
+        print(f"[Search Recovery] Loading search recovery file: {search_recovery_file}")
         alpha_map = torch.load(search_recovery_file, weights_only=False)
         for k, v in alpha_map.items():
             if k in to_search_linears:

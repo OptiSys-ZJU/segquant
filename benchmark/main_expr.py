@@ -4,7 +4,7 @@ import torch
 import os
 from benchmark import trace_pic
 from benchmark.yaml_parser import parse_yaml
-from benchmark.utils import get_dataset, get_latents, get_calibrate_data, get_full_model, get_part_model, get_full_model_with_quantized_part
+from benchmark.utils import get_dataset, get_latents, get_calibrate_data, get_full_model, get_part_model, get_full_model_with_quantized_part, occupy_gpu_memory
 from segquant.torch.quantization import quantize
 
 def run_real_baseline(dataset_type, model_type, calib_config, max_num=None, force_process_pics=False, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets'):
@@ -161,6 +161,7 @@ if __name__ == "__main__":
     parser.add_argument('--calibrate-root', type=str, default='../calibset_record', help='Root directory for calibration sets')
     parser.add_argument('-R', '--run-real-baseline', action='store_true', help='Run the real baseline experiment without quantization')
     parser.add_argument('--force-process-pics',action='store_true', help='Force processing pictures even if they already exist')
+    parser.add_argument('--exclusive-gpu', action='store_true', help='Occupy exclusive GPU memory to avoid OOM')
     args = parser.parse_args()
     dataset_type = args.dataset_type
     model_type = args.model_type
@@ -181,6 +182,10 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"Calibration configuration file {calib_config_path} does not exist.")
     with open(calib_config_path, 'r') as f:
         calib_config = json.load(f)
+    
+    if args.exclusive_gpu:
+        # Occupy exclusive GPU memory to avoid OOM
+        occupy_gpu_memory(device=0)
     
     if args.run_real_baseline:
         # Run the real baseline experiment without quantization
@@ -206,6 +211,8 @@ if __name__ == "__main__":
             if multi_device:
                 if num_gpus > 1:
                     tmp_device = torch.device(f'cuda:1')
+                    if args.exclusive_gpu:
+                        occupy_gpu_memory(device=1)
                 else:
                     print("Multi-device mode is enabled, but only one GPU is available. Running on the only GPU.")
 

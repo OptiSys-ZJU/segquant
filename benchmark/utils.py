@@ -179,3 +179,11 @@ def get_calibrate_data(dataset_type, model_type, layer_type, dataset_root_dir, c
         del model_real
     
     return calibset
+
+def occupy_gpu_memory(device=0, reserve=512):
+    torch.cuda.set_device(device)
+    total_mem = torch.cuda.get_device_properties(device).total_memory
+    reserved_bytes = int(reserve * 1024 * 1024)
+
+    block = torch.empty((total_mem - reserved_bytes) // 4, dtype=torch.float32, device=f'cuda:{device}')
+    del block
