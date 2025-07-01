@@ -53,11 +53,13 @@ def run_real_baseline(dataset_type, model_type, calib_config, max_num=None, forc
     del model
     print("Real completed")
 
-def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, calib_config, max_num=None, per_layer_mode=False, dump_search=False, search_recovery_file=None, force_process_pics=False, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets', calibrate_root_dir='calibset_record'):
+def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, calib_config, max_num=None, tmp_device=None, dump_search=False, search_recovery_file=None, force_process_pics=False, root_dir='benchmark_results', dataset_root_dir='../dataset/controlnet_datasets', calibrate_root_dir='calibset_record'):
     print(f"Dataset: {dataset_type}")
     print(f"Model Type: {model_type}")
     print(f"Layer Type: {layer_type}")
     print(f"Running experiment: {exp_all_name}")
+    if tmp_device is not None:
+        print(f"Multi-device mode: {tmp_device}")
     print('--------------------------')
     print("Configuration:")
     print(config)
@@ -106,7 +108,7 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, c
         calib_loader = calibset.get_dataloader(batch_size=1)
         quantized_model = quantize(
             part_model, calib_loader, config, 
-            per_layer_mode=per_layer_mode, verbose=True,
+            tmp_device=tmp_device, verbose=True,
             dump_search=dump_search, search_recovery_file=search_recovery_file,
         )
         torch.save(quantized_model, part_model_path)
@@ -138,6 +140,10 @@ def run_experiment(dataset_type, model_type, layer_type, exp_all_name, config, c
 
 
 if __name__ == "__main__":
+    print("Environment Variables:")
+    print("CUDA_VISIBLE_DEVICES =", os.environ.get("CUDA_VISIBLE_DEVICES"))
+    print("PYTORCH_CUDA_ALLOC_CONF =", os.environ.get("PYTORCH_CUDA_ALLOC_CONF"))
+
     parser = argparse.ArgumentParser(description='Unified Benchmark for Diffusion Models')
     parser.add_argument('-d', '--dataset-type', type=str, default='COCO', choices=['COCO', 'MJHQ', 'DCI'], help='Type of the dataset to use')
     parser.add_argument('-m', '--model-type', type=str, default='sd3', choices=['flux', 'sd3', 'sdxl'], help='Type of the model to benchmark')
@@ -147,7 +153,7 @@ if __name__ == "__main__":
     parser.add_argument('-c', '--config-dir', type=str, default='config', help='Path to the configuration file')
     parser.add_argument('-C', '--calibrate-config', type=str, default='config/calibrate_config.json', help='Path to the calibration configuration file')
     parser.add_argument('-n', '--max-num', type=int, default=None, help='Maximum number of samples to process')
-    parser.add_argument('-p', '--per-layer-mode', action='store_true', help='Run in per-layer quantization mode')
+    parser.add_argument('-md', '--multi_device', action='store_true', help='Run in multi-gpu mode')
     parser.add_argument('--dump-search', action='store_true', help='Dump search results for quantization')
     parser.add_argument('--search-recovery-file', type=str, default=None, help='File to recover search results for quantization')
     parser.add_argument('-r', '--root-dir', type=str, default='../benchmark_results', help='Root directory for benchmark results')
@@ -163,7 +169,7 @@ if __name__ == "__main__":
     exp_name = args.exp_name
     root_dir = args.root_dir
     max_num = args.max_num
-    per_layer_mode = args.per_layer_mode
+    multi_device = args.multi_device
     dump_search = args.dump_search
     search_recovery_file = args.search_recovery_file
     dataset_root_dir = args.dataset_root
@@ -195,10 +201,18 @@ if __name__ == "__main__":
         configs = parse_yaml(model_type, layer_type, quant_type, config_path)
         exp_all_name = f'{model_type}-{layer_type}-{quant_type}-{exp_name}'
         if exp_all_name in configs:
+            num_gpus = torch.cuda.device_count()
+            tmp_device = None
+            if multi_device:
+                if num_gpus > 1:
+                    tmp_device = torch.device(f'cuda:1')
+                else:
+                    print("Multi-device mode is enabled, but only one GPU is available. Running on the only GPU.")
+
             run_experiment(
                 dataset_type, model_type, layer_type, exp_all_name, 
                 configs[exp_all_name], calib_config, max_num=max_num, 
-                per_layer_mode=per_layer_mode,
+                tmp_device=tmp_device,
                 dump_search=dump_search,
                 search_recovery_file=search_recovery_file,
                 force_process_pics=force_process_pics,

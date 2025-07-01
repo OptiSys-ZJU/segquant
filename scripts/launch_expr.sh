@@ -3,12 +3,11 @@
 # Check argument count
 if [ $# -lt 6 ]; then
     echo "Usage: $0 <cuda_devices> <dataset> <model> <backbone> <quant> <exp_tag>"
-    echo "Example: $0 0 COCO sd3 dit intw8a8 segquant-gptq"
+    echo "Example: $0 0,1 COCO sd3 dit intw8a8 segquant-gptq"
     exit 1
 fi
 
 # Parse arguments
-export CUDA_VISIBLE_DEVICES=$1
 DATASET=$2
 MODEL=$3
 BACKBONE=$4
@@ -25,7 +24,10 @@ if [ -f "$LOG_NAME" ]; then
 fi
 
 # Run command
-nohup python3 -m benchmark.main_expr \
+nohup env \
+    CUDA_VISIBLE_DEVICES="$1" \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    python3 -m benchmark.main_expr \
     -d "$DATASET" \
     -m "$MODEL" \
     -l "$BACKBONE" \
