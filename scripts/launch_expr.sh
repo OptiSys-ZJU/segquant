@@ -18,6 +18,12 @@ EXP_TAG=$6
 # Compose log filename
 LOG_NAME="${DATASET,,}-${MODEL,,}-${BACKBONE,,}-${QUANT,,}-${EXP_TAG,,}.log"
 
+# If log file exists, do not run
+if [ -f "$LOG_NAME" ]; then
+    echo "Log file $LOG_NAME already exists. Aborting."
+    exit 1
+fi
+
 # Run command
 nohup python3 -m benchmark.main_expr \
     -d "$DATASET" \
