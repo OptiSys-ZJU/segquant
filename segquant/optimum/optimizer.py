@@ -485,6 +485,9 @@ class SmoothOptimizer(BaseOptimizer):
         for i, weight_calibrator in enumerate(self.weight_calibrators):
             self.weight_calibrators[i] = weight_calibrator.quantizer
         
+        self.max_w = None
+        self.max_x = None
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
