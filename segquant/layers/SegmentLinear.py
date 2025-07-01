@@ -153,7 +153,7 @@ class SegmentLinear(nn.Module):
             real_quant=real_quant,
             dual_scale=dual_scale,
             kernel_type=kernel_type,
-            device=self.origin_device,
+            device=device,
             **opt_kwargs,
         )
 

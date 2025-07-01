@@ -417,6 +417,14 @@ class SmoothOptimizer(BaseOptimizer):
         if not self.has_traced_w:
             self._trace_max_w(self.weight_chunks)
             self.has_traced_w = True
+    
+    def to_cpu(self):
+        super().to_cpu()
+        self.s = [s.to('cpu') for s in self.s]
+    
+    def to_cuda(self, device):
+        super().to_cuda(device)
+        self.s = [s.to(device) for s in self.s]
 
     def smooth(self):
         """
@@ -625,6 +633,18 @@ class SVDOptimizer(SmoothOptimizer):
             f"    weight_quantizers=[\n      {weight_q}\n  ]\n"
             f")"
         )
+    
+    def to_cpu(self):
+        super().to_cpu()
+        self.low_rank = self.low_rank.to('cpu')
+        self.l1s = [l1.to('cpu') for l1 in self.l1s]
+        self.l2s = [l2.to('cpu') for l2 in self.l2s]
+    
+    def to_cuda(self, device):
+        super().to_cuda(device)
+        self.low_rank = self.low_rank.to(device)
+        self.l1s = [l1.to(device) for l1 in self.l1s]
+        self.l2s = [l2.to(device) for l2 in self.l2s]
 
     def _svd_w(self, smooth_weight_chunks: List[torch.Tensor]):
         assert self.has_smoothed, 'SVDOptimizer: linear is not smoothed'

@@ -16,9 +16,6 @@ from segquant.pattern_detector import SegQuantPatternDetector
 def generate_run_id():
     return str(uuid.uuid4())
 
-class _EarlyStopForward(Exception):
-    pass
-
 def _move_to_device(batch, device):
     if isinstance(batch, torch.Tensor):
         return batch.to(device)
@@ -200,7 +197,7 @@ def _search_linears(
                 def hook_fn(_mod, inp, _out, n=n):
                     if n in to_search_linears:
                         input_tensor = _move_to_device(inp[0], target_model_device)
-                        real = to_search_linears[n].segment_forward(input_tensor, weight=_mod.weight.data)
+                        real = to_search_linears[n].segment_forward(input_tensor, weight=_move_to_device(_mod.weight.data, target_model_device))
                         cur = to_search_linears[n].forward(input_tensor, chunked=True)
                         diff_norms = [((r - c) ** 2).mean().item() for r, c in zip(real, cur)]
                         if not err_map[n]:
@@ -245,7 +242,7 @@ def _search_linears(
         torch.save(alpha_map, filename)
         print(f"[Search Linears] Dumped search results to {filename}")
 
-def _replace_linears(model, to_replace_linears: dict):
+def _replace_linears(model, to_replace_linears: dict, device):
     for layer_name, new_linear in to_replace_linears.items():
         parts = layer_name.split(".")
         module = model
@@ -255,6 +252,7 @@ def _replace_linears(model, to_replace_linears: dict):
             else:
                 module = getattr(module, part)
 
+        new_linear = new_linear.to(device)
         old_linear = getattr(module, parts[-1])
         setattr(module, parts[-1], new_linear)
         del old_linear
@@ -413,10 +411,9 @@ def quantize(
 
     if verbose:
         print("start replace ...")
-    _replace_linears(model, to_calib_linears)
+    _replace_linears(model, to_calib_linears, origin_model_device)
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    model = model.to(origin_model_device)
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     if verbose:
