@@ -32,6 +32,7 @@ class BaseOptimizer:
         self.real_quant = real_quant
         self.kernel_type = kernel_type
 
+        # unused
         self.device = device
 
         self.dual_scale = dual_scale
@@ -46,7 +47,7 @@ class BaseOptimizer:
         if self.real_quant:
             def tensor_wrapper(x):
                 if isinstance(x, torch.Tensor):
-                    return x.to(dtype=torch.float32, device=self.device).contiguous()
+                    return x.to(dtype=torch.float32).contiguous()
                 else:
                     return x
 
