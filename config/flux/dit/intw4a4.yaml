@@ -16,6 +16,7 @@ svdquant:
       verbose: true
     calib:
       type: "gptq"
+      cpu_storage: true
     input_quant:
       type: "int4"
       axis: -1
@@ -42,6 +43,7 @@ segquant-gptq:
       verbose: true
     calib:
       type: "gptq"
+      cpu_storage: true
     input_quant:
       type: "int4"
       axis: -1
