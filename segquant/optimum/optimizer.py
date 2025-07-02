@@ -616,6 +616,9 @@ class SVDOptimizer(SmoothOptimizer):
         self.l1s = [None] * self.chunks
         self.l2s = [None] * self.chunks
         self.has_svd = False
+        self.precision = kwargs.get('precision', 'float64')
+        if self.precision not in ['float32', 'float64']:
+            raise ValueError(f"Unsupported precision: {self.precision}. Use 'float32' or 'float64'.")
 
     def __repr__(self):
         if self.real_quant:
@@ -662,7 +665,7 @@ class SVDOptimizer(SmoothOptimizer):
 
         for idx, smooth_weight_chunk in enumerate(smooth_weight_chunks):
             chunk = smooth_weight_chunk.t()
-            u, s, vt = torch.linalg.svd(chunk.to(torch.float64), full_matrices=False)
+            u, s, vt = torch.linalg.svd(chunk.to(getattr(torch, self.precision)), full_matrices=False)
 
             if u.shape[1] < self.low_rank or vt.shape[0] < self.low_rank:
                 raise ValueError(
