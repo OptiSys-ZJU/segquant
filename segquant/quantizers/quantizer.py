@@ -16,18 +16,45 @@ class BaseQuantizer(ABC):
     including methods for calibration and quantization.
     Subclasses should implement the `quantize` method.
     """
+    def __init__(self):
+        self.amax = None
+        self.amin = None
+        self.zero_point = None
+
+        self.neg_amax = None
+        self.pos_amax = None
+        self.neg_scale = None
+        self.pos_scale = None
+        self.scale = 1.0
+    
+    def reset(self):
+        self.amax = None
+        self.amin = None
+
+        self.neg_amax = None
+        self.pos_amax = None
+
     @abstractmethod
     def quantize(self, x):
         """Quantize the input tensor `x`."""
     
-    @abstractmethod
     def to(self, device):
-        """Move the quantizer to the specified device.
-        Args:
-            device (torch.device): The device to move the quantizer to.
-        Returns:
-            BaseQuantizer: The quantizer instance moved to the specified device.
-        """
+        if isinstance(self.zero_point, torch.Tensor):
+            self.zero_point = self.zero_point.to(device)
+        if isinstance(self.neg_scale, torch.Tensor):
+            self.neg_scale = self.neg_scale.to(device)
+        if isinstance(self.pos_scale, torch.Tensor):
+            self.pos_scale = self.pos_scale.to(device)
+        if isinstance(self.scale, torch.Tensor):
+            self.scale = self.scale.to(device)
+        if isinstance(self.amax, torch.Tensor):
+            self.amax = self.amax.to(device)
+        if isinstance(self.amin, torch.Tensor):
+            self.amin = self.amin.to(device)
+        if isinstance(self.neg_amax, torch.Tensor):
+            self.neg_amax = self.neg_amax.to(device)
+        if isinstance(self.pos_amax, torch.Tensor):
+            self.pos_amax = self.pos_amax.to(device)
         return self
 
     def calibrate(self, x):
@@ -114,6 +141,8 @@ class IntQuantizer(BaseQuantizer):
         dual_scale (bool): Whether to use dual-scale quantization (default: False).
     """
     def __init__(self, num_bits=8, symmetric=True, axis=None, dual_scale=False, real_quant=False, dynamic=False, fake=False):
+        super().__init__()
+        
         self.num_bits = num_bits
         self.symmetric = symmetric
         self.axis = axis
@@ -122,50 +151,12 @@ class IntQuantizer(BaseQuantizer):
         self.qmin = -(2 ** (num_bits - 1))
         self.qmax = 2 ** (num_bits - 1) - 1
 
-        # init
-        self.amax = None
-        self.amin = None
-        self.zero_point = None
-
-        # for dual-scale
-        self.neg_amax = None
-        self.pos_amax = None
-        self.neg_scale = None
-        self.pos_scale = None
-
-        self.scale = 1.0
         self.real_quant = real_quant
         if self.real_quant:
             assert self.axis is None or self.axis == 1 or self.axis == -1, 'only support axis = -1 for input and axis = 1 for weight'
 
         self.dynamic = dynamic
         self.fake = fake
-    
-    def to(self, device):
-        if isinstance(self.zero_point, torch.Tensor):
-            self.zero_point = self.zero_point.to(device)
-        if isinstance(self.neg_scale, torch.Tensor):
-            self.neg_scale = self.neg_scale.to(device)
-        if isinstance(self.pos_scale, torch.Tensor):
-            self.pos_scale = self.pos_scale.to(device)
-        if isinstance(self.scale, torch.Tensor):
-            self.scale = self.scale.to(device)
-        if isinstance(self.amax, torch.Tensor):
-            self.amax = self.amax.to(device)
-        if isinstance(self.amin, torch.Tensor):
-            self.amin = self.amin.to(device)
-        if isinstance(self.neg_amax, torch.Tensor):
-            self.neg_amax = self.neg_amax.to(device)
-        if isinstance(self.pos_amax, torch.Tensor):
-            self.pos_amax = self.pos_amax.to(device)
-        return self
-
-    def reset(self):
-        self.amax = None
-        self.amin = None
-
-        self.neg_amax = None
-        self.pos_amax = None
 
     def calibrate(self, x: torch.Tensor):
         epsilon = 1.0 / (1 << 24)
@@ -375,6 +366,8 @@ class FloatQuantizer(BaseQuantizer):
         dual_scale (bool): Whether to use dual-scale quantization (default: False).
     """
     def __init__(self, exp_bits=4, mant_bits=3, axis=None, dual_scale=False, real_quant=False, dynamic=False, fake=False):
+        super().__init__()
+        
         self.exp_bits = exp_bits
         self.mant_bits = mant_bits
         self.axis = axis
@@ -391,42 +384,11 @@ class FloatQuantizer(BaseQuantizer):
         self.scale = None
         self.zero_point = 0
 
-        self.neg_scale = None
-        self.pos_scale = None
-
-        self.neg_amax = None
-        self.pos_amax = None
-        self.amax = None
-
         self.real_quant = real_quant
         if self.real_quant:
             assert self.axis is None or self.axis == 1 or self.axis == -1, 'only support axis = -1 for input and axis = 1 for weight'
         self.dynamic = dynamic
         self.fake = fake
-
-    def reset(self):
-        self.neg_amax = None
-        self.pos_amax = None
-        self.amax = None
-    
-    def to(self, device):
-        if isinstance(self.zero_point, torch.Tensor):
-            self.zero_point = self.zero_point.to(device)
-        if isinstance(self.neg_scale, torch.Tensor):
-            self.neg_scale = self.neg_scale.to(device)
-        if isinstance(self.pos_scale, torch.Tensor):
-            self.pos_scale = self.pos_scale.to(device)
-        if isinstance(self.scale, torch.Tensor):
-            self.scale = self.scale.to(device)
-        if isinstance(self.amax, torch.Tensor):
-            self.amax = self.amax.to(device)
-        if isinstance(self.amin, torch.Tensor):
-            self.amin = self.amin.to(device)
-        if isinstance(self.neg_amax, torch.Tensor):
-            self.neg_amax = self.neg_amax.to(device)
-        if isinstance(self.pos_amax, torch.Tensor):
-            self.pos_amax = self.pos_amax.to(device)
-        return self
 
     def calibrate(self, x: torch.Tensor):
         epsilon = 1.0 / (1 << 24)

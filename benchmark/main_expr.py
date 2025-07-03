@@ -155,7 +155,7 @@ if __name__ == "__main__":
     parser.add_argument('-Cc', '--calibrate-cache-size', type=int, default=1, help='Maximum cache size for calibration data')
     parser.add_argument('-Cl', '--calibrate-max-len', type=int, default=None, help='Maximum length of calibration data')
     parser.add_argument('-n', '--max-num', type=int, default=None, help='Maximum number of samples to process')
-    parser.add_argument('-md', '--multi_device', action='store_true', help='Run in multi-gpu mode')
+    parser.add_argument('-md', '--multi-device', action='store_true', help='Run in multi-gpu mode')
     parser.add_argument('--dump-search', action='store_true', help='Dump search results for quantization')
     parser.add_argument('--search-recovery-file', type=str, default=None, help='File to recover search results for quantization')
     parser.add_argument('-r', '--root-dir', type=str, default='../benchmark_results', help='Root directory for benchmark results')

@@ -58,7 +58,6 @@ def _create_linear(
     dual_scale=False,
     device=None,
 ):
-    ### device = target_model_device
 
     old_linear = layer
     has_bias = hasattr(old_linear, "bias") and old_linear.bias is not None
@@ -273,6 +272,7 @@ def quantize(
         model (nn.Module): The PyTorch model to be quantized.
         calib_data_loader (dataloader): DataLoader for calibration data.
         config (dict): Optional; configuration for quantization.
+        tmp_device (torch.device): Optional; temporary device for quantization.
         verbose (bool): Whether to print verbose output.
         example (any): Optional; an example input for pattern detection.
     Returns:
