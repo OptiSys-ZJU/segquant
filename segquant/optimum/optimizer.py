@@ -647,13 +647,11 @@ class SVDOptimizer(SmoothOptimizer):
     
     def to_cpu(self):
         super().to_cpu()
-        self.low_rank = self.low_rank.to('cpu')
         self.l1s = [l1.to('cpu') for l1 in self.l1s]
         self.l2s = [l2.to('cpu') for l2 in self.l2s]
     
     def to_cuda(self, device):
         super().to_cuda(device)
-        self.low_rank = self.low_rank.to(device)
         self.l1s = [l1.to(device) for l1 in self.l1s]
         self.l2s = [l2.to(device) for l2 in self.l2s]
 
