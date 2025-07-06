@@ -38,7 +38,7 @@ svdquant:
     input_quant:
       type: "int8"
       axis: -1
-      dynamic: false
+      dynamic: true
     weight_quant:
       type: "int4"
       axis: 1

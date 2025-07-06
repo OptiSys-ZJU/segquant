@@ -195,7 +195,8 @@ class GPTQCalibrator(BaseCalibrator):
         if self.cpu_storage:
             self.H.copy_(H, non_blocking=True)
     
-    def colpacked1d_to_rowpacked1d(self, Q_colpacked_1d: torch.Tensor, out: int, cols: int) -> torch.Tensor:
+    @staticmethod
+    def colpacked1d_to_rowpacked1d(Q_colpacked_1d: torch.Tensor, out: int, cols: int) -> torch.Tensor:
         assert out % 2 == 0 and cols % 2 == 0, "Output and columns must be even for int4 quantization."
 
         Q_colpacked = Q_colpacked_1d.view(cols, out // 2).T  # shape: (out//2, cols)
