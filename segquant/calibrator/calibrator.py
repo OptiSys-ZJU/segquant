@@ -198,24 +198,23 @@ class GPTQCalibrator(BaseCalibrator):
     def colpacked1d_to_rowpacked1d(self, Q_colpacked_1d: torch.Tensor, out: int, cols: int) -> torch.Tensor:
         assert out % 2 == 0 and cols % 2 == 0, "Output and columns must be even for int4 quantization."
 
-        Q_colpacked = Q_colpacked_1d.view(cols, out // 2).T  # [out//2, cols]
+        Q_colpacked = Q_colpacked_1d.view(cols, out // 2).T  # shape: (out//2, cols)
 
-        packed_rows = []
-        for row in Q_colpacked:
-            low = row & 0x0F
-            low0 = low[0::2]
-            low1 = low[1::2] << 4
-            low_packed = (low1 | low0).to(torch.uint8)  # shape: (col // 2,)
+        low = Q_colpacked & 0x0F  # shape: (out//2, cols)
+        high = (Q_colpacked >> 4) & 0x0F  # shape: (out//2, cols)
 
-            high = (row >> 4) & 0x0F
-            high0 = high[0::2]
-            high1 = high[1::2] << 4
-            high_packed = (high1 | high0).to(torch.uint8)  # shape: (col // 2,)
+        def pack_int4(arr):
+            low0 = arr[:, 0::2]
+            low1 = arr[:, 1::2] << 4
+            return (low1 | low0).to(torch.uint8)  # shape: (out//2, cols//2)
 
-            packed_rows.append(low_packed)
-            packed_rows.append(high_packed)
-        
-        Q_repacked = torch.stack(packed_rows, dim=0)  # shape: (2 * rows, col // 2)
+        low_packed = pack_int4(low)
+        high_packed = pack_int4(high)
+
+        Q_repacked = torch.empty((low_packed.shape[0] * 2, low_packed.shape[1]), dtype=torch.uint8, device=Q_colpacked.device)
+        Q_repacked[0::2, :] = low_packed
+        Q_repacked[1::2, :] = high_packed
+
         return Q_repacked.reshape(-1)  # shape: (out * cols // 2,)
 
     def finish_calibrate(self, weight_data=None):
