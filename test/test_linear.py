@@ -399,7 +399,6 @@ def test_smooth_int8_real():
         copy.deepcopy(test_model),
         seg_data_loader,
         config,
-        per_layer_mode=False,
         verbose=True,
         example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
@@ -432,7 +431,6 @@ def test_smooth_int8_real():
         copy.deepcopy(test_model),
         seg_data_loader,
         config_real,
-        per_layer_mode=False,
         verbose=True,
         example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
@@ -788,7 +786,6 @@ def test_mix_real():
             copy.deepcopy(test_model),
             seg_data_loader,
             config,
-            per_layer_mode=False,
             verbose=False,
             example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
         )
@@ -802,7 +799,6 @@ def test_mix_real():
             copy.deepcopy(test_model),
             seg_data_loader,
             config,
-            per_layer_mode=False,
             verbose=False,
             example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
         )

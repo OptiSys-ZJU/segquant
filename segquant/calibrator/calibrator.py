@@ -194,6 +194,29 @@ class GPTQCalibrator(BaseCalibrator):
 
         if self.cpu_storage:
             self.H.copy_(H, non_blocking=True)
+    
+    def colpacked1d_to_rowpacked1d(self, Q_colpacked_1d: torch.Tensor, out: int, cols: int) -> torch.Tensor:
+        assert out % 2 == 0 and cols % 2 == 0, "Output and columns must be even for int4 quantization."
+
+        Q_colpacked = Q_colpacked_1d.view(cols, out // 2).T  # [out//2, cols]
+
+        packed_rows = []
+        for row in Q_colpacked:
+            low = row & 0x0F
+            low0 = low[0::2]
+            low1 = low[1::2] << 4
+            low_packed = (low1 | low0).to(torch.uint8)  # shape: (col // 2,)
+
+            high = (row >> 4) & 0x0F
+            high0 = high[0::2]
+            high1 = high[1::2] << 4
+            high_packed = (high1 | high0).to(torch.uint8)  # shape: (col // 2,)
+
+            packed_rows.append(low_packed)
+            packed_rows.append(high_packed)
+        
+        Q_repacked = torch.stack(packed_rows, dim=0)  # shape: (2 * rows, col // 2)
+        return Q_repacked.reshape(-1)  # shape: (out * cols // 2,)
 
     def finish_calibrate(self, weight_data=None):
         blocksize = self.blocksize
@@ -279,11 +302,11 @@ class GPTQCalibrator(BaseCalibrator):
                         self.quantizer = groups[idx // groupsize]
 
                 q = self.quantizer.fake_quantize(w.unsqueeze(1)).squeeze(1) # (out, 1)
-                real_q = self.quantizer.quantize(w.unsqueeze(1).to(dtype)) # (out, 1)
+                real_q = self.quantizer.quantize(w.unsqueeze(1).to(dtype)) # (out, 1) or (out//2,)
                 if Q is None:
                     Q = real_q
                 else:
-                    Q = torch.hstack((Q, real_q))
+                    Q = torch.hstack((Q, real_q)) # (out, in) or (out//2 * in,)
                 Losses1[:, i] = (w - q) ** 2 / d ** 2
 
                 err1 = (w - q) / d
@@ -296,6 +319,9 @@ class GPTQCalibrator(BaseCalibrator):
 
         if actorder:
             Q = Q[:, invperm]
+        
+        if hasattr(self.quantizer, 'num_bits') and self.quantizer.num_bits == 4 and self.quantizer.real_quant:
+            Q = self.colpacked1d_to_rowpacked1d(Q, W.shape[0], W.shape[1])
 
         if self.data_type == 'weight':
             self.err = torch.sum(Losses).item()

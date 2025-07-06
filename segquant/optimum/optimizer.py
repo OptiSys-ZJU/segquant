@@ -684,8 +684,6 @@ class SVDOptimizer(SmoothOptimizer):
             weight_svd = (chunk.to(torch.float64) - us @ vt).t().to(device=device, dtype=dtype)
             svd_weight_chunk.append(weight_svd)
             del u, s, vt, us, chunk
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
         return svd_weight_chunk
 
     def smooth(self):
