@@ -42,7 +42,7 @@ nohup env \
     -l "$BACKBONE" \
     -q "$QUANT" \
     -e "$EXP_TAG" \
-    $ATTR_ARG \
+    $AFF_ARG \
     $EXTRA_ARGS \
     > "$LOG_NAME" 2>&1 &
 
