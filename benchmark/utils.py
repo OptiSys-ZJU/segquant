@@ -139,7 +139,7 @@ def get_dataset_prompt_metadata_file(dataset_type, dataset_root_dir):
     else:
         raise ValueError(f"Unsupported dataset type: {dataset_type}")
 
-def get_calibrate_data(dataset_type, model_type, layer_type, dataset_root_dir, calibrate_root_dir, calib_args):
+def get_calibrate_data(dataset_type, model_type, layer_type, dataset_root_dir, calibrate_root_dir, calib_args, max_cache_size=1, max_len=None):
     calib_key = (
         f"maxT{calib_args['max_timestep']}_"
         f"sz{calib_args['sample_size']}_"
@@ -157,7 +157,7 @@ def get_calibrate_data(dataset_type, model_type, layer_type, dataset_root_dir, c
         calib_key
     )
     
-    calibset = load_calibrate_set(calibset_path)
+    calibset = load_calibrate_set(calibset_path, compress=True, max_cache_size=max_cache_size, max_len=max_len)
     if calibset is None:
         sampler = QDiffusionSampler()
         sample_dataloader = get_dataset(dataset_type, dataset_root_dir).get_dataloader(
@@ -179,3 +179,11 @@ def get_calibrate_data(dataset_type, model_type, layer_type, dataset_root_dir, c
         del model_real
     
     return calibset
+
+def occupy_gpu_memory(device=0, reserve=512):
+    torch.cuda.set_device(device)
+    total_mem = torch.cuda.get_device_properties(device).total_memory
+    reserved_bytes = int(reserve * 1024 * 1024)
+
+    block = torch.empty((total_mem - reserved_bytes) // 4, dtype=torch.float32, device=f'cuda:{device}')
+    del block

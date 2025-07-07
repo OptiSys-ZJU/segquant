@@ -15,6 +15,7 @@
 * limitations under the License.
 */
 
+#include <cuda_runtime_api.h>
 #include <ATen/ATen.h>
 #include <cuda_fp8.h>
 #include <torch/extension.h>
@@ -23,6 +24,7 @@ at::Tensor fake_e4m3fy_cuda(at::Tensor inputs);
  
 at::Tensor fake_e4m3fy(at::Tensor inputs) {
     if (inputs.is_cuda()) {
+        cudaSetDevice(inputs.device().index());
         return fake_e4m3fy_cuda(inputs.contiguous());
     } else {
         TORCH_CHECK(inputs.dtype() == at::ScalarType::Float);

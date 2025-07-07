@@ -68,6 +68,7 @@ segquant-gptq:
       verbose: true
     calib:
       type: "gptq"
+      cpu_storage: true
     input_quant:
       type: "int8"
     weight_quant:

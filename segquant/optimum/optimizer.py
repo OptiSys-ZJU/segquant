@@ -32,6 +32,7 @@ class BaseOptimizer:
         self.real_quant = real_quant
         self.kernel_type = kernel_type
 
+        # unused
         self.device = device
 
         self.dual_scale = dual_scale
@@ -46,7 +47,7 @@ class BaseOptimizer:
         if self.real_quant:
             def tensor_wrapper(x):
                 if isinstance(x, torch.Tensor):
-                    return x.to(dtype=torch.float32, device=self.device).contiguous()
+                    return x.to(dtype=torch.float32).contiguous()
                 else:
                     return x
 
@@ -124,9 +125,13 @@ class BaseOptimizer:
 
     def to_cpu(self):
         self.weight_chunks = [chunk.to('cpu') for chunk in self.weight_chunks]
+        self.input_calibrators = [calibrator.to('cpu') for calibrator in self.input_calibrators]
+        self.weight_calibrators = [calibrator.to('cpu') for calibrator in self.weight_calibrators]
     
     def to_cuda(self, device):
         self.weight_chunks = [chunk.to(device) for chunk in self.weight_chunks]
+        self.input_calibrators = [calibrator.to(device) for calibrator in self.input_calibrators]
+        self.weight_calibrators = [calibrator.to(device) for calibrator in self.weight_calibrators]
 
 class OptimizerRegistry:
     _registry = {}
@@ -417,6 +422,14 @@ class SmoothOptimizer(BaseOptimizer):
         if not self.has_traced_w:
             self._trace_max_w(self.weight_chunks)
             self.has_traced_w = True
+    
+    def to_cpu(self):
+        super().to_cpu()
+        self.s = [s.to('cpu') for s in self.s]
+    
+    def to_cuda(self, device):
+        super().to_cuda(device)
+        self.s = [s.to(device) for s in self.s]
 
     def smooth(self):
         """
@@ -477,6 +490,9 @@ class SmoothOptimizer(BaseOptimizer):
         for i, weight_calibrator in enumerate(self.weight_calibrators):
             self.weight_calibrators[i] = weight_calibrator.quantizer
         
+        self.max_w = None
+        self.max_x = None
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -601,6 +617,9 @@ class SVDOptimizer(SmoothOptimizer):
         self.l1s = [None] * self.chunks
         self.l2s = [None] * self.chunks
         self.has_svd = False
+        self.precision = kwargs.get('precision', 'float64')
+        if self.precision not in ['float32', 'float64']:
+            raise ValueError(f"Unsupported precision: {self.precision}. Use 'float32' or 'float64'.")
 
     def __repr__(self):
         if self.real_quant:
@@ -625,6 +644,16 @@ class SVDOptimizer(SmoothOptimizer):
             f"    weight_quantizers=[\n      {weight_q}\n  ]\n"
             f")"
         )
+    
+    def to_cpu(self):
+        super().to_cpu()
+        self.l1s = [l1.to('cpu') for l1 in self.l1s]
+        self.l2s = [l2.to('cpu') for l2 in self.l2s]
+    
+    def to_cuda(self, device):
+        super().to_cuda(device)
+        self.l1s = [l1.to(device) for l1 in self.l1s]
+        self.l2s = [l2.to(device) for l2 in self.l2s]
 
     def _svd_w(self, smooth_weight_chunks: List[torch.Tensor]):
         assert self.has_smoothed, 'SVDOptimizer: linear is not smoothed'
@@ -635,7 +664,7 @@ class SVDOptimizer(SmoothOptimizer):
 
         for idx, smooth_weight_chunk in enumerate(smooth_weight_chunks):
             chunk = smooth_weight_chunk.t()
-            u, s, vt = torch.linalg.svd(chunk.to(torch.float64), full_matrices=False)
+            u, s, vt = torch.linalg.svd(chunk.to(getattr(torch, self.precision)), full_matrices=False)
 
             if u.shape[1] < self.low_rank or vt.shape[0] < self.low_rank:
                 raise ValueError(
@@ -655,8 +684,6 @@ class SVDOptimizer(SmoothOptimizer):
             weight_svd = (chunk.to(torch.float64) - us @ vt).t().to(device=device, dtype=dtype)
             svd_weight_chunk.append(weight_svd)
             del u, s, vt, us, chunk
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
         return svd_weight_chunk
 
     def smooth(self):

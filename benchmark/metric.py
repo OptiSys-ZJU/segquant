@@ -20,6 +20,8 @@ import datasets
 from benchmark.utils import get_dataset_prompt_metadata_file
 
 lpips_model = lpips.LPIPS(net="alex")
+ir_model = RM.load("ImageReward-v1.0")
+
 class PromptImageDataset(data.Dataset):
     def __init__(self, ref_dataset: datasets.Dataset, gen_dirpath: str):
         super(data.Dataset, self).__init__()
@@ -132,9 +134,8 @@ def calculate_ssim(img1, img2):
     return ssim(img1, img2, data_range=img1.max() - img1.min())
 
 def calculate_ir(img_path, prompt):
-    model = RM.load("ImageReward-v1.0")
     with torch.inference_mode():
-        score = model.score(prompt, img_path)
+        score = ir_model.score(prompt, img_path)
     return score
 
 def generate_metric(path1, path2, prompt_meta):

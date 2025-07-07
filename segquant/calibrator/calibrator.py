@@ -53,6 +53,11 @@ class BaseCalibrator:
     @property
     def scale(self):
         return self.quantizer.scale
+    
+    def to(self, device):
+        if hasattr(self.quantizer, 'to'):
+            self.quantizer = self.quantizer.to(device)
+        return self
 
     def __repr__(self):
         return repr(self.quantizer)
@@ -171,13 +176,11 @@ class GPTQCalibrator(BaseCalibrator):
                 (x.shape[1], x.shape[1]),
                 device='cpu' if self.cpu_storage else device,
                 dtype=torch.float32,
+                pin_memory=True if self.cpu_storage else False
             )
 
         if self.cpu_storage:
-            if not hasattr(self, "_H_device") or self._H_device != device:
-                self._H_device = device
-                self._H_on_device = self.H.to(device)
-            H = self._H_on_device
+            H = self.H.to(device, non_blocking=True)
         else:
             H = self.H
 
@@ -185,16 +188,35 @@ class GPTQCalibrator(BaseCalibrator):
         self.nsamples += this_batch
 
         scale = math.sqrt(2 / self.nsamples)
-        input_data = input_data * scale
+        input_data.mul_(scale)
 
         H.addmm_(input_data, input_data.t(), beta=1.0, alpha=1.0)
 
         if self.cpu_storage:
-            self.H.copy_(H.to('cpu'))
-            del H
+            self.H.copy_(H, non_blocking=True)
+    
+    @staticmethod
+    def colpacked1d_to_rowpacked1d(Q_colpacked_1d: torch.Tensor, out: int, cols: int) -> torch.Tensor:
+        assert out % 2 == 0 and cols % 2 == 0, "Output and columns must be even for int4 quantization."
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        Q_colpacked = Q_colpacked_1d.view(cols, out // 2).T  # shape: (out//2, cols)
+
+        low = Q_colpacked & 0x0F  # shape: (out//2, cols)
+        high = (Q_colpacked >> 4) & 0x0F  # shape: (out//2, cols)
+
+        def pack_int4(arr):
+            low0 = arr[:, 0::2]
+            low1 = arr[:, 1::2] << 4
+            return (low1 | low0).to(torch.uint8)  # shape: (out//2, cols//2)
+
+        low_packed = pack_int4(low)
+        high_packed = pack_int4(high)
+
+        Q_repacked = torch.empty((low_packed.shape[0] * 2, low_packed.shape[1]), dtype=torch.uint8, device=Q_colpacked.device)
+        Q_repacked[0::2, :] = low_packed
+        Q_repacked[1::2, :] = high_packed
+
+        return Q_repacked.reshape(-1)  # shape: (out * cols // 2,)
 
     def finish_calibrate(self, weight_data=None):
         blocksize = self.blocksize
@@ -211,7 +233,7 @@ class GPTQCalibrator(BaseCalibrator):
         self.quantizer.calibrate(W)
 
         H = (
-            self.H.to(dtype=torch.float32, device=weight_data.device)
+            self.H.to(dtype=torch.float32, device=weight_data.device, non_blocking=True)
             if self.cpu_storage
             else self.H
         )
@@ -280,11 +302,11 @@ class GPTQCalibrator(BaseCalibrator):
                         self.quantizer = groups[idx // groupsize]
 
                 q = self.quantizer.fake_quantize(w.unsqueeze(1)).squeeze(1) # (out, 1)
-                real_q = self.quantizer.quantize(w.unsqueeze(1).to(dtype)) # (out, 1)
+                real_q = self.quantizer.quantize(w.unsqueeze(1).to(dtype)) # (out, 1) or (out//2,)
                 if Q is None:
                     Q = real_q
                 else:
-                    Q = torch.hstack((Q, real_q))
+                    Q = torch.hstack((Q, real_q)) # (out, in) or (out//2 * in,)
                 Losses1[:, i] = (w - q) ** 2 / d ** 2
 
                 err1 = (w - q) / d
@@ -297,6 +319,9 @@ class GPTQCalibrator(BaseCalibrator):
 
         if actorder:
             Q = Q[:, invperm]
+        
+        if hasattr(self.quantizer, 'num_bits') and self.quantizer.num_bits == 4 and self.quantizer.real_quant:
+            Q = self.colpacked1d_to_rowpacked1d(Q, W.shape[0], W.shape[1])
 
         if self.data_type == 'weight':
             self.err = torch.sum(Losses).item()

@@ -18,10 +18,11 @@ class BaseCalibSet(Dataset):
     This class can handle both in-memory data and data stored in files.
     It supports chunked loading of data from files, with optional compression.
     """
-    def __init__(self, data=None, folder=None, compress=False, max_cache_size=1):
+    def __init__(self, data=None, folder=None, compress=False, max_cache_size=1, max_len=None):
         super().__init__()
         self.compress = compress
         self.max_cache_size = max_cache_size
+        self.max_len = max_len
 
         if data is not None:
             self.data = data
@@ -62,12 +63,15 @@ class BaseCalibSet(Dataset):
             return torch.load(io.BytesIO(decompressed_bytes))
 
     def __len__(self):
-        if self.data is not None:
-            return len(self.data)
-        else:
-            return sum(self.chunk_lens)
+        full_len = len(self.data) if self.data is not None else sum(self.chunk_lens)
+        if self.max_len is not None:
+            return min(full_len, self.max_len)
+        return full_len
 
     def __getitem__(self, idx):
+        if self.max_len is not None and idx >= self.max_len:
+            raise IndexError("Index out of range due to max_len limit.")
+
         if self.data is not None:
             return self.data[idx]
 
@@ -101,12 +105,12 @@ class BaseCalibSet(Dataset):
         )
 
 
-def load_calibrate_set(dump_path, compress=True,):
+def load_calibrate_set(dump_path, compress=True, max_cache_size=1, max_len=None):
     if not os.path.exists(dump_path):
         return None
     else:
         print(f"[INFO] calibset [{dump_path}] found, loading...")
-        return BaseCalibSet(folder=dump_path, compress=compress)
+        return BaseCalibSet(folder=dump_path, compress=compress, max_cache_size=max_cache_size, max_len=max_len)
 
 def generate_calibrate_set(
     model,

@@ -45,13 +45,19 @@ class SegmentLinear(nn.Module):
             self.origin_device = custom_weight_tensor.device
             ### use new space
             custom_weight_tensor = custom_weight_tensor.to(device).clone()
+            if torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    torch.cuda.synchronize(i)
         else:
             self.origin_device = torch.device('cpu')
             custom_weight_tensor = torch.randn([self.out_features, self.in_features])
         self.bias = bias
-        self.bias_data = 0
-        if custom_bias_tensor is not None:
-            self.bias_data = custom_bias_tensor
+        self.bias_data = None
+        if self.bias:
+            if custom_bias_tensor is not None:
+                self.bias_data = custom_bias_tensor.to(device).clone()
+            else:
+                self.bias_data = torch.zeros([self.out_features], device=device)
 
         if seg_mode == "input":
             target_features = in_features
@@ -229,11 +235,13 @@ class SegmentLinear(nn.Module):
 
     def to_cpu(self):
         self.optimizer.to_cpu()
-        self.bias_data = self.bias_data.to('cpu')
+        if self.bias_data is not None:
+            self.bias_data = self.bias_data.to('cpu')
     
     def to_cuda(self):
         self.optimizer.to_cuda(self.origin_device)
-        self.bias_data = self.bias_data.to(self.origin_device)
+        if self.bias_data is not None:
+            self.bias_data = self.bias_data.to(self.origin_device)
 
     def forward(self, x, chunked=False):
         input_chunks = self._chunk_x(x)

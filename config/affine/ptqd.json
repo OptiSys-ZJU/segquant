@@ -3,7 +3,7 @@
 
     "config": {
         "max_timestep": 50,
-        "sample_size": 256,
+        "sample_size": 32,
         "enable_timesteps": null,
         "noise_target": "uncond",
         "recurrent": true,

@@ -9,6 +9,7 @@ ptq4dit:
       alpha: 0.5
     calib:
       type: "gptq"
+      cpu_storage: true
     input_quant:
       type: "int8"
       axis: -1
@@ -27,6 +28,7 @@ svdquant:
       type: "svd"
       alpha: 0.5
       low_rank: 64
+      precision: "float32"
       search_alpha_config:
         enable: true
         min: 0.0
@@ -35,6 +37,7 @@ svdquant:
       verbose: true
     calib:
       type: "gptq"
+      cpu_storage: true
     input_quant:
       type: "int8"
       axis: -1
@@ -53,6 +56,7 @@ segquant-gptq:
       type: "svd"
       alpha: 0.5
       low_rank: 64
+      precision: "float32"
       search_alpha_config:
         enable: true
         min: 0.0
@@ -61,6 +65,7 @@ segquant-gptq:
       verbose: true
     calib:
       type: "gptq"
+      cpu_storage: true
     input_quant:
       type: "int8"
       axis: -1

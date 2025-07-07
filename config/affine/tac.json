@@ -2,7 +2,7 @@
     "type": "tac",
     "config": {
         "max_timestep": 50,
-        "sample_size": 256,
+        "sample_size": 32,
         "enable_timesteps": null,
         "recurrent": true,
         "noise_target": "uncond",
