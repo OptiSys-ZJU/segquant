@@ -199,4 +199,13 @@ def load_real_quant_mix_ext(verbose=False, required=False):
         extra_cuda_cflags=['-DSEGQUANT_MIX'],
     )
 
+    def Wfp16Afp16_real_quantized_gemm_scaled(self, input, weight, scale_x, scale_w):
+        return self.prototype_Wfp16Afp16_real_quantized_gemm_scaled(input, weight, 1.0, 1.0)
+    
+    def Wfp16Afp16_real_quantized_gemm_dual_scaled(self, input, weight, pos_scale_x, neg_scale_x, scale_w):
+        return self.prototype_Wfp16Afp16_real_quantized_gemm_dual_scaled(input, weight, 1.0, 1.0, 1.0)
+    
+    ext.Wfp16Afp16_real_quantized_gemm_scaled = types.MethodType(Wfp16Afp16_real_quantized_gemm_scaled, ext)
+    ext.Wfp16Afp16_real_quantized_gemm_dual_scaled = types.MethodType(Wfp16Afp16_real_quantized_gemm_dual_scaled, ext)
+
     return ext, supported_type

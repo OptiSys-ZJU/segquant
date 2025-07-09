@@ -415,8 +415,6 @@ def quantize(
     _replace_linears(model, to_calib_linears, origin_model_device)
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
     if verbose:
         print(model)
 

@@ -134,6 +134,13 @@ struct ShapeType<at::Half, int8_t> {
 };
 
 template <>
+struct ShapeType<at::Half, at::Half> {
+    using ThreadblockShape = cutlass::gemm::GemmShape<128, 128, 64>;
+    using WarpShape = cutlass::gemm::GemmShape<64, 64, 64>;
+    using InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;
+};
+
+template <>
 struct ShapeType<__nv_fp8_e4m3, __nv_fp8_e4m3> {
     using ThreadblockShape = cutlass::gemm::GemmShape<128, 256, 64>;
     using WarpShape = cutlass::gemm::GemmShape<64, 64, 64>;
@@ -813,7 +820,8 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
     X(__nv_fp8_e4m3, __nv_fp8_e4m3) \
     X(cutlass::int4b_t, cutlass::int4b_t) \
     X(int8_t, cutlass::int4b_t) \
-    X(at::Half, int8_t)
+    X(at::Half, int8_t) \
+    X(at::Half, at::Half)
 
 #define INSTANTIATE(A, W, SX, SW) \
     template at::Tensor real_quantized_gemm_scaled<A, W, SX, SW>(at::Tensor, at::Tensor, SX, SW); \

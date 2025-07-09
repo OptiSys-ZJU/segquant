@@ -38,44 +38,6 @@ class PromptImageDataset(data.Dataset):
         prompt = row["prompt"]
         return [gen_tensor, prompt]
 
-
-def compute_image_multimodal_metrics(
-    ref_dataset: datasets.Dataset,
-    gen_dirpath: str,
-    metrics: tuple[str, ...] = ("clip_iqa", "clip_score"),
-    batch_size: int = 64,
-    num_workers: int = 8,
-    device: str | torch.device = "cuda",
-) -> dict[str, float]:
-    if len(metrics) == 0:
-        return {}
-    metric_names = metrics
-    metrics: dict[str, torchmetrics.Metric] = {}
-    for metric_name in metric_names:
-        if metric_name == "clip_iqa":
-            metric = CLIPImageQualityAssessment(model_name_or_path="openai/clip-vit-large-patch14").to(device)
-        elif metric_name == "clip_score":
-            metric = CLIPScore(model_name_or_path="openai/clip-vit-large-patch14").to(device)
-        else:
-            raise NotImplementedError(f"Metric {metric_name} is not implemented")
-        metrics[metric_name] = metric
-    dataset = PromptImageDataset(ref_dataset, gen_dirpath)
-    dataloader = data.DataLoader(
-        dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False, drop_last=False
-    )
-    with torch.no_grad():
-        for i, batch in enumerate(tqdm(dataloader, desc=f"{ref_dataset.config_name} multimodal metrics")):
-            batch[0] = batch[0].to(device)
-            for metric_name, metric in metrics.items():
-                if metric_name == "clip_iqa":
-                    metric.update(batch[0].to(torch.float32))
-                else:
-                    prompts = list(batch[1])
-                    metric.update(batch[0], prompts)
-    result = {metric_name: metric.compute().mean().item() for metric_name, metric in metrics.items()}
-    return result
-
-
 def compute_image_reward(
     ref_dataset: datasets.Dataset,
     gen_dirpath: str,
@@ -106,7 +68,6 @@ def calculate_fid(real_dir, fake_dir, batch_size=50, device=None):
     )
     return fid_value
 
-
 def calculate_lpips(img1, img2):
     transform = transforms.Compose(
         [transforms.Resize((256, 256)), transforms.ToTensor()]
@@ -118,14 +79,12 @@ def calculate_lpips(img1, img2):
     lpips_score = lpips_model(img1, img2)
     return lpips_score.item()
 
-
 def calculate_psnr(img1, img2):
     transform = transforms.ToTensor()
     img1 = transform(img1).numpy()
     img2 = transform(img2).numpy()
 
     return psnr(img1, img2, data_range=img1.max() - img1.min())
-
 
 def calculate_ssim(img1, img2):
     img1 = np.array(img1.convert("L"))

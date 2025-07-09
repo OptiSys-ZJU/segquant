@@ -7,7 +7,8 @@
     X(__nv_fp8_e4m3, __nv_fp8_e4m3) \
     X(cutlass::int4b_t, cutlass::int4b_t) \
     X(int8_t, cutlass::int4b_t) \
-    X(at::Half, int8_t)
+    X(at::Half, int8_t) \
+    X(at::Half, at::Half)
 
 #define SPECIALIZATION(A, W, SX, SW) \
     template<> at::Tensor real_quantized_gemm_scaled<A, W, SX, SW>(at::Tensor, at::Tensor, SX, SW); \
@@ -33,4 +34,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     register_gemm_module<cutlass::int4b_t, cutlass::int4b_t>(m, "Wint4Aint4");
     register_gemm_module<int8_t, cutlass::int4b_t>(m, "Wint4Aint8");
     register_gemm_module<at::Half, int8_t>(m, "Wint8Afp16");
+    register_gemm_module<at::Half, at::Half>(m, "prototype_Wfp16Afp16");
 }
