@@ -1,6 +1,5 @@
-import argparse
-import json
 import torch
+import os
 from backend.torch.models.flux_controlnet import FluxControlNetModel
 from backend.torch.models.stable_diffusion_3_controlnet import StableDiffusion3ControlNetModel
 from backend.torch.models.stable_diffusion_xl import StableDiffusionXLModel
@@ -10,10 +9,6 @@ from backend.torch.modules.transformer_sd3 import SD3Transformer2DModel
 from backend.torch.modules.controlnet_flux import FluxControlNetModel as ControlNetFlux
 from backend.torch.modules.unet_2d_condition import UNet2DConditionModel
 from backend.torch.utils import randn_tensor
-import os
-
-from segquant.sample.sampler import QDiffusionSampler
-from segquant.torch.calibrate_set import generate_calibrate_set, load_calibrate_set
 
 def get_full_model(model_type, device="cuda:0"):
     """Get full model for the specified type"""
@@ -140,6 +135,9 @@ def get_dataset_prompt_metadata_file(dataset_type, dataset_root_dir):
         raise ValueError(f"Unsupported dataset type: {dataset_type}")
 
 def get_calibrate_data(dataset_type, model_type, layer_type, dataset_root_dir, calibrate_root_dir, calib_args, max_cache_size=1, max_len=None):
+    from segquant.sample.sampler import QDiffusionSampler
+    from segquant.torch.calibrate_set import generate_calibrate_set, load_calibrate_set
+    
     calib_key = (
         f"maxT{calib_args['max_timestep']}_"
         f"sz{calib_args['sample_size']}_"
