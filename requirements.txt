@@ -1,6 +1,8 @@
 # Requires: Python >= 3.10
+accelerate==1.8.1
 clip==0.2.0
 datasets>=2.21,<3.0
+diffusers==0.34.0
 fairscale==0.4.13
 lpips>=0.1.4,<0.2
 matplotlib>=3.10,<3.11

@@ -12,3 +12,4 @@ calibset_record/
 .pylintrc
 a.txt
 *.pyc
+metadata.json
