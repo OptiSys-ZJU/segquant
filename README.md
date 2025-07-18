@@ -57,7 +57,7 @@ quantized_model = quantize(
     model,                  # The original full-precision model
     calib_data_loader,      # The loader of calibration features
     config=quant_config,    # Optional config dict for quantization parameters
-    per_layer_mode=False,   # iterate all linears to be quantized
+    tmp_device=None,        # multi-device support
     verbose=True,           # Print debug info if needed
     example=input_sample    # Optional example input for operator tracing
 )

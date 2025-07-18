@@ -9,7 +9,7 @@ quantize(
     model: nn.Module,
     calib_data_loader: torch.utils.data.DataLoader,
     config: dict = None,
-    per_layer_mode: bool = False,
+    tmp_device: torch.device = None,
     verbose: bool = False,
     example: Any = None,
 ) -> nn.Module
@@ -21,7 +21,7 @@ Quantizes the given PyTorch model using calibration data and optional configurat
 - `model` (`nn.Module`): The PyTorch model to quantize.
 - `calib_data_loader` (`DataLoader`): DataLoader used for calibration.
 - `config` (`dict`, optional): Quantization configuration dictionary.
-- `per_layer_mode` (`bool`, optional): Enable per-layer quantization mode.
+- `tmp_device` (`torch.device`, optional): Enable multi-device offload mode (Two devices: one for the original model, and the other for the quantized model.).
 - `verbose` (`bool`, optional): If `True`, print detailed logs.
 - `example` (`Any`, optional): Example input for pattern detection.
 
