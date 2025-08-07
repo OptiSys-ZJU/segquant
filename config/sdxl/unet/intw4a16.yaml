@@ -1,0 +1,65 @@
+ptq4dit:
+  default:
+    enable: true
+    seglinear: false
+    search_patterns: []
+    real_quant: false
+    opt:
+      type: "smooth"
+      alpha: 0.5
+    calib:
+      type: "gptq"
+    input_quant:
+      type: "fp16"
+    weight_quant:
+      type: "int4"
+      axis: 1
+
+svdquant:
+  default:
+    enable: true
+    seglinear: false
+    search_patterns: []
+    real_quant: false
+    opt:
+      type: "svd"
+      alpha: 0.5
+      low_rank: 64
+      search_alpha_config:
+        enable: true
+        min: 0.0
+        max: 1.0
+        step: 0.1
+      verbose: true
+    calib:
+      type: "gptq"
+    input_quant:
+      type: "fp16"
+    weight_quant:
+      type: "int4"
+      axis: 1
+
+segquant-gptq:
+  default:
+    enable: true
+    seglinear: true
+    search_patterns: ["linear_to_chunk", "linear_to_split", "concat_to_linear", "stack_to_linear", "activation_to_linear"]
+    real_quant: false
+    opt:
+      type: "svd"
+      alpha: 0.5
+      low_rank: 64
+      search_alpha_config:
+        enable: true
+        min: 0.0
+        max: 1.0
+        step: 0.1
+      verbose: true
+    calib:
+      type: "gptq"
+    input_quant:
+      type: "fp16"
+    weight_quant:
+      type: "int4"
+      axis: 1
+
