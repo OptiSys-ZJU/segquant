@@ -139,6 +139,10 @@ class SegQuantPatternDetector:
                 return LinearInfo(
                     True, node.target, linear_mod.in_features, linear_mod.out_features
                 )
+            elif isinstance(linear_mod, nn.Conv2d):
+                return LinearInfo(
+                    True, node.target, linear_mod.in_channels, linear_mod.out_channels
+                )
         return LinearInfo(False, None, None, None)
 
     @staticmethod

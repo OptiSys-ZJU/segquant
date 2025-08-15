@@ -10,7 +10,7 @@ import uuid
 from torch import nn
 from tqdm import tqdm
 from segquant.config import default_quantize_config
-from segquant.layers.SegmentLinear import create_segment_linear, SegmentLinear
+from segquant.layers.SegmentLinear import create_segment_linear
 from segquant.pattern_detector import SegQuantPatternDetector
 
 def generate_run_id():
@@ -25,7 +25,7 @@ def _move_to_device(batch, device):
         return {k: _move_to_device(v, device) for k, v in batch.items()}
     return batch
 
-def _get_all_linears(model: nn.Module, default, config):
+def _get_all_layers(model: nn.Module, default, config, layer_cls=nn.Linear):
     disable_patterns = [
         k for k, v in config.items() if k != "default" and v.get("enable") is False
     ]
@@ -35,7 +35,7 @@ def _get_all_linears(model: nn.Module, default, config):
 
     linears = {}
     for name, module in model.named_modules():
-        if isinstance(module, nn.Linear):
+        if isinstance(module, layer_cls):
             enable = default
             for pattern in disable_patterns:
                 if fnmatch.fnmatch(name, pattern):
@@ -50,7 +50,8 @@ def _get_all_linears(model: nn.Module, default, config):
                 linears[name] = module
     return linears
 
-def _create_linear(
+def _create_layer(
+    layer_type,
     layer,
     layer_name,
     seg_linear_config,
@@ -59,8 +60,8 @@ def _create_linear(
     device=None,
 ):
 
-    old_linear = layer
-    has_bias = hasattr(old_linear, "bias") and old_linear.bias is not None
+    old_layer = layer
+    has_bias = hasattr(old_layer, "bias") and old_layer.bias is not None
 
     this_config = final_config['default']
     for n in final_config.keys():
@@ -69,10 +70,10 @@ def _create_linear(
             break
 
     def get_config(t):
-        input_quant_config_copy = this_config[t].copy()
-        input_quant_type = input_quant_config_copy.pop('type')
-        input_quant_args = input_quant_config_copy
-        return input_quant_type, input_quant_args
+        quant_config_copy = this_config[t].copy()
+        quant_type = quant_config_copy.pop('type')
+        quant_args = quant_config_copy
+        return quant_type, quant_args
 
     real_quant = this_config['real_quant']
     input_quant_type, input_quant_args = get_config('input_quant')
@@ -80,48 +81,53 @@ def _create_linear(
     opt_quant_type, opt_quant_args = get_config('opt')
     calib_quant_type, calib_quant_args = get_config('calib')
 
-    new_linear = create_segment_linear(
-        input_quant_type,
-        weight_quant_type,
-        opt_quant_type,
-        calib_quant_type,
-        old_linear.in_features,
-        old_linear.out_features,
-        opt_kwargs=opt_quant_args,
-        calib_kwargs=calib_quant_args,
-        input_quant_args={"real_quant": real_quant, "dual_scale": dual_scale, **input_quant_args},
-        weight_quant_args={"real_quant": real_quant, **weight_quant_args},
-        bias=has_bias,
-        custom_bias_tensor=old_linear.bias.data if has_bias else None,
-        seg_mode=seg_linear_config["seg_mode"],
-        chunks=seg_linear_config.get(
-            "chunks", len(seg_linear_config.get("chunksizes", []))
-        ),
-        chunksizes=seg_linear_config.get("chunksizes"),
-        custom_weight_tensor=old_linear.weight.data,
-        device=device,
-    )
+    if layer_type == 'linear':
+        new_layer = create_segment_linear(
+            input_quant_type,
+            weight_quant_type,
+            opt_quant_type,
+            calib_quant_type,
+            old_layer.in_features,
+            old_layer.out_features,
+            opt_kwargs=opt_quant_args,
+            calib_kwargs=calib_quant_args,
+            input_quant_args={"real_quant": real_quant, "dual_scale": dual_scale, **input_quant_args},
+            weight_quant_args={"real_quant": real_quant, **weight_quant_args},
+            bias=has_bias,
+            custom_bias_tensor=old_layer.bias.data if has_bias else None,
+            seg_mode=seg_linear_config["seg_mode"],
+            chunks=seg_linear_config.get(
+                "chunks", len(seg_linear_config.get("chunksizes", []))
+            ),
+            chunksizes=seg_linear_config.get("chunksizes"),
+            custom_weight_tensor=old_layer.weight.data,
+            device=device,
+        )
+    elif layer_type == 'conv2d':
+        pass
+    else:
+        raise ValueError(f"Unsupported layer type: {layer_type}")
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    return new_linear
+    return new_layer
 
-def _trace_linears(
+def _trace_layers(
     model: nn.Module,
-    to_smooth_linears: dict,
+    to_smooth_layers: dict,
     calib_data_loader: torch.utils.data.DataLoader,
     origin_model_device,
     target_model_device,
 ):
     hooks = []
     for name, module in model.named_modules():
-        if isinstance(module, nn.Linear) and name in to_smooth_linears:
+        if name in to_smooth_layers:
 
             def get_hook(n):
                 def hook_fn(_mod, inp, _out, n=n):
-                    if hasattr(to_smooth_linears[n], "trace"):
-                        to_smooth_linears[n].trace(_move_to_device(inp[0], target_model_device))
+                    if hasattr(to_smooth_layers[n], "trace"):
+                        to_smooth_layers[n].trace(_move_to_device(inp[0], target_model_device))
 
                 return hook_fn
 
@@ -130,7 +136,7 @@ def _trace_linears(
     model.eval()
     with torch.no_grad():
         for batch in tqdm(
-            calib_data_loader, desc="[Trace Linears] Running model on calibration data"
+            calib_data_loader, desc="[Trace Layers] Running model on calibration data"
         ):
             this_input_tuple = _move_to_device(batch[0], origin_model_device)
             _ = model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(
@@ -139,25 +145,25 @@ def _trace_linears(
     for h in hooks:
         h.remove()
 
-def _smooth_linears(to_smooth_linears: dict):
-    for l in tqdm(to_smooth_linears.values(), desc="[Smoothing linears]"):
+def _smooth_layers(to_smooth_layers: dict):
+    for l in tqdm(to_smooth_layers.values(), desc="[Smoothing Layers]"):
         if hasattr(l, "smooth"):
             l.smooth()
 
-def _calib_linears(
+def _calib_layers(
     model: nn.Module,
-    to_calib_linears: dict,
+    to_calib_layers: dict,
     calib_data_loader: torch.utils.data.DataLoader,
     origin_model_device,
     target_model_device,
 ):
     hooks = []
     for name, module in model.named_modules():
-        if isinstance(module, nn.Linear) and name in to_calib_linears:
+        if name in to_calib_layers:
 
             def get_hook(n):
                 def hook_fn(_mod, inp, _out, n=n):
-                    to_calib_linears[n].calibrate(_move_to_device(inp[0], target_model_device))
+                    to_calib_layers[n].calibrate(_move_to_device(inp[0], target_model_device))
 
                 return hook_fn
 
@@ -166,7 +172,7 @@ def _calib_linears(
     model.eval()
     with torch.no_grad():
         for batch in tqdm(
-            calib_data_loader, desc="[Calib Linears] Running model on calibration data"
+            calib_data_loader, desc="[Calib Layers] Running model on calibration data"
         ):
             this_input_tuple = _move_to_device(batch[0], origin_model_device)
             _ = model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(
@@ -175,29 +181,33 @@ def _calib_linears(
     for h in hooks:
         h.remove()
     
-    for l in tqdm(to_calib_linears.values(), desc="[Finishing Calibrate Linears]"):
+    for l in tqdm(to_calib_layers.values(), desc="[Finishing Calibrate Layers]"):
         l.finish_calibrate()
 
-def _search_linears(
+def _search_layers(
     model: nn.Module,
-    to_search_linears: dict,
+    to_search_layers: dict,
     calib_data_loader: torch.utils.data.DataLoader,
     origin_model_device,
     target_model_device,
     dump_search=False,
 ):
     hooks = []
-    err_map = {k: [] for k in to_search_linears}
-    nn_linears = {}
+    err_map = {k: [] for k in to_search_layers}
+    nn_layers = {}
     for name, module in model.named_modules():
-        if isinstance(module, nn.Linear) and name in to_search_linears:
-            nn_linears[name] = module
+        if name in to_search_layers:
+            nn_layers[name] = module
             def get_hook(n):
                 def hook_fn(_mod, inp, _out, n=n):
-                    if n in to_search_linears:
+                    if n in to_search_layers:
                         input_tensor = _move_to_device(inp[0], target_model_device)
-                        real = to_search_linears[n].segment_forward(input_tensor, weight=_move_to_device(_mod.weight.data, target_model_device))
-                        cur = to_search_linears[n].forward(input_tensor, chunked=True)
+
+                        if isinstance(_mod, nn.Linear):
+                            real = to_search_layers[n].segment_forward(input_tensor, weight=_move_to_device(_mod.weight.data, target_model_device))
+                            cur = to_search_layers[n].forward(input_tensor, chunked=True)
+                        else:
+                            raise NotImplementedError(f"Unsupported module type: {type(_mod)}")
                         diff_norms = [((r - c) ** 2).mean().item() for r, c in zip(real, cur)]
                         if not err_map[n]:
                             err_map[n] = diff_norms
@@ -220,14 +230,18 @@ def _search_linears(
     for h in hooks:
         h.remove()
 
-    for n in list(to_search_linears):
-        origin_weight = _move_to_device(nn_linears[n].weight.data, target_model_device)
-        if to_search_linears[n].optimizer.search_step(err_map[n], origin_weight=origin_weight):
-            del to_search_linears[n]
+    for n in list(to_search_layers):
+        nn_layer = nn_layers[n]
+        if isinstance(nn_layer, nn.Linear):
+            origin_weight = _move_to_device(nn_layers[n].weight.data, target_model_device)
+            if to_search_layers[n].optimizer.search_step(err_map[n], origin_weight=origin_weight):
+                del to_search_layers[n]
+        else:
+            raise NotImplementedError(f"Unsupported module type: {type(nn_layer)}")
 
     if dump_search:
         alpha_map = {} 
-        for k, v in to_search_linears.items():
+        for k, v in to_search_layers.items():
             if hasattr(v.optimizer, 'alpha'):
                 alpha_map[k] = {
                     'candidate_alphas': v.optimizer.candidate_alphas,
@@ -241,8 +255,8 @@ def _search_linears(
         torch.save(alpha_map, filename)
         print(f"[Search Linears] Dumped search results to {filename}")
 
-def _replace_linears(model, to_replace_linears: dict, device):
-    for layer_name, new_linear in to_replace_linears.items():
+def _replace_layers(model, to_replace_layers: dict, device):
+    for layer_name, new_layer in to_replace_layers.items():
         parts = layer_name.split(".")
         module = model
         for part in parts[:-1]:
@@ -251,10 +265,10 @@ def _replace_linears(model, to_replace_linears: dict, device):
             else:
                 module = getattr(module, part)
 
-        new_linear = new_linear.to(device)
-        old_linear = getattr(module, parts[-1])
-        setattr(module, parts[-1], new_linear)
-        del old_linear
+        new_layer = new_layer.to(device)
+        old_layer = getattr(module, parts[-1])
+        setattr(module, parts[-1], new_layer)
+        del old_layer
 
 def quantize(
     model: nn.Module,
@@ -291,13 +305,18 @@ def quantize(
 
     if all(not final_config[k]["enable"] for k in final_config):
         return model
-
-    linears = _get_all_linears(model, final_config["default"]['enable'], config)
-    to_calib_linears = {}
+    
+    layers = {
+        'linear': _get_all_layers(model, final_config["default"]['enable'], final_config, layer_cls=nn.Linear),
+        'conv2d': _get_all_layers(model, final_config["default"]['enable'], final_config, layer_cls=nn.Conv2d),
+    }
     if verbose:
-        print(f"get valid linear num [{len(linears)}]")
+        for k, v in layers.items():
+            print(f"[INFO] Found {len(v)} {k} layers for quantization")
 
-    dual_scale_linears = set()
+    to_calib_layers = {}
+
+    dual_scale_layers = set()
     enable_seg = any(cfg.get("seglinear") for cfg in final_config.values())
     if enable_seg:
         example = example if example is not None else calib_data_loader.dataset[0]
@@ -313,55 +332,59 @@ def quantize(
         seg_result = seg_detector.find_all_patterns()
 
         if "activation_to_linear" in seg_result:
-            dual_scale_linears = set(seg_result["activation_to_linear"])
+            dual_scale_layers = set(seg_result["activation_to_linear"])
             del seg_result["activation_to_linear"]
 
         for l in seg_result.values():
             for seg_linear_config in l:
                 name = seg_linear_config["linear_name"]
-                if name in linears:
-                    disabled = False
-                    for pattern in final_config:
-                        if fnmatch.fnmatch(name, pattern):
-                            if not final_config[pattern].get("seglinear", True):
-                                print(
-                                    f"[INFO] Detect but disabled [{name}] "
-                                    f"(matched pattern: {pattern})"
-                                )
-                                disabled = True
-                            break
-                    if disabled:
-                        continue
-                    to_calib_linears[name] = _create_linear(
-                        linears[name],
-                        name,
-                        seg_linear_config,
-                        final_config,
-                        dual_scale=(name in dual_scale_linears),
-                        device=target_model_device,
-                    )
-                    print(f"[INFO] Detected [{name}]")
-                    del linears[name]
+                for layer_type in layers:
+                    if name in layers[layer_type]:
+                        disabled = False
+                        for pattern in final_config:
+                            if fnmatch.fnmatch(name, pattern):
+                                if not final_config[pattern].get("seglinear", True):
+                                    print(
+                                        f"[INFO] Detect but disabled [{layer_type}:{name}] "
+                                        f"(matched pattern: {pattern})"
+                                    )
+                                    disabled = True
+                                break
+                        if disabled:
+                            continue
+                        to_calib_layers[name] = _create_layer(
+                            layer_type,
+                            layers[layer_type][name],
+                            name,
+                            seg_linear_config,
+                            final_config,
+                            dual_scale=(name in dual_scale_layers),
+                            device=target_model_device,
+                        )
+                        print(f"[INFO] Detected [{layer_type}:{name}]")
+                        del layers[layer_type][name]
 
-    for name, linear in linears.items():
-        to_calib_linears[name] = _create_linear(
-            linear,
-            name,
-            {"chunks": 1, "seg_mode": "weight"},
-            final_config,
-            dual_scale=(name in dual_scale_linears),
-            device=target_model_device,
-        )
-    del linears
+    for layer_type in layers:
+        for name, linear in layers[layer_type].items():
+            to_calib_layers[name] = _create_layer(
+                layer_type,
+                linear,
+                name,
+                {"chunks": 1, "seg_mode": "weight"},
+                final_config,
+                dual_scale=(name in dual_scale_layers),
+                device=target_model_device,
+            )
+    del layers
 
     # hook all linears at a time
-    to_smooth_linears = {
-        k: v for k, v in to_calib_linears.items()
+    to_smooth_layers = {
+        k: v for k, v in to_calib_layers.items()
         if v.opt_type in ('smooth', 'svd')
     }
 
-    to_search_linears = {
-        k: v for k, v in to_calib_linears.items()
+    to_search_layers = {
+        k: v for k, v in to_calib_layers.items()
         if hasattr(v.optimizer, 'search_alpha') and v.optimizer.search_alpha
     }
 
@@ -370,49 +393,49 @@ def quantize(
         print(f"[Search Recovery] Loading search recovery file: {search_recovery_file}")
         alpha_map = torch.load(search_recovery_file, weights_only=False)
         for k, v in alpha_map.items():
-            if k in to_search_linears:
-                to_search_linears[k].optimizer.candidate_alphas = v['candidate_alphas']
-                to_search_linears[k].optimizer.alpha = v['alpha']
-                to_search_linears[k].optimizer.opt_err = v['opt_err']
-                to_search_linears[k].optimizer.opt_alpha = v['opt_alpha']
+            if k in to_search_layers:
+                to_search_layers[k].optimizer.candidate_alphas = v['candidate_alphas']
+                to_search_layers[k].optimizer.alpha = v['alpha']
+                to_search_layers[k].optimizer.opt_err = v['opt_err']
+                to_search_layers[k].optimizer.opt_alpha = v['opt_alpha']
                 print(f"[Search Recovery] {k} alpha: {v['alpha']}, opt_err: {v['opt_err']}, opt_alpha: {v['opt_alpha']}")
             else:
                 print("[Warning] Search recovery file contains keys not in to_search_linears:", k)
 
-    if to_smooth_linears:
+    if to_smooth_layers:
         if verbose:
             print("start trace ...")
-        _trace_linears(model, to_smooth_linears, calib_data_loader, origin_model_device, target_model_device)
+        _trace_layers(model, to_smooth_layers, calib_data_loader, origin_model_device, target_model_device)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    while to_search_linears:
-        if to_search_linears:
+    while to_search_layers:
+        if to_search_layers:
             if verbose:
                 print("[search] start smooth ...")
-            _smooth_linears(to_search_linears)
+            _smooth_layers(to_search_layers)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         if verbose:
             print("[search] start calibrate ...")
-        _calib_linears(model, to_search_linears, calib_data_loader, origin_model_device, target_model_device)
+        _calib_layers(model, to_search_layers, calib_data_loader, origin_model_device, target_model_device)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        _search_linears(model, to_search_linears, calib_data_loader, origin_model_device, target_model_device, dump_search=dump_search)
+        _search_layers(model, to_search_layers, calib_data_loader, origin_model_device, target_model_device, dump_search=dump_search)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    if to_smooth_linears:
+    if to_smooth_layers:
         if verbose:
             print("start smooth ...")
-        _smooth_linears(to_smooth_linears)
+        _smooth_layers(to_smooth_layers)
     if verbose:
         print("start calibrate ...")
-    _calib_linears(model, to_calib_linears, calib_data_loader, origin_model_device, target_model_device)
+    _calib_layers(model, to_calib_layers, calib_data_loader, origin_model_device, target_model_device)
 
     if verbose:
         print("start replace ...")
-    _replace_linears(model, to_calib_linears, origin_model_device)
+    _replace_layers(model, to_calib_layers, origin_model_device)
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     if verbose:
