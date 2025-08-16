@@ -1,68 +1,102 @@
-from typing import Literal
+from typing import Literal, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from segquant.calibrator.calibrator import CalibratorRegistry
-from segquant.config import Calibrate, DType, Optimum
-from segquant.layers.splitter import BaseSplitter
-from segquant.optimum.optimizer import OptimizerRegistry
-from segquant.layers import ext_dict
 
-class SegmentLinear(nn.Module):
+from segquant.calibrator.calibrator import CalibratorRegistry
+from segquant.layers.splitter import BCHWSplitter
+from segquant.layers import ext_dict
+from segquant.optimum.optimizer import OptimizerRegistry
+
+class SegmentConv2d(nn.Module):
     def __init__(
         self,
-        in_features,
-        out_features,
-        bias=True,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | tuple,
+        stride: int | tuple = 1,
+        padding: int | tuple | str = 0,
+        dilation: int | tuple = 1,
+        groups: int = 1,
+        bias: bool = True,
+        padding_mode: str = 'zeros',
+        device=None,
+        dtype=None,
         seg_mode: Literal["input", "weight"] = "weight",
         chunks=1,
         chunksizes=None,
-        custom_weight_tensor=None,
-        custom_bias_tensor=None,
+        custom_weight_tensor: Optional[torch.Tensor] = None,
+        custom_bias_tensor: Optional[torch.Tensor] = None,
         input_quant_type=None,
         weight_quant_type=None,
         input_quant_args=None,
         weight_quant_args=None,
-        opt_type: Literal["default", "smooth", "svd"] = "default",
+        opt_type: Literal["default", "smooth"] = "default",
         opt_kwargs=None,
         calib_type: Literal["amax", "gptq"] = "amax",
         calib_kwargs=None,
-        device='cuda:0',
     ):
         super().__init__()
 
-        self.in_features = in_features
-        self.out_features = out_features
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
+        self.stride = stride if isinstance(stride, tuple) else (stride, stride)
+        self.padding = padding if isinstance(padding, tuple) else (padding, padding)
+        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+        self.groups = groups
+        self.bias = bias
+        self.padding_mode = padding_mode
+
+        if self.padding_mode != 'zeros':
+            # F.conv2d only supports 'zeros' padding mode
+            # todo: add F.pad support for other modes
+            raise ValueError("Only 'zeros' padding mode is supported for SegmentConv2d.")
+
+        assert self.in_channels % self.groups == 0, "in_channels must be divisible by groups"
+        assert self.out_channels % self.groups == 0, "out_channels must be divisible by groups"
+
+        weight_shape = (self.out_channels, self.in_channels // self.groups, *self.kernel_size)
         if custom_weight_tensor is not None:
-            assert (
-                custom_weight_tensor.shape[0] == out_features
-                and custom_weight_tensor.shape[1] == in_features
-            ), (
+            assert custom_weight_tensor.shape == weight_shape, (
                 f"Mismatched custom_weight_tensor shape! "
-                f"Expected ({out_features}, {in_features}), "
-                f"but got {custom_weight_tensor.shape}."
+                f"Expected {weight_shape}, but got {custom_weight_tensor.shape}."
             )
-            ### use new space
-            custom_weight_tensor = custom_weight_tensor.to(device).clone()
+
+            custom_weight_tensor = custom_weight_tensor.to(device, dtype=dtype).clone()
             if torch.cuda.is_available():
                 for i in range(torch.cuda.device_count()):
                     torch.cuda.synchronize(i)
         else:
-            custom_weight_tensor = torch.randn([self.out_features, self.in_features])
-        self.bias = bias
+            custom_weight_tensor = torch.randn(weight_shape, device=device, dtype=dtype)
+        
         self.bias_data = None
         if self.bias:
+            bias_shape = (self.out_channels,)
             if custom_bias_tensor is not None:
-                self.bias_data = custom_bias_tensor.to(device).clone()
+                assert custom_bias_tensor.shape == bias_shape, (
+                    f"Mismatched custom_bias_tensor shape! "
+                    f"Expected {bias_shape}, but got {custom_bias_tensor.shape}."
+                )
+                self.bias_data = custom_bias_tensor.to(device, dtype=dtype).clone()
             else:
-                self.bias_data = torch.zeros([self.out_features], device=device)
-
+                self.bias_data = torch.zeros(bias_shape, device=device, dtype=dtype)
+        
+        self.conv_kwargs = {
+            "bias": self.bias_data,
+            "stride": self.stride,
+            "padding": self.padding,
+            "dilation": self.dilation,
+            "groups": self.groups,
+        }
+        
         if seg_mode == "input":
-            target_features = in_features
+            target_features = in_channels
         elif seg_mode == "weight":
-            target_features = out_features
+            target_features = out_channels
         else:
             raise ValueError("seg_mode not found")
+        
         self.seg_mode = seg_mode
         self.chunks = chunks
         if chunksizes is None:
@@ -74,8 +108,8 @@ class SegmentLinear(nn.Module):
         else:
             assert len(chunksizes) == self.chunks and sum(chunksizes) == target_features
             self.chunksizes = chunksizes
-
-        self.splitter = BaseSplitter(self.chunksizes, seg_mode)
+        
+        self.splitter = BCHWSplitter(self.chunksizes, seg_mode)
 
         real_quant = False
         dual_scale = False
@@ -103,8 +137,8 @@ class SegmentLinear(nn.Module):
                 print(f"[Warning] Seglinear need [{kernel_type}] but not found")
                 real_quant = False
             else:
-                if ext_dict[kernel_type]['gemm_scaled_fn'] is None or \
-                    ext_dict[kernel_type]['gemm_dual_scaled_fn'] is None:
+                if ext_dict[kernel_type]['conv2d_scaled_fn'] is None or \
+                    ext_dict[kernel_type]['conv2d_dual_scaled_fn'] is None:
                     print(f"[Warning] Seglinear need [{kernel_type}] but function is None")
                     real_quant = False
 
@@ -130,7 +164,7 @@ class SegmentLinear(nn.Module):
 
         self.optimizer = OptimizerRegistry.create(
             opt_type,
-            layer_mode='linear',
+            layer_mode='conv2d',
             seg_mode=seg_mode,
             chunks=self.chunks,
             chunksizes=self.chunksizes,
@@ -158,26 +192,10 @@ class SegmentLinear(nn.Module):
             real_quant=real_quant,
             dual_scale=dual_scale,
             kernel_type=kernel_type,
+            layer_kwargs=self.conv_kwargs,
             **opt_kwargs,
         )
-
-    def trace(self, input_data):
-        input_chunks = self._chunk_x(input_data)
-        self.optimizer.trace(input_chunks)
-
-    def smooth(self):
-        self.optimizer.smooth()
-
-    def __repr__(self):
-        lines = [
-            f"  in_features={self.in_features}, out_features={self.out_features}, seg_mode={self.seg_mode}",
-            f"  chunks={self.chunks}, chunksize={self.chunksizes}",
-        ]
-        lines.append(f"  opt={repr(self.optimizer)}")
-        inner_content = ",\n".join(lines)
-        base = f"SegmentLinear(\n{inner_content}\n)"
-        return base
-
+    
     def _chunk_x(self, x):
         if self.seg_mode == "input":
             input_chunks = self.splitter.split_input(x)
@@ -187,7 +205,7 @@ class SegmentLinear(nn.Module):
             raise ValueError("seg_mode not found")
 
         return input_chunks
-
+    
     def _chunk_w(self, w):
         if self.seg_mode == "input":
             weight_chunks = [w]
@@ -196,6 +214,13 @@ class SegmentLinear(nn.Module):
         else:
             raise ValueError("seg_mode not found")
         return weight_chunks
+    
+    def trace(self, input_data):
+        input_chunks = self._chunk_x(input_data)
+        self.optimizer.trace(input_chunks)
+
+    def smooth(self):
+        self.optimizer.smooth()
 
     def calibrate(self, input_data):
         input_chunks = self._chunk_x(input_data)
@@ -203,7 +228,7 @@ class SegmentLinear(nn.Module):
 
     def finish_calibrate(self):
         self.optimizer.finish_calibrate()
-
+    
     def segment_forward(self, x, weight):
         # only for search
         input_chunks = self._chunk_x(x)
@@ -212,11 +237,11 @@ class SegmentLinear(nn.Module):
         output_chunks = []
         if self.seg_mode == 'weight':
             for w in weight_chunks:
-                output_chunks.append(F.linear(input_chunks[0], w))
+                output_chunks.append(F.conv2d(input_chunks[0], w, **self.conv_kwargs))
         elif self.seg_mode == 'input':
             this_weight_chunks = weight_chunks[0].split(self.chunksizes, dim=1)
             for i, inp in enumerate(input_chunks):
-                output_chunks.append(F.linear(inp, this_weight_chunks[i]))
+                output_chunks.append(F.conv2d(inp, this_weight_chunks[i], **self.conv_kwargs))
 
         return output_chunks
 
@@ -240,31 +265,3 @@ class SegmentLinear(nn.Module):
         else:
             raise ValueError("seg_mode not found")
         return (res + self.bias_data if self.bias else res)
-
-def create_segment_linear(
-    input_dtype: DType,
-    weight_dtype: DType,
-    opt: Optimum,
-    calib: Calibrate,
-    in_features,
-    out_features,
-    opt_kwargs,
-    calib_kwargs,
-    input_quant_args,
-    weight_quant_args,
-    **kwargs,
-):
-
-    return SegmentLinear(
-        in_features,
-        out_features,
-        input_quant_type=input_dtype.value,
-        weight_quant_type=weight_dtype.value,
-        opt_type=opt.value,
-        calib_type=calib.value,
-        opt_kwargs=opt_kwargs,
-        calib_kwargs=calib_kwargs,
-        input_quant_args=input_quant_args,
-        weight_quant_args=weight_quant_args,
-        **kwargs
-    )

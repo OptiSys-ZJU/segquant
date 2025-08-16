@@ -31,15 +31,6 @@ class BaseSplitter:
         self.split_sizes = split_sizes
         self.seg_input = seg_mode == "input"
 
-    def split_output(self, output: torch.Tensor):
-        """
-        Splits the output tensor into chunks based on `split_sizes` along the last dimension
-        if the segmentation mode is "weight". Raises a ValueError if the mode is "input".
-        """
-        if not self.seg_input:
-            return output.split(self.split_sizes, dim=-int(not self.seg_input))
-        raise ValueError("Spliter: split_output not work")
-
     def concat_output(self, output_chunks: List[torch.Tensor]):
         """
         Concatenates a list of output tensor chunks into a single tensor along the last dimension
@@ -58,15 +49,6 @@ class BaseSplitter:
             return list(weight.split(self.split_sizes, dim=int(self.seg_input)))
         raise ValueError("Spliter: split_weight not work")
 
-    def concat_weight(self, weight_chunks: List[torch.Tensor]):
-        """
-        Concatenates weight tensor chunks into a single tensor along the specified dimension
-        if the segmentation mode is "weight". Raises a ValueError if the mode is "input".
-        """
-        if not self.seg_input:
-            return torch.cat(weight_chunks, dim=int(self.seg_input))
-        raise ValueError("Spliter: concat_weight not work")
-
     def split_input(self, input_t: torch.Tensor):
         """
         Splits the input tensor into chunks based on `split_sizes` along the last dimension
@@ -76,11 +58,39 @@ class BaseSplitter:
             return input_t.split(self.split_sizes, dim=-1)
         raise ValueError("Spliter: split_input not work")
 
-    def concat_input(self, input_chunks: List[torch.Tensor]):
+
+class BCHWSplitter(BaseSplitter):
+    """
+    BCHWSplitter is a specialized splitter for tensors with dimensions in the order of
+    Batch, Channels, Height, and Width (BCHW). It inherits from BaseSplitter and provides
+    additional functionality for handling BCHW tensors.
+    """
+
+    def __init__(self, split_sizes, seg_mode: Literal["input", "weight"] = "weight"):
+        super().__init__(split_sizes, seg_mode)
+    
+    def split_weight(self, weight: torch.Tensor):
         """
-        Concatenates a list of input tensor chunks into a single tensor along the last dimension
-        if the segmentation mode is "input". Raises a ValueError if the mode is "weight".
+        Splits the weight tensor along the channel dimension (dim=1) for BCHW tensors.
+        """
+        if not self.seg_input:
+            return list(weight.split(self.split_sizes, dim=1)) # dim=1 for channels
+        raise ValueError("BCHWSplitter: split_weight not work")
+    
+    def split_input(self, input_t: torch.Tensor):
+        """
+        Splits the input tensor along the channel dimension (dim=1) for BCHW tensors.
         """
         if self.seg_input:
-            return torch.concat(input_chunks, dim=-1)
-        raise ValueError("Spliter: concat_input not work")
+            return input_t.split(self.split_sizes, dim=1) # dim=1 for channels
+        raise ValueError("BCHWSplitter: split_input not work")
+    
+    def concat_output(self, output_chunks: List[torch.Tensor]):
+        """
+        Concatenates the output tensor chunks along the channel dimension (dim=1) for BCHW tensors.
+        """
+        if not self.seg_input:
+            return torch.cat(output_chunks, dim=1) # dim=1 for channels
+        raise ValueError("BCHWSplitter: concat_output not work")
+
+    

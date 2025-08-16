@@ -11,6 +11,7 @@ from segquant.layers import ext_dict
 class BaseOptimizer:
     def __init__(
         self,
+        layer_mode,
         seg_mode,
         chunks,
         chunksizes,
@@ -20,9 +21,10 @@ class BaseOptimizer:
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
-        device=None,
+        layer_kwargs={},
     ):
         super().__init__()
+        self.layer_mode = layer_mode
         self.seg_mode = seg_mode
         self.chunks = chunks
         self.chunksizes = chunksizes
@@ -31,15 +33,21 @@ class BaseOptimizer:
         self.weight_calibrators = weight_calibrators
         self.real_quant = real_quant
         self.kernel_type = kernel_type
-
-        # unused
-        self.device = device
+        self.layer_kwargs = layer_kwargs
 
         self.dual_scale = dual_scale
-        if self.real_quant and dual_scale:
-            self.func_name = 'gemm_dual_scaled_fn'
+        if self.layer_mode == 'linear':
+            if self.real_quant and dual_scale:
+                self.func_name = 'gemm_dual_scaled_fn'
+            else:
+                self.func_name = 'gemm_scaled_fn'
+        elif self.layer_mode == 'conv2d':
+            if self.real_quant and dual_scale:
+                self.func_name = 'conv2d_dual_scaled_fn'
+            else:
+                self.func_name = 'conv2d_scaled_fn'
         else:
-            self.func_name = 'gemm_scaled_fn'
+            raise ValueError(f"Unsupported layer mode: {self.layer_mode}")
 
         self.has_calibrated = False
 
@@ -81,14 +89,17 @@ class BaseOptimizer:
                     return wrapper
                 return decorator
 
-            def _create_wrapped_linear_func(q):
+            def _create_wrapped_layer_func(q):
                 @quantize_input_decorator(q)
-                def wrapped_linear(input, weight, bias=None):
-                    return F.linear(input, weight, bias)
-                return wrapped_linear
+                def wrapped_layer(input, weight):
+                    if self.layer_mode == 'conv2d':
+                        return F.conv2d(input, weight, **self.layer_kwargs)
+                    elif self.layer_mode == 'linear':
+                        return F.linear(input, weight, **self.layer_kwargs)
+                return wrapped_layer
 
             funcs = [
-                _create_wrapped_linear_func(
+                _create_wrapped_layer_func(
                     self.input_calibrators[input_quantized_indices[i]]
                 )
                 for i in range(self.chunks)
@@ -119,16 +130,8 @@ class BaseOptimizer:
             self.weight_calibrators[i] = weight_calibrator.quantizer
 
         self.has_calibrated = True
-
-    def process_step(self, err):
-        pass
-
-    def to_cpu(self):
-        self.weight_chunks = [chunk.to('cpu') for chunk in self.weight_chunks]
-        self.input_calibrators = [calibrator.to('cpu') for calibrator in self.input_calibrators]
-        self.weight_calibrators = [calibrator.to('cpu') for calibrator in self.weight_calibrators]
     
-    def to_cuda(self, device):
+    def to(self, device):
         self.weight_chunks = [chunk.to(device) for chunk in self.weight_chunks]
         self.input_calibrators = [calibrator.to(device) for calibrator in self.input_calibrators]
         self.weight_calibrators = [calibrator.to(device) for calibrator in self.weight_calibrators]
@@ -159,6 +162,7 @@ class OptimizerRegistry:
 class DefaultOptimizer(BaseOptimizer):
     def __init__(
         self,
+        layer_mode,
         seg_mode,
         chunks,
         chunksizes,
@@ -168,12 +172,13 @@ class DefaultOptimizer(BaseOptimizer):
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
-        device=None,
+        layer_kwargs={},
         **kwargs,
     ):
         assert len(input_calibrators) == 1 or len(weight_calibrators) == 1, \
             "Either input_calibrators or weight_calibrators must have a length of 1."
         super().__init__(
+            layer_mode,
             seg_mode,
             chunks,
             chunksizes,
@@ -183,7 +188,7 @@ class DefaultOptimizer(BaseOptimizer):
             real_quant,
             dual_scale,
             kernel_type,
-            device,
+            layer_kwargs,
         )
 
         if seg_mode == 'weight':
@@ -262,9 +267,6 @@ class DefaultOptimizer(BaseOptimizer):
 
         return quantized_output_chunks
 
-    def process_step(self, err):
-        pass
-
 @OptimizerRegistry.register("smooth")
 class SmoothOptimizer(BaseOptimizer):
     def __init__(
@@ -278,7 +280,6 @@ class SmoothOptimizer(BaseOptimizer):
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
-        device=None,
         alpha=0.5,
         search_alpha_config=None,
         verbose=False,
@@ -305,7 +306,6 @@ class SmoothOptimizer(BaseOptimizer):
             real_quant,
             dual_scale,
             kernel_type,
-            device,
         )
 
         self.max_w = []
@@ -423,12 +423,8 @@ class SmoothOptimizer(BaseOptimizer):
             self._trace_max_w(self.weight_chunks)
             self.has_traced_w = True
     
-    def to_cpu(self):
-        super().to_cpu()
-        self.s = [s.to('cpu') for s in self.s]
-    
-    def to_cuda(self, device):
-        super().to_cuda(device)
+    def to(self, device):
+        super().to(device)
         self.s = [s.to(device) for s in self.s]
 
     def smooth(self):
@@ -590,7 +586,6 @@ class SVDOptimizer(SmoothOptimizer):
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
-        device=None,
         alpha=0.5,
         low_rank=32,
         search_alpha_config=None,
@@ -607,7 +602,6 @@ class SVDOptimizer(SmoothOptimizer):
             real_quant,
             dual_scale,
             kernel_type,
-            device,
             alpha,
             search_alpha_config,
             verbose,
@@ -645,13 +639,8 @@ class SVDOptimizer(SmoothOptimizer):
             f")"
         )
     
-    def to_cpu(self):
-        super().to_cpu()
-        self.l1s = [l1.to('cpu') for l1 in self.l1s]
-        self.l2s = [l2.to('cpu') for l2 in self.l2s]
-    
-    def to_cuda(self, device):
-        super().to_cuda(device)
+    def to(self, device):
+        super().to(device)
         self.l1s = [l1.to(device) for l1 in self.l1s]
         self.l2s = [l2.to(device) for l2 in self.l2s]
 
