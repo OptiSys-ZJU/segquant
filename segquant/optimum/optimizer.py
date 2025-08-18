@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from segquant.layers import ext_dict
+from segquant.utils.im2col import im2col_input, im2col_weight
 
 
 class BaseOptimizer:
@@ -33,6 +34,12 @@ class BaseOptimizer:
         self.weight_calibrators = weight_calibrators
         self.real_quant = real_quant
         self.kernel_type = kernel_type
+
+        if "kernel_size" in layer_kwargs:
+            self.kernel_size = layer_kwargs["kernel_size"]
+            layer_kwargs.pop("kernel_size")
+        else:
+            self.kernel_size = None
         self.layer_kwargs = layer_kwargs
 
         self.dual_scale = dual_scale
@@ -50,6 +57,20 @@ class BaseOptimizer:
             raise ValueError(f"Unsupported layer mode: {self.layer_mode}")
 
         self.has_calibrated = False
+
+    def _im2col_weight(self, x):
+        assert x.dim() == 4, "Weight tensor x must be 4D for im2col_weight."
+        return im2col_weight(x, groups=self.layer_kwargs['groups']) # [groups, out_per_group, in_per_group*kh*kw]
+
+    def _im2col_input(self, x):
+        return im2col_input(
+            x,
+            kernel_size=self.kernel_size,
+            stride=self.layer_kwargs["stride"],
+            padding=self.layer_kwargs["padding"],
+            dilation=self.layer_kwargs["dilation"],
+            groups=self.layer_kwargs["groups"],
+        )  # [groups, batch*Hout*Wout, in_per_group*kh*kw]
 
     def _get_funcs(self, input_quantized_indices, weight_quantized_indices):
         if self.real_quant:

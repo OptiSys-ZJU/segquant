@@ -159,6 +159,8 @@ class GPTQCalibrator(BaseCalibrator):
         self.quantizer.reset()
 
     def calibrate(self, x, input_data):
+        assert x.dim() == 2, "Weight tensor x must be 2D for GPTQCalibrator."
+
         if len(input_data.shape) == 2:
             this_batch = 1
         elif len(input_data.shape) == 1:
@@ -219,6 +221,8 @@ class GPTQCalibrator(BaseCalibrator):
         return Q_repacked.reshape(-1)  # shape: (out * cols // 2,)
 
     def finish_calibrate(self, weight_data=None):
+        assert weight_data.dim() == 2, "Weight tensor must be 2D for GPTQCalibrator."
+
         blocksize = self.blocksize
         percdamp = self.percdamp
         groupsize = self.groupsize
@@ -321,6 +325,7 @@ class GPTQCalibrator(BaseCalibrator):
             Q = Q[:, invperm]
         
         if hasattr(self.quantizer, 'num_bits') and self.quantizer.num_bits == 4 and self.quantizer.real_quant:
+            # For int4 quantization, convert column-packed 1D to row-packed 1D
             Q = self.colpacked1d_to_rowpacked1d(Q, W.shape[0], W.shape[1])
 
         if self.data_type == 'weight':

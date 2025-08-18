@@ -83,6 +83,7 @@ class SegmentConv2d(nn.Module):
                 self.bias_data = torch.zeros(bias_shape, device=device, dtype=dtype)
         
         self.conv_kwargs = {
+            "kernel_size": self.kernel_size,
             "bias": self.bias_data,
             "stride": self.stride,
             "padding": self.padding,
