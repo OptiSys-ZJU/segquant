@@ -286,7 +286,6 @@ class IntQuantizer(BaseQuantizer):
         # axis=0, amax(dim=1), scale shape(out,1)
         ### axis for weight [out, in, kh, kw]
         # axis=0, amax(dim=(1,2,3)), scale shape(out,1,1,1)
-        # axis=(0,1), amax(dim=(2,3)), scale shape(out,in,1,1)
         ### axis for input [batch, in]
         # axis=0, amax(dim=1), scale shape(batch,1)
         ### axis for input [batch, in, H, W]

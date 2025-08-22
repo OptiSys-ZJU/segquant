@@ -25,12 +25,12 @@ def im2col_input(x: torch.Tensor, kernel_size, stride=1, padding=0, dilation=1, 
     return X_col
 
 def im2col_weight(weight: torch.Tensor, groups=1):
-    # weight shape: [out, C_per_group, kh, kw]
+    # weight shape: [out, in_per_group, kh, kw]
     F_out = weight.shape[0]
     if F_out % groups != 0:
         raise ValueError(f"Output channels {F_out} not divisible by groups {groups}")
     F_per_group = F_out // groups
-    W_col = weight.reshape(groups, F_per_group, -1) # [groups, out_per_group, C_per_group * kh * kw]
+    W_col = weight.reshape(groups, F_per_group, -1) # [groups, out_per_group, in_per_group * kh * kw]
     return W_col
 
 def calc_conv_output_size(H_in, W_in, kernel_size, stride=1, padding=0, dilation=1):
