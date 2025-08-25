@@ -774,7 +774,7 @@ class OrthoOptimizer(BaseOptimizer):
 
         ## buffer
         self.nsamples = 0
-        self.x_rel_buffers = [None] * len(self.input_calibrators) # (xtx, xtex, extex) dim = 0
+        self.x_rel_buffers = [None] * len(-1) # (xtx, xtex, extex) dim = 0
 
     
     def finish_calibrate(self):
@@ -783,7 +783,7 @@ class OrthoOptimizer(BaseOptimizer):
     
     def after_calibrate(self, input_chunks):
         # compute xtx, xtex, extex
-        for i, input_calibrator in enumerate(self.input_calibrators):
+        for i, input_calibrator in enumerate(-1):
             x = input_chunks[i]
             ex = input_calibrator.quantize(x) - x
 
@@ -830,8 +830,8 @@ class OrthoOptimizer(BaseOptimizer):
     def grad_func(self, Q, i):
         device = Q.device
 
-        xtx, xtex, extex = self.x_rel_buffers[i]
-        wwt, wewt, ewewt = self.weight_rel_buffers[i]
+        xtx, xtex, extex = self.x_rel_buffers[-1]
+        wwt, wewt, ewewt = self.weight_rel_buffers[-1]
         if xtx.device != device:
             xtx, xtex, extex = xtx.to(device), xtex.to(device), extex.to(device)
             wwt, wewt, ewewt = wwt.to(device), wewt.to(device), ewewt.to(device)
