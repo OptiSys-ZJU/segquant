@@ -46,13 +46,16 @@ class CayleySGD(CayleyOptimizer):
             grad.add_(
                 self.weight_decay, param
             )  # grad = grad + weight_decay * param
+        
+        if isinstance(self.M, int):  
+            self.M = torch.zeros_like(param)
 
-        self.M = self.momentum * self.M + (1 - self.dampening) * grad
+        self.M.mul_(self.momentum).add_(grad, alpha=(1 - self.dampening))
 
-        Wk_hat = (
-            self.M @ param.t()
-            - 0.5 * param @ param.t() @ self.M @ param.t()
-        )
+        # precompute PTP = param @ param^T
+        PTP = param @ param.t()
+        Wk_hat = self.M @ param.t()
+        Wk_hat.addmm_(PTP, self.M @ param.t(), beta=1.0, alpha=-0.5)  # in-place
         Wk = Wk_hat - Wk_hat.t()
 
         alpha = min(self.q * 2 / (matrix_norm_one(Wk) + epsilon), self.lr)

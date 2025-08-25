@@ -1,4 +1,5 @@
 from functools import partial
+import math
 from typing import List
 from collections import deque
 
@@ -718,3 +719,129 @@ class SVDOptimizer(SmoothOptimizer):
         ]
 
         return quantized_output_chunks
+
+
+@OptimizerRegistry.register("ortho")
+class OrthoOptimizer(BaseOptimizer):
+    def __init__(
+        self,
+        layer_mode,
+        seg_mode,
+        chunks,
+        chunksizes,
+        weight_chunks,
+        input_calibrators,
+        weight_calibrators,
+        real_quant=False,
+        dual_scale=False,
+        kernel_type=None,
+        layer_kwargs={},
+        verbose=False,
+        cpu_storage=False,
+        cayley_optimizer_config={},
+        **kwargs,
+    ):
+        '''
+        pipeline:
+            determine all scale params(scale, zero_point keep unchanged) for input and weight
+            find opt Q
+
+
+        '''
+        assert len(input_calibrators) == len(weight_calibrators) and \
+            len(weight_calibrators) == len(weight_chunks), \
+            f"Lengths mismatch: input_calibrators={len(input_calibrators)}, " \
+            f"weight_calibrators={len(weight_calibrators)}, " \
+            f"weight_chunks={len(weight_chunks)}"
+        
+        super().__init__(
+            layer_mode=layer_mode,
+            seg_mode=seg_mode,
+            chunks=chunks,
+            chunksizes=chunksizes,
+            weight_chunks=weight_chunks,
+            input_calibrators=input_calibrators,
+            weight_calibrators=weight_calibrators,
+            real_quant=real_quant,
+            dual_scale=dual_scale,
+            kernel_type=kernel_type,
+            layer_kwargs=layer_kwargs,
+        )
+
+        self.cpu_storage = cpu_storage
+        if self.cpu_storage:
+            print('[Warning] OrthoOptimizer set CPU Storage.')
+
+        ## buffer
+        self.nsamples = 0
+        self.x_rel_buffers = [None] * len(self.input_calibrators) # (xtx, xtex, extex) dim = 0
+
+    
+    def finish_calibrate(self):
+        # todo: match smooth's finish_calibrate
+        super().finish_calibrate()
+    
+    def after_calibrate(self, input_chunks):
+        # compute xtx, xtex, extex
+        for i, input_calibrator in enumerate(self.input_calibrators):
+            x = input_chunks[i]
+            ex = input_calibrator.quantize(x) - x
+
+            if len(x.shape) == 2:
+                this_batch = 1
+            elif len(x.shape) == 1:
+                x = x.unsqueeze(0)
+                this_batch = 1
+            else:
+                x = x.reshape((-1, x.shape[-1]))
+                this_batch = x.shape[0]
+            
+            x = x.to(dtype=torch.float32, device=x.device).t()  # (in, b)
+            ex = ex.to(dtype=torch.float32, device=x.device).t()  # (in, b)
+            device = x.device
+
+            if self.x_rel_buffers[i] is None:
+                self.x_rel_buffers[i] = torch.zeros(
+                    (3, x.shape[0], x.shape[0]),
+                    device='cpu' if self.cpu_storage else device,
+                    dtype=torch.float32,
+                    pin_memory=True if self.cpu_storage else False
+                )
+
+            if self.cpu_storage:
+                buffer = self.x_rel_buffers[i].to(device, non_blocking=True)
+            else:
+                buffer = self.x_rel_buffers[i]
+
+            buffer.mul_(self.nsamples / (self.nsamples + this_batch))
+            self.nsamples += this_batch
+
+            scale = math.sqrt(2 / self.nsamples)
+            x.mul_(scale)
+            ex.mul_(scale)
+
+            buffer[0].addmm_(x, x.t(), beta=1.0, alpha=1.0)
+            buffer[1].addmm_(x, ex.t(), beta=1.0, alpha=1.0)
+            buffer[2].addmm_(ex, ex.t(), beta=1.0, alpha=1.0)
+
+            if self.cpu_storage:
+                self.x_rel_buffers[i].copy_(buffer, non_blocking=True)
+
+    def grad_func(self, Q, i):
+        device = Q.device
+
+        xtx, xtex, extex = self.x_rel_buffers[i]
+        wwt, wewt, ewewt = self.weight_rel_buffers[i]
+        if xtx.device != device:
+            xtx, xtex, extex = xtx.to(device), xtex.to(device), extex.to(device)
+            wwt, wewt, ewewt = wwt.to(device), wewt.to(device), ewewt.to(device)
+
+        Q_T = Q.T
+        grad = (xtx @ Q @ ewewt
+                + wwt @ Q @ extex
+                + xtex @ Q_T @ wewt
+                + wewt @ Q_T @ xtex
+                + xtex @ ewewt
+                + wewt @ extex)
+        return grad
+
