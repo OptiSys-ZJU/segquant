@@ -72,3 +72,37 @@ segquant-gptq:
       type: "int8"
     weight_quant:
       type: "int8"
+
+
+segquant-ortho:
+  default:
+    enable: true
+    seglinear: false
+    search_patterns: []
+    real_quant: true
+    opt:
+      type: "ortho"
+      cpu_storage: false
+      sub_optimizer_type: "default"
+      sub_optimizer_kwargs:
+        dummy: "dummy"
+      cayley_optimizer_config:
+        type: "sgd"
+        lr: 0.01
+        momentum: 0.9
+        dampening: 0
+        weight_decay: 0
+      cayley_stop_criteria:
+        max_steps: 100
+        grad_tol: 0.00000001
+        grad_change_tol: 0.00000001
+        patience: 5
+        ema_grad_decay: 0.9
+        check_every: 1
+      verbose: true
+    calib:
+      type: "amax"
+    input_quant:
+      type: "int8"
+    weight_quant:
+      type: "int8"

@@ -148,7 +148,7 @@ if __name__ == "__main__":
     parser.add_argument('-d', '--dataset-type', type=str, default='COCO', choices=['COCO', 'MJHQ', 'DCI'], help='Type of the dataset to use')
     parser.add_argument('-m', '--model-type', type=str, default='sd3', choices=['flux', 'sd3', 'sdxl'], help='Type of the model to benchmark')
     parser.add_argument('-l', '--layer-type', type=str, default='dit', choices=['dit', 'controlnet', 'unet'], help='Type of the layer to benchmark')
-    parser.add_argument('-q', '--quant-type', type=str, default='int8w8a8', help='Type of the quant to benchmark')
+    parser.add_argument('-q', '--quant-type', type=str, default='intw8a8', help='Type of the quant to benchmark')
     parser.add_argument('-e', '--exp-name', type=str, default='baseline', help='Name of the experiment')
     parser.add_argument('-c', '--config-dir', type=str, default='config', help='Path to the configuration file')
     parser.add_argument('-C', '--calibrate-config', type=str, default='config/calibrate_config.json', help='Path to the calibration configuration file')

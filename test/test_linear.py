@@ -749,7 +749,6 @@ def test_gptq():
     print('diff2', torch.norm(a - c).item())
     print('diff3', torch.norm(b - c).item())
 
-
 def test_mix_real():
     def step_mix(atype, wtype, axis=False, dual=False):
         test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
@@ -838,6 +837,114 @@ def test_mix_real():
             for dual in [False, True]:
                 step_mix(atype, wtype, axis, dual)
 
+def test_ortho():
+    test_model = TestModel(embedding_dim)
+    config = {
+        "default": {
+            "enable": True,
+            "seglinear": False,
+            "search_patterns": [],
+            "real_quant": False,
+            "opt": {
+                "type": Optimum.DEFAULT,
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+        },
+    }
+    default_model = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config,
+        tmp_device=None,
+        verbose=True,
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+    )
+    #######################################
+    print("********************************")
+    config = {
+        "default": {
+            "enable": True,
+            "seglinear": False,
+            "search_patterns": [],
+            "real_quant": False,
+            "opt": {
+                "type": Optimum.ORTHO,
+                "verbose": True,
+                "sub_optimizer_type": "default",
+                "sub_optimizer_kwargs": {
+
+                },
+                "cayley_optimizer_config": {
+                    "type": "sgd",
+                    "lr": 0.01,
+                    "momentum": 0.9,
+                    "dampening": 0,
+                    "weight_decay": 0,
+                },
+                # "cayley_optimizer_config": {
+                #     "type": "adam",
+                #     "lr": 0.1,
+                #     "weight_decay": 0,
+                # },
+                "cayley_stop_criteria": {
+                    "max_steps": 100,
+                    "grad_tol": 1e-8,
+                    "grad_change_tol": 1e-8,
+                    "patience": 5,
+                    "ema_grad_decay": 0.9,
+                    "check_every": 1,
+                },
+            },
+            "calib": {
+                "type": Calibrate.AMAX,
+            },
+            "input_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+            "weight_quant": {
+                "type": DType.INT8,
+                "axis": None,
+            },
+        },
+    }
+    segquant_model = quantize(
+        copy.deepcopy(test_model),
+        seg_data_loader,
+        config,
+        tmp_device=None,
+        verbose=True,
+        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+    )
+    ######################################
+    x_generator = torch.Generator()
+    x_generator.manual_seed(1234)
+    x = torch.rand(2, embedding_dim, generator=x_generator)
+    emb = torch.rand(2, embedding_dim, generator=x_generator)
+    res = test_model.forward(x, emb)
+    print("origin:", res)
+    a = res[0]
+    res = default_model.forward(x, emb)
+    print("default:", res)
+    b = res[0]
+    res = segquant_model.forward(x, emb)
+    print("ortho:", res)
+    c = res[0]
+
+    print('origin-default', torch.norm(a - b).item())
+    print('origin-segquant', torch.norm(a - c).item())
+    print('default-segquant', torch.norm(b - c).item())
 
 if __name__ == "__main__":
-    test_mix_real()
+    print("embedding_dim =", embedding_dim)
+    test_ortho()

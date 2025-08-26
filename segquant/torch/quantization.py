@@ -182,7 +182,41 @@ def _calib_layers(
         h.remove()
     
     for l in tqdm(to_calib_layers.values(), desc="[Finishing Calibrate Layers]"):
-        l.finish_calibrate()
+        l.optimizer.finish_calibrate()
+
+def _des_layers(
+    model: nn.Module,
+    to_des_layers: dict,
+    calib_data_loader: torch.utils.data.DataLoader,
+    origin_model_device,
+    target_model_device,
+):
+    hooks = []
+    for name, module in model.named_modules():
+        if name in to_des_layers:
+
+            def get_hook(n):
+                def hook_fn(_mod, inp, _out, n=n):
+                    to_des_layers[n].after_calibrate(_move_to_device(inp[0], target_model_device))
+
+                return hook_fn
+
+            hooks.append(module.register_forward_hook(get_hook(name)))
+
+    model.eval()
+    with torch.no_grad():
+        for batch in tqdm(
+            calib_data_loader, desc="[After-Calib Layers] Running model on calibration data"
+        ):
+            this_input_tuple = _move_to_device(batch[0], origin_model_device)
+            _ = model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(
+                **this_input_tuple
+            )
+    for h in hooks:
+        h.remove()
+
+    for l in tqdm(to_des_layers.values(), desc="[Cayley Descending Layers]"):
+        l.optimizer.cayley_descent()
 
 def _search_layers(
     model: nn.Module,
@@ -308,7 +342,7 @@ def quantize(
     
     layers = {
         'linear': _get_all_layers(model, final_config["default"]['enable'], final_config, layer_cls=nn.Linear),
-        'conv2d': _get_all_layers(model, final_config["default"]['enable'], final_config, layer_cls=nn.Conv2d),
+        # 'conv2d': _get_all_layers(model, final_config["default"]['enable'], final_config, layer_cls=nn.Conv2d),
     }
     if verbose:
         for k, v in layers.items():
@@ -388,6 +422,11 @@ def quantize(
         if hasattr(v.optimizer, 'search_alpha') and v.optimizer.search_alpha
     }
 
+    to_des_layers = {
+        k: v for k, v in to_calib_layers.items()
+        if v.opt_type == 'ortho'
+    }
+
     # search_recovery_file
     if search_recovery_file is not None:
         print(f"[Search Recovery] Loading search recovery file: {search_recovery_file}")
@@ -432,6 +471,9 @@ def quantize(
     if verbose:
         print("start calibrate ...")
     _calib_layers(model, to_calib_layers, calib_data_loader, origin_model_device, target_model_device)
+    if verbose:
+        print("start cayley descent ...")
+    _des_layers(model, to_des_layers, calib_data_loader, origin_model_device, target_model_device)
 
     if verbose:
         print("start replace ...")

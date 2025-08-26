@@ -20,6 +20,29 @@ class CayleyOptimizer:
         return Y
 
 
+class CayleyRegistry:
+    _registry = {}
+
+    @classmethod
+    def register(cls, name):
+        def wrapper(optimizer_cls):
+            cls._registry[name] = optimizer_cls
+            return optimizer_cls
+
+        return wrapper
+
+    @classmethod
+    def get(cls, name):
+        return cls._registry.get(name)
+
+    @classmethod
+    def create(cls, name, **kwargs):
+        optimizer_cls = cls.get(name)
+        if optimizer_cls is None:
+            raise ValueError(f"CayleyOptimizer '{name}' not found in registry.")
+        return optimizer_cls(**kwargs)
+
+@CayleyRegistry.register("sgd")
 class CayleySGD(CayleyOptimizer):
     def __init__(
         self,
@@ -40,8 +63,8 @@ class CayleySGD(CayleyOptimizer):
 
         self.M = 0
 
-    def step(self, param: torch.Tensor):
-        grad = self.grad_func(param)
+    def step(self, param: torch.Tensor, **kwargs):
+        grad = self.grad_func(param, **kwargs)
         if self.weight_decay != 0:
             grad.add_(
                 self.weight_decay, param
@@ -63,9 +86,9 @@ class CayleySGD(CayleyOptimizer):
 
         self.M = Wk @ param
 
-        return param_next
+        return param_next, grad
 
-
+@CayleyRegistry.register("adam")
 class CayleyAdam(CayleyOptimizer):
     def __init__(
         self,
@@ -86,10 +109,10 @@ class CayleyAdam(CayleyOptimizer):
         self.M = 0
         self.v = 1
 
-    def step(self, param: torch.Tensor):
+    def step(self, param: torch.Tensor, **kwargs):
         beta1, beta2 = self.betas
 
-        grad = self.grad_func(param)
+        grad = self.grad_func(param, **kwargs)
         if self.weight_decay != 0:
             grad.add_(self.weight_decay, param)
 
@@ -112,7 +135,7 @@ class CayleyAdam(CayleyOptimizer):
             beta2 * self.betas_power[1],
         )
 
-        return param_next
+        return param_next, grad
 
 
 if __name__ == "__main__":

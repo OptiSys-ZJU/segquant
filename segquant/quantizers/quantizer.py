@@ -371,19 +371,19 @@ class IntQuantizer(BaseQuantizer):
             if self.dual_scale:
                 return (
                     f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
-                    f"real_quant={self.real_quant}, enable={not self.fake}, dynamic={self.dynamic}, "
+                    f"real_quant={self.real_quant}, enable={not self.dummy}, dynamic={self.dynamic}, "
                     f"dual_scale=True, axis={self.axis}, "
                     f"neg_amax={self.repr_amax(self.neg_amax)}, pos_amax={self.repr_amax(self.pos_amax)})"
                 )
             return (
                 f"IntQuantizer(num_bits={self.num_bits}, symmetric=True, "
-                f"real_quant={self.real_quant}, enable={not self.fake}, dynamic={self.dynamic}, "
+                f"real_quant={self.real_quant}, enable={not self.dummy}, dynamic={self.dynamic}, "
                 f"dual_scale=False, axis={self.axis}, "
                 f"amax={self.repr_amax(self.amax)})"
             )
         return (
             f"IntQuantizer(num_bits={self.num_bits}, symmetric=False, axis={self.axis}, "
-            f"real_quant={self.real_quant}, enable={not self.fake}, dynamic={self.dynamic}, "
+            f"real_quant={self.real_quant}, enable={not self.dummy}, dynamic={self.dynamic}, "
             f"amin={self.amin:.4f}, amax={self.amax:.4f}, zero_point={self.zero_point:.4f})"
         )
 
@@ -607,13 +607,13 @@ class FloatQuantizer(BaseQuantizer):
         if self.dual_scale:
             return (
                 f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
-                f"real_quant={self.real_quant}, enable={not self.fake}, dynamic={self.dynamic}, "
+                f"real_quant={self.real_quant}, enable={not self.dummy}, dynamic={self.dynamic}, "
                 f"axis={self.axis}, dual_scale=True, "
                 f"neg_amax={self.repr_amax(self.neg_amax)}, pos_amax={self.repr_amax(self.pos_amax)})"
             )
         return (
             f"FloatQuantizer(exp_bits={self.exp_bits}, mant_bits={self.mant_bits}, "
-            f"real_quant={self.real_quant}, enable={not self.fake}, dynamic={self.dynamic}, "
+            f"real_quant={self.real_quant}, enable={not self.dummy}, dynamic={self.dynamic}, "
             f"axis={self.axis}, dual_scale=False, "
             f"amax={self.repr_amax(self.amax)})"
         )

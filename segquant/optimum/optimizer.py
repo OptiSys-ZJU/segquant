@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from segquant.layers import ext_dict
+from segquant.utils.cayley_optimizer import CayleyRegistry
 from segquant.utils.im2col import im2col_input, im2col_weight
 
 
@@ -58,6 +59,11 @@ class BaseOptimizer:
             raise ValueError(f"Unsupported layer mode: {self.layer_mode}")
 
         self.has_calibrated = False
+    
+    def _broadcast_list(self, l):
+        if len(l) == 1:
+            return l * self.chunks
+        return l
 
     def _im2col_weight(self, x):
         assert x.dim() == 4, "Weight tensor x must be 4D for im2col_weight."
@@ -391,11 +397,6 @@ class SmoothOptimizer(BaseOptimizer):
             f")"
         )
 
-    def _broadcast_list(self, l):
-        if len(l) == 1:
-            return l * self.chunks
-        return l
-
     def _broadcast_lists(self, a, b):
         if len(a) == 1 and len(b) > 1:
             return a * len(b), b
@@ -722,7 +723,7 @@ class SVDOptimizer(SmoothOptimizer):
 
 
 @OptimizerRegistry.register("ortho")
-class OrthoOptimizer(BaseOptimizer):
+class OrthoOptimizer:
     def __init__(
         self,
         layer_mode,
@@ -738,7 +739,10 @@ class OrthoOptimizer(BaseOptimizer):
         layer_kwargs={},
         verbose=False,
         cpu_storage=False,
+        sub_optimizer_type="default",
+        sub_optimizer_kwargs={},
         cayley_optimizer_config={},
+        cayley_stop_criteria={},
         **kwargs,
     ):
         '''
@@ -754,46 +758,95 @@ class OrthoOptimizer(BaseOptimizer):
             f"weight_calibrators={len(weight_calibrators)}, " \
             f"weight_chunks={len(weight_chunks)}"
         
-        super().__init__(
-            layer_mode=layer_mode,
-            seg_mode=seg_mode,
-            chunks=chunks,
-            chunksizes=chunksizes,
-            weight_chunks=weight_chunks,
-            input_calibrators=input_calibrators,
-            weight_calibrators=weight_calibrators,
-            real_quant=real_quant,
-            dual_scale=dual_scale,
-            kernel_type=kernel_type,
-            layer_kwargs=layer_kwargs,
+        ### sub optimizer
+        self.sub_optimizer = OptimizerRegistry.create(
+            sub_optimizer_type,
+            layer_mode = layer_mode,
+            seg_mode = seg_mode,
+            chunks = chunks,
+            chunksizes = chunksizes,
+            weight_chunks = weight_chunks,
+            input_calibrators = input_calibrators,
+            weight_calibrators = weight_calibrators,
+            real_quant = real_quant,
+            dual_scale = dual_scale,
+            kernel_type = kernel_type,
+            layer_kwargs = layer_kwargs,
+            **sub_optimizer_kwargs
         )
 
         self.cpu_storage = cpu_storage
         if self.cpu_storage:
             print('[Warning] OrthoOptimizer set CPU Storage.')
 
+        self.verbose = verbose
+
+        self.has_descended = False
+
         ## buffer
         self.nsamples = 0
-        self.x_rel_buffers = [None] * len(-1) # (xtx, xtex, extex) dim = 0
+        self.x_rel_buffers = [None] * len(self.input_calibrators) # (xtx, xtex, extex) dim = 0
+        self.weight_rel_buffers = [None] * len(self.weight_calibrators) # (wwt, wewt, ewewt) dim = 0
 
-    
-    def finish_calibrate(self):
-        # todo: match smooth's finish_calibrate
-        super().finish_calibrate()
+        ## opt
+        self.cayley_stop_criteria = cayley_stop_criteria
+        this_cayley_optimizer_config = cayley_optimizer_config.copy()
+        cayley_type = this_cayley_optimizer_config.pop('type')
+        self.cayley_optimizers = [CayleyRegistry.create(
+            cayley_type,
+            grad_func=self.grad_func,
+            **this_cayley_optimizer_config
+        )] * self.chunks
+
+        if len(self.weight_chunks) != self.chunks:
+            self.Q = [torch.eye(self.weight_chunks[-1].shape[1], dtype=torch.float32)] * self.chunks
+        else:
+            self.Q = [torch.eye(chunk.shape[1], dtype=torch.float32) for chunk in self.weight_chunks]
+
+    def __getattr__(self, name):
+        return getattr(self.sub_optimizer, name)
+
+    def __setattr__(self, name, value):
+        if name == "sub_optimizer" or name in self.__dict__:
+            super().__setattr__(name, value)
+        else:
+            setattr(self.sub_optimizer, name, value)
     
     def after_calibrate(self, input_chunks):
+        assert self.has_calibrated, "OrthoOptimizer: must finish calibrate first"
+        if self.weight_rel_buffers[-1] is None:
+            for i, weight_calibrator in enumerate(self.weight_calibrators):
+                weight = self.weight_chunks[i]  # (out, in)
+                ew = weight_calibrator.fake_quantize(weight) - weight
+
+                W = weight.to(dtype=torch.float32, device=weight.device).t()   # (in, out)
+                EW = ew.to(dtype=torch.float32, device=weight.device).t()      # (in, out)
+                buf_gpu = torch.stack([
+                    W @ W.t(),    # wwt
+                    W @ EW.t(),   # wewt
+                    EW @ EW.t()   # ewewt
+                ], dim=0)
+
+                if self.cpu_storage:
+                    buf_cpu = buf_gpu.cpu()
+                    self.weight_rel_buffers[i] = buf_cpu
+                else:
+                    self.weight_rel_buffers[i] = buf_gpu
+
         # compute xtx, xtex, extex
-        for i, input_calibrator in enumerate(-1):
+        for i, input_calibrator in enumerate(self.input_calibrators):
             x = input_chunks[i]
-            ex = input_calibrator.quantize(x) - x
+            ex = input_calibrator.fake_quantize(x) - x
 
             if len(x.shape) == 2:
                 this_batch = 1
             elif len(x.shape) == 1:
                 x = x.unsqueeze(0)
+                ex = ex.unsqueeze(0)
                 this_batch = 1
             else:
                 x = x.reshape((-1, x.shape[-1]))
+                ex = ex.reshape((-1, ex.shape[-1]))
                 this_batch = x.shape[0]
             
             x = x.to(dtype=torch.float32, device=x.device).t()  # (in, b)
@@ -830,10 +883,12 @@ class OrthoOptimizer(BaseOptimizer):
     def grad_func(self, Q, i):
         device = Q.device
 
-        xtx, xtex, extex = self.x_rel_buffers[-1]
-        wwt, wewt, ewewt = self.weight_rel_buffers[-1]
+        xtx, xtex, extex = self.x_rel_buffers[self.input_quantized_indices[i]]
+        wwt, wewt, ewewt = self.weight_rel_buffers[self.weight_quantized_indices[i]]
         if xtx.device != device:
             xtx, xtex, extex = xtx.to(device), xtex.to(device), extex.to(device)
+
+        if wwt.device != device:    
             wwt, wewt, ewewt = wwt.to(device), wewt.to(device), ewewt.to(device)
 
         Q_T = Q.T
@@ -845,3 +900,88 @@ class OrthoOptimizer(BaseOptimizer):
                 + wewt @ extex)
         return grad
 
+    def cayley_descent(self):
+        criteria = self.cayley_stop_criteria
+        max_steps = criteria.get('max_steps', 100)
+        grad_tol = criteria.get('grad_tol', 1e-4)
+        grad_change_tol = criteria.get('grad_change_tol', 1e-5)
+        patience = criteria.get('patience', 5)
+        ema_decay = criteria.get('ema_grad_decay', 0.9)
+        check_every = criteria.get('check_every', 1)
+
+        grad_ema = [None] * self.chunks
+        prev_grad = [None] * self.chunks
+        stop_counter = [0] * self.chunks
+        active = [True] * self.chunks
+
+        for step in range(max_steps):
+            if not any(active):
+                if self.verbose:
+                    print(f"All chunks converged by step {step}")
+                break
+
+            for i in range(self.chunks):
+                if not active[i]:
+                    continue
+
+                Q = self.Q[i]
+                Q_new, grad = self.cayley_optimizers[i].step(Q, i=i)
+                self.Q[i] = Q_new
+
+                if grad_ema[i] is None:
+                    grad_ema[i] = grad.clone()
+                else:
+                    grad_ema[i] = ema_decay * grad_ema[i] + (1 - ema_decay) * grad
+
+                grad_norm = torch.norm(grad_ema[i])
+                grad_diff = torch.norm(grad - prev_grad[i]) if prev_grad[i] is not None else 0.0
+                prev_grad[i] = grad.clone()
+
+                if grad_norm < grad_tol or grad_diff < grad_change_tol:
+                    stop_counter[i] += 1
+                else:
+                    stop_counter[i] = 0
+
+                if stop_counter[i] >= patience:
+                    active[i] = False
+                    if self.verbose:
+                        print(f"Chunk {i} converged at step {step}")
+
+                if self.verbose and step % check_every == 0:
+                    print(f"[Chunk {i}] Step {step}: orth_error={torch.norm(Q @ Q.t() - torch.eye(Q.shape[0])).item():.4e}, grad_norm={grad_norm:.6f}, grad_diff={grad_diff:.6f}, stop_count={stop_counter[i]}")
+
+        self.has_descended = True
+
+        # clean
+        for i in range(self.chunks):
+            # todo: Quant(X @ Q) @ Quant(Q.T @ W)
+            self.weight_chunks[self.weight_chunk_indices[i]] = self.weight_chunks[self.weight_chunk_indices[i]] @ self.Q[i]
+        
+        self.x_rel_buffers = None
+        self.weight_rel_buffers = None
+        self.cayley_optimizers = None
+    
+    def _ortho_x(self, input_chunks: List[torch.Tensor]):
+        input_broadcast = self._broadcast_list(input_chunks)
+        X_list = []
+        for chunk in input_broadcast:
+            X_list.append(chunk.to(device=self.Q[0].device, dtype=self.Q[0].dtype))
+        X_batch = torch.stack(X_list, dim=0)  # shape: (chunks, batch_size, feature_dim)
+        Q_batch = torch.stack(self.Q, dim=0)   # shape: (chunks, feature_dim, feature_dim)
+        ortho_batch = torch.bmm(X_batch, Q_batch)  # shape: (chunks, batch_size, feature_dim)
+        ortho_input_chunks = [ortho_batch[i] for i in range(ortho_batch.size(0))]
+
+        return ortho_input_chunks
+
+    def to(self, device):
+        self.sub_optimizer.to(device)
+        self.Q = [Q.to(device) for Q in self.Q]
+
+    def forward(self, input_chunks):
+        if not self.has_descended:
+            raise RuntimeError("OrthoOptimizer: must cayley_descent first")
+        
+        if hasattr(self.sub_optimizer, '_smooth_x'):
+            input_chunks = self._smooth_x(input_chunks)
+        input_chunks = self._ortho_x(input_chunks)
+        return self.sub_optimizer.forward(input_chunks)

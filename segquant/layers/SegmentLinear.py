@@ -23,7 +23,7 @@ class SegmentLinear(nn.Module):
         weight_quant_type=None,
         input_quant_args=None,
         weight_quant_args=None,
-        opt_type: Literal["default", "smooth", "svd"] = "default",
+        opt_type: Literal["default", "smooth", "svd", "ortho"] = "default",
         opt_kwargs=None,
         calib_type: Literal["amax", "gptq"] = "amax",
         calib_kwargs=None,
@@ -114,17 +114,22 @@ class SegmentLinear(nn.Module):
         input_len = self.chunks
         weight_len = self.chunks
         self.opt_type = opt_type
-        if opt_type == 'default':
+
+        if 'sub_optimizer_type' in opt_kwargs:
+            this_opt_type = opt_kwargs['sub_optimizer_type']
+        else:
+            this_opt_type = opt_type
+        if this_opt_type == 'default':
             if seg_mode == 'input':
                 weight_len = 1
             elif seg_mode == 'weight':
                 input_len = 1
             else:
                 raise ValueError("seg_mode not found")
-        elif opt_type in ('smooth', 'svd'):
+        elif this_opt_type in ('smooth', 'svd'):
             pass
         else:
-            raise ValueError("opt_type not found")
+            raise ValueError("opt_type(sub_opt_type) not found")
 
         weight_chunks = self._chunk_w(custom_weight_tensor)
 
@@ -200,9 +205,10 @@ class SegmentLinear(nn.Module):
     def calibrate(self, input_data):
         input_chunks = self._chunk_x(input_data)
         self.optimizer.calibrate(input_chunks)
-
-    def finish_calibrate(self):
-        self.optimizer.finish_calibrate()
+    
+    def after_calibrate(self, input_data):
+        input_chunks = self._chunk_x(input_data)
+        self.optimizer.after_calibrate(input_chunks)
 
     def segment_forward(self, x, weight):
         # only for search
