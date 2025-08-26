@@ -180,9 +180,6 @@ def _calib_layers(
             )
     for h in hooks:
         h.remove()
-    
-    for l in tqdm(to_calib_layers.values(), desc="[Finishing Calibrate Layers]"):
-        l.optimizer.finish_calibrate()
 
 def _des_layers(
     model: nn.Module,
@@ -474,6 +471,8 @@ def quantize(
     if verbose:
         print("start cayley descent ...")
     _des_layers(model, to_des_layers, calib_data_loader, origin_model_device, target_model_device)
+    for l in tqdm(to_calib_layers.values(), desc="[Finishing Calibrate Layers]"):
+        l.optimizer.finish_calibrate()
 
     if verbose:
         print("start replace ...")

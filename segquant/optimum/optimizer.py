@@ -813,7 +813,10 @@ class OrthoOptimizer:
             setattr(self.sub_optimizer, name, value)
     
     def after_calibrate(self, input_chunks):
-        assert self.has_calibrated, "OrthoOptimizer: must finish calibrate first"
+        if hasattr(self.sub_optimizer, '_smooth_x'):
+            input_chunks = self._smooth_x(input_chunks)
+
+        ## init weight_rel_buffers
         if self.weight_rel_buffers[-1] is None:
             for i, weight_calibrator in enumerate(self.weight_calibrators):
                 weight = self.weight_chunks[i]  # (out, in)
@@ -908,6 +911,7 @@ class OrthoOptimizer:
         patience = criteria.get('patience', 5)
         ema_decay = criteria.get('ema_grad_decay', 0.9)
         check_every = criteria.get('check_every', 1)
+        update_w_every = criteria.get('update_w_every', 1)
 
         grad_ema = [None] * self.chunks
         prev_grad = [None] * self.chunks
@@ -950,11 +954,26 @@ class OrthoOptimizer:
                 if self.verbose and step % check_every == 0:
                     print(f"[Chunk {i}] Step {step}: orth_error={torch.norm(Q @ Q.t() - torch.eye(Q.shape[0])).item():.4e}, grad_norm={grad_norm:.6f}, grad_diff={grad_diff:.6f}, stop_count={stop_counter[i]}")
 
+                ### update w rel
+                if step % update_w_every == 0:
+                    weight = self.weight_chunks[i] @ self.Q[i]  # (out, in)
+                    ew = self.weight_calibrators[i].fake_quantize(weight) - weight
+                    W = weight.to(dtype=torch.float32, device=weight.device).t()   # (in, out)
+                    EW = ew.to(dtype=torch.float32, device=weight.device).t()      # (in, out)
+                    buf_gpu = torch.stack([
+                        W @ W.t(),    # wwt
+                        W @ EW.t(),   # wewt
+                        EW @ EW.t()   # ewewt
+                    ], dim=0)
+                    if self.cpu_storage:
+                        buf_cpu = buf_gpu.cpu()
+                        self.weight_rel_buffers[i] = buf_cpu
+                    else:
+                        self.weight_rel_buffers[i] = buf_gpu
+
         self.has_descended = True
 
-        # clean
         for i in range(self.chunks):
-            # todo: Quant(X @ Q) @ Quant(Q.T @ W)
             self.weight_chunks[self.weight_chunk_indices[i]] = self.weight_chunks[self.weight_chunk_indices[i]] @ self.Q[i]
         
         self.x_rel_buffers = None

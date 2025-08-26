@@ -41,6 +41,9 @@ class BaseCalibrator:
     
     def quantize(self, x):
         return self.quantizer.quantize(x)
+    
+    def fake_quantize(self, x):
+        return self.quantizer.fake_quantize(x)
 
     @property
     def pos_scale(self):
