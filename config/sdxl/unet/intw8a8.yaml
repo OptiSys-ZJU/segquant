@@ -86,14 +86,16 @@ segquant-ortho:
       sub_optimizer_type: "default"
       sub_optimizer_kwargs:
         dummy: "dummy"
-      cayley_optimizer_config:
+      givens_m: 100
+      val_sample_batch: 8
+      optimizer_config:
         type: "sgd"
-        lr: 0.01
+        lr: 0.1
         momentum: 0.9
         dampening: 0
         weight_decay: 0
-      cayley_stop_criteria:
-        max_steps: 100
+      stop_criteria:
+        max_steps: 200
         grad_tol: 0.00000001
         grad_change_tol: 0.00000001
         patience: 5

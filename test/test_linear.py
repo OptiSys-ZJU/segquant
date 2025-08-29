@@ -880,28 +880,23 @@ def test_ortho():
             "opt": {
                 "type": Optimum.ORTHO,
                 "verbose": True,
+                "givens_m": 100,
+                "val_sample_batch": 2,
                 "sub_optimizer_type": "default",
-                "sub_optimizer_kwargs": {
-
-                },
-                "cayley_optimizer_config": {
+                "sub_optimizer_kwargs": {},
+                "optimizer_config": {
                     "type": "sgd",
-                    "lr": 0.01,
+                    "lr": 0.1,
                     "momentum": 0.9,
                     "dampening": 0,
                     "weight_decay": 0,
                 },
-                # "cayley_optimizer_config": {
-                #     "type": "adam",
-                #     "lr": 0.1,
-                #     "weight_decay": 0,
-                # },
-                "cayley_stop_criteria": {
-                    "max_steps": 100,
+                "stop_criteria": {
+                    "max_steps": 500,
                     "grad_tol": 1e-8,
                     "grad_change_tol": 1e-8,
                     "patience": 5,
-                    "ema_grad_decay": 0.9,
+                    "ema_grad_decay": 0,
                     "check_every": 1,
                 },
             },

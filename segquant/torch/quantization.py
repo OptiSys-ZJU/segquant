@@ -212,8 +212,8 @@ def _des_layers(
     for h in hooks:
         h.remove()
 
-    for l in tqdm(to_des_layers.values(), desc="[Cayley Descending Layers]"):
-        l.optimizer.cayley_descent()
+    for l in tqdm(to_des_layers.values(), desc="[Descending Layers]"):
+        l.optimizer.step()
 
 def _search_layers(
     model: nn.Module,
@@ -469,7 +469,7 @@ def quantize(
         print("start calibrate ...")
     _calib_layers(model, to_calib_layers, calib_data_loader, origin_model_device, target_model_device)
     if verbose:
-        print("start cayley descent ...")
+        print("start descent ...")
     _des_layers(model, to_des_layers, calib_data_loader, origin_model_device, target_model_device)
     for l in tqdm(to_calib_layers.values(), desc="[Finishing Calibrate Layers]"):
         l.optimizer.finish_calibrate()
