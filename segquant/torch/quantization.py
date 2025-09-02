@@ -10,7 +10,7 @@ import uuid
 from torch import nn
 from tqdm import tqdm
 from segquant.config import default_quantize_config
-from segquant.layers.SegmentLinear import create_segment_linear
+from segquant.layers.segment_linear import create_segment_linear
 from segquant.pattern_detector import SegQuantPatternDetector
 
 def generate_run_id():
@@ -94,17 +94,17 @@ def _create_layer(
             input_quant_args={"real_quant": real_quant, "dual_scale": dual_scale, **input_quant_args},
             weight_quant_args={"real_quant": real_quant, **weight_quant_args},
             bias=has_bias,
-            custom_bias_tensor=old_layer.bias.data if has_bias else None,
+            custom_bias=old_layer.bias.data if has_bias else None,
             seg_mode=seg_linear_config["seg_mode"],
             chunks=seg_linear_config.get(
                 "chunks", len(seg_linear_config.get("chunksizes", []))
             ),
             chunksizes=seg_linear_config.get("chunksizes"),
-            custom_weight_tensor=old_layer.weight.data,
+            custom_weight=old_layer.weight.data,
             device=device,
         )
     elif layer_type == 'conv2d':
-        pass
+        raise NotImplementedError("Conv2d quantization is not implemented yet.")
     else:
         raise ValueError(f"Unsupported layer type: {layer_type}")
 
@@ -115,19 +115,21 @@ def _create_layer(
 
 def _trace_layers(
     model: nn.Module,
-    to_smooth_layers: dict,
+    to_trace_layers: dict,
     calib_data_loader: torch.utils.data.DataLoader,
     origin_model_device,
     target_model_device,
 ):
     hooks = []
     for name, module in model.named_modules():
-        if name in to_smooth_layers:
+        if name in to_trace_layers:
 
             def get_hook(n):
                 def hook_fn(_mod, inp, _out, n=n):
-                    if hasattr(to_smooth_layers[n], "trace"):
-                        to_smooth_layers[n].trace(_move_to_device(inp[0], target_model_device))
+                    if hasattr(to_trace_layers[n], "trace"):
+                        to_trace_layers[n].trace(
+                            _move_to_device(inp[0], target_model_device)
+                        )
 
                 return hook_fn
 
@@ -145,10 +147,10 @@ def _trace_layers(
     for h in hooks:
         h.remove()
 
-def _smooth_layers(to_smooth_layers: dict):
-    for l in tqdm(to_smooth_layers.values(), desc="[Smoothing Layers]"):
-        if hasattr(l, "smooth"):
-            l.smooth()
+def _finish_trace_layers(to_trace_layers: dict):
+    for l in tqdm(to_trace_layers.values(), desc="[Finish Trace Layers]"):
+        if hasattr(l, "finish_trace"):
+            l.finish_trace()
 
 def _calib_layers(
     model: nn.Module,
@@ -181,20 +183,23 @@ def _calib_layers(
     for h in hooks:
         h.remove()
 
-def _des_layers(
+
+def _after_calib_layers(
     model: nn.Module,
-    to_des_layers: dict,
+    to_after_calib_layers: dict,
     calib_data_loader: torch.utils.data.DataLoader,
     origin_model_device,
     target_model_device,
 ):
     hooks = []
     for name, module in model.named_modules():
-        if name in to_des_layers:
+        if name in to_after_calib_layers:
 
             def get_hook(n):
                 def hook_fn(_mod, inp, _out, n=n):
-                    to_des_layers[n].after_calibrate(_move_to_device(inp[0], target_model_device))
+                    to_after_calib_layers[n].after_calibrate(
+                        _move_to_device(inp[0], target_model_device)
+                    )
 
                 return hook_fn
 
@@ -212,8 +217,6 @@ def _des_layers(
     for h in hooks:
         h.remove()
 
-    for l in tqdm(to_des_layers.values(), desc="[Descending Layers]"):
-        l.optimizer.step()
 
 def _search_layers(
     model: nn.Module,
@@ -264,8 +267,12 @@ def _search_layers(
     for n in list(to_search_layers):
         nn_layer = nn_layers[n]
         if isinstance(nn_layer, nn.Linear):
-            origin_weight = _move_to_device(nn_layers[n].weight.data, target_model_device)
-            if to_search_layers[n].optimizer.search_step(err_map[n], origin_weight=origin_weight):
+            origin_weight = _move_to_device(
+                nn_layers[n].weight.data, target_model_device
+            )
+            is_finished = to_search_layers[n].optimizer.search_step(err_map[n])
+            to_search_layers[n].reset(origin_weight=origin_weight)
+            if is_finished:
                 del to_search_layers[n]
         else:
             raise NotImplementedError(f"Unsupported module type: {type(nn_layer)}")
@@ -281,7 +288,7 @@ def _search_layers(
                     'opt_alpha': v.optimizer.opt_alpha,
                 }
                 print(f"[Search Linears] {k} alpha: {v.optimizer.alpha}, opt_err: {v.optimizer.opt_err}, opt_alpha: {v.optimizer.opt_alpha}")
-        
+
         filename = f"search_dump_{generate_run_id()}.pt"
         torch.save(alpha_map, filename)
         print(f"[Search Linears] Dumped search results to {filename}")
@@ -328,7 +335,7 @@ def quantize(
     if tmp_device is not None:
         target_model_device = tmp_device
         print(f"[INFO] Quantizing model Process will be in Target[{target_model_device}], Origin(Final)[{origin_model_device}]")
-    
+
     final_config = config or default_quantize_config
     final_config["default"] = final_config.get(
         "default", default_quantize_config["default"]
@@ -336,7 +343,7 @@ def quantize(
 
     if all(not final_config[k]["enable"] for k in final_config):
         return model
-    
+
     layers = {
         'linear': _get_all_layers(model, final_config["default"]['enable'], final_config, layer_cls=nn.Linear),
         # 'conv2d': _get_all_layers(model, final_config["default"]['enable'], final_config, layer_cls=nn.Conv2d),
@@ -409,7 +416,7 @@ def quantize(
     del layers
 
     # hook all linears at a time
-    to_smooth_layers = {
+    to_trace_layers = {
         k: v for k, v in to_calib_layers.items()
         if v.opt_type in ('smooth', 'svd')
     }
@@ -419,9 +426,9 @@ def quantize(
         if hasattr(v.optimizer, 'search_alpha') and v.optimizer.search_alpha
     }
 
-    to_des_layers = {
+    to_after_calib_layers = {
         k: v for k, v in to_calib_layers.items()
-        if v.opt_type == 'ortho'
+        if v.opt_type == 'given'
     }
 
     # search_recovery_file
@@ -438,41 +445,68 @@ def quantize(
             else:
                 print("[Warning] Search recovery file contains keys not in to_search_linears:", k)
 
-    if to_smooth_layers:
+    if to_trace_layers:
         if verbose:
             print("start trace ...")
-        _trace_layers(model, to_smooth_layers, calib_data_loader, origin_model_device, target_model_device)
+        _trace_layers(
+            model,
+            to_trace_layers,
+            calib_data_loader,
+            origin_model_device,
+            target_model_device,
+        )
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
     while to_search_layers:
         if to_search_layers:
             if verbose:
-                print("[search] start smooth ...")
-            _smooth_layers(to_search_layers)
+                print("[search] finish trace ...")
+            _finish_trace_layers(to_search_layers)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         if verbose:
             print("[search] start calibrate ...")
-        _calib_layers(model, to_search_layers, calib_data_loader, origin_model_device, target_model_device)
+        _calib_layers(
+            model,
+            to_search_layers,
+            calib_data_loader,
+            origin_model_device,
+            target_model_device,
+        )
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        _search_layers(model, to_search_layers, calib_data_loader, origin_model_device, target_model_device, dump_search=dump_search)
+        for l in tqdm(to_search_layers.values(), desc="[Finishing Calibrate Layers]"):
+            l.finish_calibrate()
+        _search_layers(
+            model,
+            to_search_layers,
+            calib_data_loader,
+            origin_model_device,
+            target_model_device,
+            dump_search=dump_search,
+        )
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    if to_smooth_layers:
+    if to_trace_layers:
         if verbose:
-            print("start smooth ...")
-        _smooth_layers(to_smooth_layers)
+            print("finish trace ...")
+        _finish_trace_layers(to_trace_layers)
     if verbose:
         print("start calibrate ...")
     _calib_layers(model, to_calib_layers, calib_data_loader, origin_model_device, target_model_device)
     if verbose:
         print("start descent ...")
-    _des_layers(model, to_des_layers, calib_data_loader, origin_model_device, target_model_device)
+    _after_calib_layers(
+        model,
+        to_after_calib_layers,
+        calib_data_loader,
+        origin_model_device,
+        target_model_device,
+    )
     for l in tqdm(to_calib_layers.values(), desc="[Finishing Calibrate Layers]"):
-        l.optimizer.finish_calibrate()
+        l.finish_calibrate()
 
     if verbose:
         print("start replace ...")

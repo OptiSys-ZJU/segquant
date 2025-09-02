@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 
 
-class GivensOrthLayer(nn.Module):
+class GivensOrthogonal(nn.Module):
     def __init__(
         self,
         k,
@@ -19,7 +19,7 @@ class GivensOrthLayer(nn.Module):
         enable_grad_buffer=False,
         enable_low_memory_grad=False,
     ):
-        super(GivensOrthLayer, self).__init__()
+        super(GivensOrthogonal, self).__init__()
 
         self.k = k  # problem dimension
         self.dof = k * (k - 1) // 2  # degrees of freedom
@@ -37,12 +37,12 @@ class GivensOrthLayer(nn.Module):
             "custom",
         ], "sample_mode should be one of ['rand', 'ascending', 'descending', 'custom']"
 
-        all_pairs = GivensOrthLayer.generate_upper_triangular_pairs(k)
+        all_pairs = GivensOrthogonal.generate_upper_triangular_pairs(k)
         if sample_mode == "custom":
             assert sample_func is not None
             indices = sample_func(k, self.givens_num)
         else:
-            indices = GivensOrthLayer.sample_pairs_indices(
+            indices = GivensOrthogonal.sample_pairs_indices(
                 k, self.givens_num, sample_mode=sample_mode, generator=generator
             )
         self.pairs = [all_pairs[i] for i in indices]
@@ -54,7 +54,7 @@ class GivensOrthLayer(nn.Module):
 
         assert init_vecs_mode in ["identity", "random"], "Unknown init mode"
         self.vecs = nn.Parameter(
-            GivensOrthLayer.init_vecs(
+            GivensOrthogonal.init_vecs(
                 self.givens_num,
                 mode=init_vecs_mode,
                 dtype=dtype,
@@ -74,7 +74,7 @@ class GivensOrthLayer(nn.Module):
             self.register_buffer("S", torch.eye(k, device=device, dtype=dtype).unsqueeze(0).repeat(self.givens_num,1,1))
             self.register_buffer("dG_dc", torch.tensor([[1.0,0.0],[0.0,1.0]], device=device, dtype=dtype))
             self.register_buffer("dG_ds", torch.tensor([[0.0,-1.0],[1.0,0.0]], device=device, dtype=dtype))
-            GivensOrthLayer.cal_cs_inplace(self.cs, self.vecs)
+            GivensOrthogonal.cal_cs_inplace(self.cs, self.vecs)
 
     @staticmethod
     def init_vecs(n, mode="identity", dtype=torch.float32, device=None, generator=None):
@@ -105,7 +105,7 @@ class GivensOrthLayer(nn.Module):
     def sample_pairs_indices(k, m, sample_mode="rand", generator=None):
         dof = k * (k - 1) // 2
         if sample_mode == "rand":
-            perm = torch.randperm(dof, generator=generator, device=device)
+            perm = torch.randperm(dof, generator=generator)
             return perm[:m].tolist()
         elif sample_mode == "ascending":
             return list(range(m))
@@ -296,10 +296,10 @@ class GivensOrthLayer(nn.Module):
             cs = self.cs
         else:
             cs = torch.empty((self.givens_num, 2), device=self.device, dtype=self.dtype)
-            GivensOrthLayer.cal_cs_inplace(cs, self.vecs)
+            GivensOrthogonal.cal_cs_inplace(cs, self.vecs)
         if not self.enable_grad_buffer:
             if self.enable_low_memory_grad:
-                return GivensOrthLayer.grad_slow(
+                return GivensOrthogonal.grad_slow(
                     k,
                     pairs,
                     vecs,
@@ -308,7 +308,7 @@ class GivensOrthLayer(nn.Module):
                     device=self.device,
                     chain_grad=chain_grad,
                 )
-            return GivensOrthLayer.grad(
+            return GivensOrthogonal.grad(
                 k,
                 pairs,
                 vecs,
@@ -326,144 +326,14 @@ class GivensOrthLayer(nn.Module):
         else:
             cs = torch.empty((self.givens_num, 2), device=self.device, dtype=self.dtype)
 
-        GivensOrthLayer.cal_cs_inplace(cs, self.vecs)
+        GivensOrthogonal.cal_cs_inplace(cs, self.vecs)
         if self.enable_autograd:
-            Q = GivensOrthLayer.build_Q_slow(
+            Q = GivensOrthogonal.build_Q_slow(
                 self.k, self.pairs, cs, dtype=self.dtype, device=self.device
             )
             return Q
         else:
-            Q = GivensOrthLayer.build_Q(
+            Q = GivensOrthogonal.build_Q(
                 self.k, self.pairs, cs, dtype=self.dtype, device=self.device
             )
         return Q
-
-if __name__ == "__main__":
-    import time
-
-    torch.manual_seed(0)
-    device = "cpu"
-    m, k, n = 2, 32, 32
-    givens = 10
-    update_steps = 10
-    sample_mode = "rand"
-    init_mode = "random"
-
-    grad = 'buffer'  # 'buffer', 'normal', 'slow'
-
-    if grad == 'buffer':
-        enable_grad_buffer = True
-        enable_low_memory_grad = False
-    elif grad == 'normal':
-        enable_grad_buffer = False
-        enable_low_memory_grad = False
-    elif grad == 'slow':
-        enable_grad_buffer = False
-        enable_low_memory_grad = True
-    else:
-        raise ValueError("Unknown grad mode")
-
-    print(f"Testing GivensManager with k={k}, givens={givens}, sample_mode={sample_mode}, init_mode={init_mode}, grad={grad}")
-
-    X = torch.randn(m, k, device=device)
-    W = torch.randn(k, n, device=device)
-    epsX = 0.01 * torch.randn(m, k, device=device)
-    epsW = 0.01 * torch.randn(k, n, device=device)
-
-    def loss(manager, X, W, epsX, epsW):
-        Q = manager.forward()
-        term = X @ Q @ epsW + epsX @ Q.t() @ W + epsX @ epsW
-        return torch.norm(term, p="fro") ** 2, Q
-
-    @torch.no_grad()
-    def manual_grad_Q(Q, X, W, epsX, epsW):
-        XtX = X.t() @ X
-        WWT = W @ W.t()
-        epsXtX = epsX.t() @ epsX
-        epsWDW = epsW @ epsW.t()
-
-        grad = 2 * (XtX @ Q @ epsWDW + WWT @ Q @ epsXtX)
-        grad += 2 * (X.t() @ epsX @ Q.t() @ W @ epsW.t() + W @ epsW.t() @ Q.t() @ X.t() @ epsX)
-        grad += 2 * (X.t() @ epsX @ epsWDW + W @ epsW.t() @ epsXtX)
-        return grad
-
-    @torch.no_grad()
-    def manual_grad(manager, X, W, epsX, epsW):
-        Q = manager.forward()
-        gQ = manual_grad_Q(Q, X, W, epsX, epsW)
-        g = manager.try_grad(chain_grad=gQ)
-        return g
-
-    manual_manager = GivensOrthLayer(
-        k,
-        givens_num=givens,
-        sample_mode=sample_mode,
-        init_vecs_mode=init_mode,
-        generator=torch.Generator().manual_seed(42),
-        dtype=torch.float32,
-        device=device,
-        requires_grad=True,
-        enable_autograd=False,
-        enable_grad_buffer=enable_grad_buffer,
-        enable_low_memory_grad=enable_low_memory_grad,
-    )
-
-    auto_manager = GivensOrthLayer(
-        k,
-        givens_num=givens,
-        sample_mode=sample_mode,
-        init_vecs_mode=init_mode,
-        generator=torch.Generator().manual_seed(42),
-        dtype=torch.float32,
-        device=device,
-        requires_grad=True,
-        enable_autograd=True,
-        enable_grad_buffer=False,
-        enable_low_memory_grad=False,
-    )
-
-    opt_manual = torch.optim.SGD([manual_manager.vecs], lr=0.1)
-    opt_auto = torch.optim.SGD([auto_manager.vecs], lr=0.1)
-
-    print("Initial m-vecs:", manual_manager.vecs, manual_manager.pairs)
-    print("Initial a-vecs:", auto_manager.vecs, auto_manager.pairs)
-
-    manual_time = 0.0
-    auto_time = 0.0
-
-    for step in range(update_steps):
-        # ---- manual ----
-        L_manual, Q_manual = loss(manual_manager, X, W, epsX, epsW)
-        start_manual = time.time()
-        opt_manual.zero_grad()
-        g_manual = manual_grad(manual_manager, X, W, epsX, epsW)
-        with torch.no_grad():
-            manual_manager.vecs.grad = g_manual
-        opt_manual.step()
-        manual_time += time.time() - start_manual
-        g_manual = g_manual.clone()
-
-        # ---- autograd ----
-        start_auto = time.time()
-        opt_auto.zero_grad()
-        L_auto, Q_auto = loss(auto_manager, X, W, epsX, epsW)
-        L_auto.backward()
-        opt_auto.step()
-        auto_time += time.time() - start_auto
-        g_auto = auto_manager.vecs.grad.clone()
-
-        # ---- diff ----
-        loss_diff = torch.norm(L_manual.detach() - L_auto.detach()).item()
-        grad_diff = torch.norm(g_manual - g_auto).item()
-        vec_diff = torch.norm(
-            manual_manager.vecs.detach() - auto_manager.vecs.detach()
-        ).item()
-        Q_diff = torch.norm(Q_manual - Q_auto).item()
-        print(
-            f"[step {step}] loss_diff={loss_diff:.3e}, grad_diff={grad_diff:.3e}, vec_diff={vec_diff:.3e}, Q_diff={Q_diff:.3e}"
-        )
-
-    print(f"\nTotal time manual: {manual_time:.3f}s")
-    print(f"Total time autograd: {auto_time:.3f}s")
-    print("final manual vecs:", manual_manager.vecs)
-    print("final auto vecs:", auto_manager.vecs)

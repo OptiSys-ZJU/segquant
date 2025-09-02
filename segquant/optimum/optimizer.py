@@ -1,172 +1,101 @@
-from functools import partial
+import enum
 import math
+from tkinter import W
+from turtle import up
 from typing import List
 from collections import deque
 
 import numpy as np
+from requests import get
+from sympy import N, per
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from segquant.layers import ext_dict
-from segquant.utils.GivensOrthLayer import CayleyRegistry
-from segquant.utils.im2col import im2col_input, im2col_weight
 
-
-class BaseOptimizer:
-    def __init__(
-        self,
-        layer_mode,
-        seg_mode,
-        chunks,
-        chunksizes,
-        weight_chunks,
-        input_calibrators,
-        weight_calibrators,
-        real_quant=False,
-        dual_scale=False,
-        kernel_type=None,
-        layer_kwargs={},
-    ):
-        super().__init__()
-        self.layer_mode = layer_mode
-        self.seg_mode = seg_mode
-        self.chunks = chunks
-        self.chunksizes = chunksizes
-        self.weight_chunks = weight_chunks
-        self.input_calibrators = input_calibrators
-        self.weight_calibrators = weight_calibrators
-        self.real_quant = real_quant
-        self.kernel_type = kernel_type
-
-        if "kernel_size" in layer_kwargs:
-            self.kernel_size = layer_kwargs["kernel_size"]
-            layer_kwargs.pop("kernel_size")
-        else:
-            self.kernel_size = None
-        self.layer_kwargs = layer_kwargs
-
-        self.dual_scale = dual_scale
-        if self.layer_mode == 'linear':
-            if self.real_quant and dual_scale:
-                self.func_name = 'gemm_dual_scaled_fn'
-            else:
-                self.func_name = 'gemm_scaled_fn'
-        elif self.layer_mode == 'conv2d':
-            if self.real_quant and dual_scale:
-                self.func_name = 'conv2d_dual_scaled_fn'
-            else:
-                self.func_name = 'conv2d_scaled_fn'
-        else:
-            raise ValueError(f"Unsupported layer mode: {self.layer_mode}")
-
-        self.has_calibrated = False
-    
-    def _broadcast_list(self, l):
-        if len(l) == 1:
-            return l * self.chunks
-        return l
-
-    def _im2col_weight(self, x):
-        assert x.dim() == 4, "Weight tensor x must be 4D for im2col_weight."
-        return im2col_weight(x, groups=self.layer_kwargs['groups']) # [groups, out_per_group, in_per_group*kh*kw]
-
-    def _im2col_input(self, x):
-        return im2col_input(
-            x,
-            kernel_size=self.kernel_size,
-            stride=self.layer_kwargs["stride"],
-            padding=self.layer_kwargs["padding"],
-            dilation=self.layer_kwargs["dilation"],
-            groups=self.layer_kwargs["groups"],
-        )  # [groups, batch*Hout*Wout, in_per_group*kh*kw]
-
-    def _get_funcs(self, input_quantized_indices, weight_quantized_indices):
-        if self.real_quant:
-            def tensor_wrapper(x):
-                if isinstance(x, torch.Tensor):
-                    return x.to(dtype=torch.float32).contiguous()
-                else:
-                    return x
-
-            if self.dual_scale:
-                funcs = [
-                    partial(
-                        ext_dict[self.kernel_type][self.func_name],
-                        pos_scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].pos_scale),
-                        neg_scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].neg_scale),
-                        scale_w=tensor_wrapper(self.weight_calibrators[weight_quantized_indices[i]].scale),
-                    )
-                    for i in range(self.chunks)
-                ]
-            else:
-                funcs = [
-                    partial(
-                        ext_dict[self.kernel_type][self.func_name],
-                        scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].scale),
-                        scale_w=tensor_wrapper(self.weight_calibrators[weight_quantized_indices[i]].scale),
-                    )
-                    for i in range(self.chunks)
-                ]
-        else:
-            def quantize_input_decorator(quantizer):
-                def decorator(func):
-                    from functools import wraps
-                    @wraps(func)
-                    def wrapper(input_tensor, weight_tensor, *args, **kwargs):
-                        processed_input = quantizer.quantize(input_tensor)
-                        return func(processed_input, weight_tensor, *args, **kwargs)
-                    return wrapper
-                return decorator
-
-            def _create_wrapped_layer_func(q):
-                @quantize_input_decorator(q)
-                def wrapped_layer(input, weight):
-                    if self.layer_mode == 'conv2d':
-                        return F.conv2d(input, weight, **self.layer_kwargs)
-                    elif self.layer_mode == 'linear':
-                        return F.linear(input, weight, **self.layer_kwargs)
-                return wrapped_layer
-
-            funcs = [
-                _create_wrapped_layer_func(
-                    self.input_calibrators[input_quantized_indices[i]]
-                )
-                for i in range(self.chunks)
-            ]
-
-        return funcs
-
-    def _calibrate_weights(self, input_chunks):
-        for weight_calibrator, weight_chunk, input_copy_or_chunk in zip(
-            self.weight_calibrators, self.weight_chunks, input_chunks
-        ):
-            weight_calibrator.calibrate(weight_chunk, input_data=input_copy_or_chunk)
-
-    def calibrate(self, input_chunks):
-        for input_calibrator, input_chunk in zip(self.input_calibrators, input_chunks):
-            input_calibrator.calibrate(input_chunk)
-
-        # weight
-        self._calibrate_weights(input_chunks)
-
-    def finish_calibrate(self):
-        for i, input_calibrator in enumerate(self.input_calibrators):
-            input_calibrator.finish_calibrate()
-            self.input_calibrators[i] = input_calibrator.quantizer
-
-        for i, weight_calibrator in enumerate(self.weight_calibrators):
-            self.weight_chunks[i] = weight_calibrator.finish_calibrate(self.weight_chunks[i])
-            self.weight_calibrators[i] = weight_calibrator.quantizer
-
-        self.has_calibrated = True
-    
-    def to(self, device):
-        self.weight_chunks = [chunk.to(device) for chunk in self.weight_chunks]
-        self.input_calibrators = [calibrator.to(device) for calibrator in self.input_calibrators]
-        self.weight_calibrators = [calibrator.to(device) for calibrator in self.weight_calibrators]
+from backend.torch.utils.deprecation_utils import deprecate
+from segquant.layers.givens_orthogonal import GivensOrthogonal
 
 class OptimizerRegistry:
     _registry = {}
+
+    _segment_config = {
+        "default": {
+            "input": {
+                "input_quantizers_len": lambda chunks: chunks,
+                "weight_quantizers_len": lambda chunks: 1,
+                "split_input_func": lambda x, chunksizes: x.split(chunksizes, dim=-1),
+                "split_weight_func": lambda w, chunksizes: (w,),
+            },
+            "weight": {
+                "input_quantizers_len": lambda chunks: 1,
+                "weight_quantizers_len": lambda chunks: chunks,
+                "split_input_func": lambda x, chunksizes: (x,),
+                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=0),
+            },
+        },
+        "smooth": {
+            "input": {
+                "input_quantizers_len": lambda chunks: chunks,
+                "weight_quantizers_len": lambda chunks: chunks,
+                "split_input_func": lambda x, chunksizes: x.split(chunksizes, dim=-1),
+                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=-1),
+            },
+            "weight": {
+                "input_quantizers_len": lambda chunks: chunks,
+                "weight_quantizers_len": lambda chunks: chunks,
+                "split_input_func": lambda x, chunksizes: tuple(x for _ in chunksizes),
+                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=0),
+            },
+        },
+        "svd": {
+            "input": {
+                "input_quantizers_len": lambda chunks: chunks,
+                "weight_quantizers_len": lambda chunks: chunks,
+                "split_input_func": lambda x, chunksizes: x.split(chunksizes, dim=-1),
+                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=-1),
+            },
+            "weight": {
+                "input_quantizers_len": lambda chunks: chunks,
+                "weight_quantizers_len": lambda chunks: chunks,
+                "split_input_func": lambda x, chunksizes: tuple(x for _ in chunksizes),
+                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=0),
+            },
+        },
+        "givens": {
+            "input": {
+                "input_quantizers_len": lambda chunks: chunks,
+                "weight_quantizers_len": lambda chunks: chunks,
+                "split_input_func": lambda x, chunksizes: x.split(chunksizes, dim=-1),
+                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=-1),
+            },
+            "weight": {
+                "input_quantizers_len": lambda chunks: chunks,
+                "weight_quantizers_len": lambda chunks: chunks,
+                "split_input_func": lambda x, chunksizes: tuple(x for _ in chunksizes),
+                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=0),
+            },
+        },
+    }
+
+    @classmethod
+    def get_segment_config(cls, opt_type, seg_mode, chunks):
+        if opt_type not in cls._segment_config:
+            raise ValueError(f"Optimizer type '{opt_type}' not found in registry.")
+        if seg_mode not in cls._segment_config[opt_type]:
+            raise ValueError(f"seg_mode '{seg_mode}' not found in optimizer config.")
+
+        config = cls._segment_config[opt_type][seg_mode]
+        input_quantizers_len = config["input_quantizers_len"](chunks)
+        weight_quantizers_len = config["weight_quantizers_len"](chunks)
+        split_input_func = config["split_input_func"]
+        split_weight_func = config["split_weight_func"]
+
+        return (
+            input_quantizers_len,
+            weight_quantizers_len,
+            split_input_func,
+            split_weight_func,
+        )
 
     @classmethod
     def register(cls, name):
@@ -187,178 +116,112 @@ class OptimizerRegistry:
             raise ValueError(f"Optimizer '{name}' not found in registry.")
         return optimizer_cls(**kwargs)
 
+class BaseOptimizer:
+    def __init__(self, upper_module, **kwargs):
+        self.upper_module = upper_module
+
+    def trace(self, x_chunks, w_chunks):
+        raise NotImplementedError("trace method not implemented")
+
+    def preprocess_x(self, x_chunks):
+        return x_chunks
+
+    def on_calibrate_prepare_finish(self, Ws, eWs):
+        return Ws
+
+    def on_calibrate_finish_end(self):
+        pass
+
+    def chunk_forward(self, quantized_input_chunks, quantized_weight_chunks):
+        quantized_output_chunks = []
+        for quantized_input_chunk, quantized_weight_chunk in zip(
+            quantized_input_chunks, quantized_weight_chunks
+        ):
+            quantized_output_chunks.append(
+                F.linear(quantized_input_chunk, quantized_weight_chunk)
+            )
+        return quantized_output_chunks
+
+
 @OptimizerRegistry.register("default")
 class DefaultOptimizer(BaseOptimizer):
-    def __init__(
-        self,
-        layer_mode,
-        seg_mode,
-        chunks,
-        chunksizes,
-        weight_chunks,
-        input_calibrators,
-        weight_calibrators,
-        real_quant=False,
-        dual_scale=False,
-        kernel_type=None,
-        layer_kwargs={},
-        **kwargs,
-    ):
-        assert len(input_calibrators) == 1 or len(weight_calibrators) == 1, \
-            "Either input_calibrators or weight_calibrators must have a length of 1."
-        super().__init__(
-            layer_mode,
-            seg_mode,
-            chunks,
-            chunksizes,
-            weight_chunks,
-            input_calibrators,
-            weight_calibrators,
-            real_quant,
-            dual_scale,
-            kernel_type,
-            layer_kwargs,
-        )
-
-        if seg_mode == 'weight':
-            self.input_quantized_indices = [0] * self.chunks
-            self.weight_quantized_indices = range(self.chunks)
-        elif seg_mode == 'input':
-            self.input_quantized_indices = range(self.chunks)
-            self.weight_quantized_indices = [0] * self.chunks
-        else:
-            raise ValueError("seg_mode not found")
-
-        if seg_mode == 'input':
-            self.input_chunk_indices = range(self.chunks)
-            self.weight_chunk_indices = [0] * self.chunks
-        elif seg_mode == 'weight':
-            self.input_chunk_indices = [0] * self.chunks
-            self.weight_chunk_indices = range(self.chunks)
-        else:
-            raise ValueError("seg_mode not found")
-
+    def __init__(self, upper_module, **kwargs):
+        super().__init__(upper_module, **kwargs)
+    
     def __repr__(self):
-        if self.real_quant:
-            base = (
-                f"DefaultOptimizer(type={self.kernel_type}\n"
-            )
-        else:
-            base = (
-                "DefaultOptimizer(\n"
-            )
-        input_q = ",\n    ".join(repr(i) for i in self.input_calibrators)
-        weight_q = ",\n    ".join(repr(w) for w in self.weight_calibrators)
+        return "DefaultOptimizer()"
 
-        if self.chunks == 1:
-            return (
-                base + f"    input_quantizer=({input_q}),\n"
-                f"    weight_quantizer=({weight_q})\n"
-                f")"
-            )
-        return (
-            base + f"    input_quantizers=[\n    {input_q}\n  ],\n"
-            f"    weight_quantizers=[\n    {weight_q}\n  ]\n"
-            f")"
-        )
-
-    def _inv_input_list(self, l):
-        if len(l) == 1:
-            return l * self.chunks
-        return [torch.cat(l, dim=-1)]
-
-    def _calibrate_weights(self, input_chunks):
-        inv_input_chunks = self._inv_input_list(input_chunks)
-        assert len(inv_input_chunks) == len(self.weight_chunks), "inv_input_chunks failed"
-
-        for weight_calibrator, weight_chunk, input_copy_or_chunk in zip(
-            self.weight_calibrators, self.weight_chunks, inv_input_chunks
-        ):
-            weight_calibrator.calibrate(weight_chunk, input_data=input_copy_or_chunk)
-
-    def finish_calibrate(self):
-        super().finish_calibrate()
-        if self.seg_mode == 'input':
-            # weights need to be splited when input enabled
-            assert len(self.weight_chunks) == 1, "weight_chunks size not 1"
-            self.weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
-            self.weight_chunk_indices = range(self.chunks)
-
-    def forward(self, input_chunks):
-        funcs = self._get_funcs(self.input_quantized_indices, self.weight_quantized_indices)
-        quantized_output_chunks = [
-            funcs[i](
-                input_chunks[self.input_chunk_indices[i]].contiguous(),
-                self.weight_chunks[self.weight_chunk_indices[i]].contiguous(),
-            )
-            for i in range(self.chunks)
-        ]
-
-        return quantized_output_chunks
 
 @OptimizerRegistry.register("smooth")
 class SmoothOptimizer(BaseOptimizer):
     def __init__(
         self,
-        seg_mode,
-        chunks,
-        chunksizes,
-        weight_chunks,
-        input_calibrators,
-        weight_calibrators,
-        real_quant=False,
-        dual_scale=False,
-        kernel_type=None,
+        upper_module: nn.Module,
+        in_features: int,
+        out_features: int,
+        seg_mode: str,
+        chunks: int,
+        chunksizes: List[int],
+        device: torch.device,
+        ### extra args
+        verbose=False,
         alpha=0.5,
         search_alpha_config=None,
-        verbose=False,
         **kwargs,
     ):
-        """
-        SmoothOptimizer that calibrates input and weight quantizers
-        using a smoothing factor (alpha).
+        super().__init__(upper_module, **kwargs)
 
-        Pipeline: Trace -> Smooth -> Calibrate -> Quantize
-        """
-        assert len(input_calibrators) == len(weight_calibrators) and \
-            len(weight_calibrators) == len(weight_chunks), \
-            f"Lengths mismatch: input_calibrators={len(input_calibrators)}, " \
-            f"weight_calibrators={len(weight_calibrators)}, " \
-            f"weight_chunks={len(weight_chunks)}"
-        super().__init__(
-            seg_mode,
-            chunks,
-            chunksizes,
-            weight_chunks,
-            input_calibrators,
-            weight_calibrators,
-            real_quant,
-            dual_scale,
-            kernel_type,
-        )
-
-        self.max_w = []
-        self.max_x = []
-        self.s = [None] * self.chunks
+        self.upper_module = upper_module
+        self.chunks = chunks
         self.alpha = [alpha] * self.chunks
-        self.has_smoothed = False
-
-        self.input_quantized_indices = range(self.chunks)
-        self.weight_quantized_indices = range(self.chunks)
-
-        if seg_mode == 'input':
-            self.input_chunk_indices = range(self.chunks)
-            self.weight_chunk_indices = range(self.chunks)
-        elif seg_mode == 'weight':
-            self.input_chunk_indices = [0] * self.chunks
-            self.weight_chunk_indices = range(self.chunks)
-        else:
-            raise ValueError("seg_mode not found")
-
-        self.has_traced_w = False
+        if seg_mode == "input":
+            for i, sz in enumerate(chunksizes):
+                upper_module.register_buffer(
+                    f"smooth_max_x_{i}",
+                    torch.full(
+                        (sz,), float("-inf"), dtype=torch.float32, device=device
+                    ),
+                    persistent=False,
+                )  # (in,)
+                upper_module.register_buffer(
+                    f"smooth_max_w_{i}",
+                    torch.full(
+                        (sz,), float("-inf"), dtype=torch.float32, device=device
+                    ),
+                    persistent=False,
+                )  # (in,)
+                upper_module.register_buffer(
+                    f"smooth_s_{i}",
+                    torch.ones((sz,), dtype=torch.float32, device=device),
+                )  # (in,)
+        elif seg_mode == "weight":
+            for i in range(chunks):
+                upper_module.register_buffer(
+                    f"smooth_max_x_{i}",
+                    torch.full(
+                        (in_features,),
+                        float("-inf"),
+                        dtype=torch.float32,
+                        device=device,
+                    ),
+                    persistent=False,
+                )  # (in,)
+                upper_module.register_buffer(
+                    f"smooth_max_w_{i}",
+                    torch.full(
+                        (in_features,),
+                        float("-inf"),
+                        dtype=torch.float32,
+                        device=device,
+                    ),
+                    persistent=False,
+                )  # (in,)
+                upper_module.register_buffer(
+                    f"smooth_s_{i}",
+                    torch.ones((in_features,), dtype=torch.float32, device=device),
+                )  # (in,)
 
         self.verbose = verbose
-
         if search_alpha_config is None or not search_alpha_config['enable']:
             self.search_alpha = False
         else:
@@ -375,176 +238,79 @@ class SmoothOptimizer(BaseOptimizer):
             self.opt_alpha = [a for a in self.alpha]
 
     def __repr__(self):
-        if self.real_quant:
-            base = (
-                f"SmoothOptimizer(alpha={self.alpha},kernel={self.kernel_type}\n"
-            )
-        else:
-            base = (
-                f"SmoothOptimizer(alpha={self.alpha}\n"
-            )
-        input_q = ",\n      ".join(repr(i) for i in self.input_calibrators)
-        weight_q = ",\n      ".join(repr(w) for w in self.weight_calibrators)
-
-        if self.chunks == 1:
-            return (
-                base + f"    input_quantizer=({input_q}),\n"
-                f"    weight_quantizer=({weight_q})\n"
-                f")"
-            )
-        return (
-            base + f"    input_quantizers=[\n      {input_q}\n  ],\n"
-            f"    weight_quantizers=[\n      {weight_q}\n  ]\n"
-            f")"
+        main_info = (
+            f"{self.__class__.__name__}("
+            f"alpha={self.alpha}, "
+            f"search_alpha={self.search_alpha}"
         )
-
-    def _broadcast_lists(self, a, b):
-        if len(a) == 1 and len(b) > 1:
-            return a * len(b), b
-        elif len(b) == 1 and len(a) > 1:
-            return a, b * len(a)
-        elif len(a) == len(b):
-            return a, b
-        else:
-            raise ValueError("List length not 1")
+        if self.search_alpha:
+            main_info += f", candidate_alphas_remaining={[len(a) for a in self.candidate_alphas]}"
+        main_info += ")"
+        return main_info
 
     def _trace_max_w(self, weight_chunks: List[torch.Tensor]):
-        if len(self.max_w) < self.chunks:
-            for weight_chunk in weight_chunks:
-                weight_chunk_max = (
-                    weight_chunk.abs()
-                    .amax(dim=tuple(range(weight_chunk.ndim - 1)), keepdim=True)
-                    .squeeze()
-                )
-                self.max_w.append(weight_chunk_max)
+        for i, weight_chunk in enumerate(weight_chunks):
+            weight_chunk_max = (
+                weight_chunk.abs()
+                .amax(dim=tuple(range(weight_chunk.ndim - 1)))
+            )
+            max_w = getattr(self.upper_module, f"smooth_max_w_{i}")
+            max_w[:] = torch.maximum(max_w, weight_chunk_max)
 
     def _trace_max_x(self, input_chunks: List[torch.Tensor]):
         for i, input_chunk in enumerate(input_chunks):
             input_chunk_max = (
                 input_chunk.abs()
-                .amax(dim=tuple(range(input_chunk.ndim - 1)), keepdim=True)
-                .squeeze()
+                .amax(dim=tuple(range(input_chunk.ndim - 1)))
             )
-            if len(self.max_x) < self.chunks:
-                self.max_x.append(input_chunk_max)
-            else:
-                self.max_x[i] = torch.maximum(self.max_x[i], input_chunk_max)
+            max_x = getattr(self.upper_module, f"smooth_max_x_{i}")
+            max_x[:] = torch.maximum(max_x, input_chunk_max)
 
-    def trace(self, input_chunks: List[torch.Tensor]):
-        """
-        Trace the maximum values of input tensors for calibration.
-        This method computes the maximum values of the input tensors and weight tensors
-        and stores them for later use in the smoothing and quantization process.
-        It assumes that the input tensors are split into chunks and that the weight tensors
-        are also split into chunks.
-        Args:
-            input_chunks: [tensor(batch_size * split_size1), tensor(batch_size * split_size2), ...]
-        """
-        input_broadcast = self._broadcast_list(input_chunks)
-        self._trace_max_x(input_broadcast)
+    def trace(self, x_chunks, w_chunks):
+        if w_chunks is not None:
+            self._trace_max_w(w_chunks)
+        self._trace_max_x(x_chunks)
 
-        if not self.has_traced_w:
-            self._trace_max_w(self.weight_chunks)
-            self.has_traced_w = True
-    
-    def to(self, device):
-        super().to(device)
-        self.s = [s.to(device) for s in self.s]
-
-    def smooth(self):
-        """
-        Smooth the input tensors based on the traced max values.
-
-        This method computes the scaling factors (s) for each input tensor chunk
-        based on the maximum values of the input and weight tensors.
-
-        It uses the formula:
-
-            s = (max_x ** alpha) / (max_w ** (1 - alpha))
-        where max_x is the maximum value of the input tensor chunk and max_w is
-        the maximum value of the corresponding weight tensor chunk.
-        """
-        max_x, max_w = self._broadcast_lists(self.max_x, self.max_w)
-        for i in range(self.chunks):
+    def on_trace_finish(self, weight_chunks: nn.ParameterList) -> List[torch.Tensor]:
+        smoothed_weight_chunks = []
+        for i, weight_chunk in enumerate(weight_chunks):
+            max_x = getattr(self.upper_module, f"smooth_max_x_{i}")
+            max_w = getattr(self.upper_module, f"smooth_max_w_{i}")
+            scale = getattr(self.upper_module, f"smooth_s_{i}")
             epsilon = 1.0 / (1 << 31)
-            s = (max_x[i] ** self.alpha[i]) / (max_w[i] ** (1 - self.alpha[i]))
+            s = (max_w.pow(1 - self.alpha[i])) / (max_x.pow(self.alpha[i]))
             s = torch.where(s <= epsilon, torch.ones_like(s), s)
-            self.s[i] = torch.clamp(s.to(dtype=torch.float32), min=1e-4, max=1e4)
+            scale[:] = torch.clamp(s.to(dtype=torch.float32), min=1e-4, max=1e4)
 
-        if self.seg_mode == 'input':
-            # weights need to be splitted when input enabled
-            assert len(self.weight_chunks) == 1, "weight_chunks size not 1"
-            self.weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
-        elif self.seg_mode == 'weight':
-            pass
-        else:
-            raise ValueError("seg_mode not found")
-
-        # smooth weight
-        self._smooth_w(self.weight_chunks)
-        self.has_smoothed = True
-
-    def _smooth_w(self, weight_chunks: List[torch.Tensor]):
-        for i, (weight_chunk, s) in enumerate(zip(weight_chunks, self.s)):
-            weight_chunk.mul_(s.to(weight_chunk.device))
-            weight_chunks[i] = weight_chunk
-
-    def _smooth_x(self, input_chunks: List[torch.Tensor]):
-        smoothed_input_chunks = []
-        input_broadcast = self._broadcast_list(input_chunks)
-        for input_chunk, s in zip(input_broadcast, self.s):
-            input_smooth = input_chunk / s
-            smoothed_input_chunks.append(
-                input_smooth.to(dtype=input_chunk.dtype, device=input_chunk.device)
+            inv_scale = 1.0 / scale
+            smoothed_weight_chunks.append(
+                weight_chunk * inv_scale.to(weight_chunk.device)
             )
-        return smoothed_input_chunks
 
-    def calibrate(self, input_chunks):
-        assert self.has_smoothed, 'SmoothOptimizer: linear is not smoothed'
-        input_chunks = self._smooth_x(input_chunks) # len == chunks
-        super().calibrate(input_chunks)
+        return smoothed_weight_chunks
+
+    def preprocess_x(self, x_chunks):
+        smoothed_x_chunks = []
+        for i, x_chunk in enumerate(x_chunks):
+            s = getattr(self.upper_module, f"smooth_s_{i}")
+            smoothed_x_chunks.append(x_chunk * s.to(x_chunk.device))
+        return smoothed_x_chunks
 
     def _clean(self):
-        for i, input_calibrator in enumerate(self.input_calibrators):
-            self.input_calibrators[i] = input_calibrator.quantizer
-        for i, weight_calibrator in enumerate(self.weight_calibrators):
-            self.weight_calibrators[i] = weight_calibrator.quantizer
-        
-        self.max_w = None
-        self.max_x = None
+        for i in range(self.chunks):
+            del self.upper_module._buffers[f'smooth_max_x_{i}']
+            del self.upper_module._buffers[f'smooth_max_w_{i}']
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    def finish_calibrate(self):
-        for i, input_calibrator in enumerate(self.input_calibrators):
-            input_calibrator.finish_calibrate()
-
-        for i, weight_calibrator in enumerate(self.weight_calibrators):
-            self.weight_chunks[i] = weight_calibrator.finish_calibrate(self.weight_chunks[i])
-
-        if self.seg_mode == 'weight':
-            # input chunks must be splitted first
-            self.input_chunk_indices = range(self.chunks)
-        self.has_calibrated = True
-
+    def on_calibrate_finish_end(self):
         if not self.search_alpha:
             self._clean()
+            return True
+        return False
 
-    def forward(self, input_chunks):
-        funcs = self._get_funcs(self.input_quantized_indices, self.weight_quantized_indices)
-        input_chunks = self._smooth_x(input_chunks)
-        quantized_output_chunks = [
-            funcs[i](
-                input_chunks[self.input_chunk_indices[i]].contiguous(),
-                self.weight_chunks[self.weight_chunk_indices[i]].contiguous(),
-            )
-            for i in range(self.chunks)
-        ]
-
-        return quantized_output_chunks
-
-    def search_step(self, errs, origin_weight):
+    def search_step(self, errs):
         assert len(errs) == self.chunks, "errlist length must be chunks"
 
         for i in range(self.chunks):
@@ -552,7 +318,7 @@ class SmoothOptimizer(BaseOptimizer):
             if this_err < self.opt_err[i]:
                 self.opt_err[i] = this_err
                 self.opt_alpha[i] = self.alpha[i]
-            
+
             if self.verbose:
                 print(
                     f"Chunk {i}: current err={this_err:.4f}, best err={self.opt_err[i]:.4f}, best alpha={self.opt_alpha[i]:.4f}"
@@ -562,9 +328,6 @@ class SmoothOptimizer(BaseOptimizer):
         self.alpha = [alphas.popleft() for alphas in self.candidate_alphas]
         if self.verbose:
             print(f"Next alphas to try: {self.alpha[0]:.4f}")
-
-        # reset optimizer
-        self._reset(origin_weight=origin_weight)
 
         if all(len(alphas) == 0 for alphas in self.candidate_alphas):
             self._finish_search()
@@ -580,473 +343,433 @@ class SmoothOptimizer(BaseOptimizer):
         del self.candidate_alphas
         self.search_alpha = False
 
-    def _reset(self, origin_weight):
-        if self.seg_mode == 'weight':
-            self.input_chunk_indices = [0] * self.chunks
-            weight_chunks = origin_weight.split(self.chunksizes, dim=0)
-            for i in range(len(self.weight_chunks)):
-                self.weight_chunks[i] = weight_chunks[i].clone()
-        elif self.seg_mode == 'input':
-            self.weight_chunks = [origin_weight.clone()]
-
-        for input_calibrator in self.input_calibrators:
-            input_calibrator.reset()
-        for weight_calibrator in self.weight_calibrators:
-            weight_calibrator.reset()
-        self.has_smoothed = False
-        self.has_calibrated = False
-
-
 @OptimizerRegistry.register("svd")
 class SVDOptimizer(SmoothOptimizer):
     def __init__(
         self,
+        upper_module,
+        in_features,
+        out_features,
         seg_mode,
         chunks,
         chunksizes,
-        weight_chunks,
-        input_calibrators,
-        weight_calibrators,
-        real_quant=False,
-        dual_scale=False,
-        kernel_type=None,
-        alpha=0.5,
-        low_rank=32,
-        search_alpha_config=None,
+        device,
+        ## extra args
         verbose=False,
+        alpha=0.5,
+        search_alpha_config=None,
+        low_rank=32,
+        precision='float64',
         **kwargs,
     ):
         super().__init__(
+            upper_module,
+            in_features,
+            out_features,
             seg_mode,
             chunks,
             chunksizes,
-            weight_chunks,
-            input_calibrators,
-            weight_calibrators,
-            real_quant,
-            dual_scale,
-            kernel_type,
+            device,
+            verbose,
             alpha,
             search_alpha_config,
-            verbose,
+            **kwargs,
         )
 
         self.low_rank = low_rank
-        self.l1s = [None] * self.chunks
-        self.l2s = [None] * self.chunks
-        self.has_svd = False
-        self.precision = kwargs.get('precision', 'float64')
-        if self.precision not in ['float32', 'float64']:
-            raise ValueError(f"Unsupported precision: {self.precision}. Use 'float32' or 'float64'.")
+        if seg_mode == "input":
+            for i, sz in enumerate(chunksizes):
+                upper_module.register_buffer(
+                    f"svd_l1_{i}",
+                    torch.empty(
+                        (sz, self.low_rank), dtype=torch.float32, device=device
+                    ),
+                )  # (in, low_rank)
+                upper_module.register_buffer(
+                    f"svd_l2_{i}",
+                    torch.empty(
+                        (self.low_rank, out_features),
+                        dtype=torch.float32,
+                        device=device,
+                    ),
+                )  # (low_rank, out)
+        elif seg_mode == "weight":
+            for i, sz in enumerate(chunksizes):
+                upper_module.register_buffer(
+                    f"svd_l1_{i}",
+                    torch.empty(
+                        (in_features, self.low_rank), dtype=torch.float32, device=device
+                    ),
+                )  # (in, low_rank)
+                upper_module.register_buffer(
+                    f"svd_l2_{i}",
+                    torch.empty(
+                        (self.low_rank, sz),
+                        dtype=torch.float32,
+                        device=device,
+                    ),
+                )  # (low_rank, out)
+
+        self.precision = precision
+        if self.precision not in ["float32", "float64"]:
+            raise ValueError(
+                f"Unsupported precision: {self.precision}. Use 'float32' or 'float64'."
+            )
 
     def __repr__(self):
-        if self.real_quant:
-            base = (
-                f"SVDOptimizer(alpha={self.alpha}, low_rank={self.low_rank}, kernel={self.kernel_type}\n"
-            )
-        else:
-            base = (
-                f"SVDOptimizer(alpha={self.alpha}, low_rank={self.low_rank}\n"
-            )
-        input_q = ",\n      ".join(repr(i) for i in self.input_calibrators)
-        weight_q = ",\n      ".join(repr(w) for w in self.weight_calibrators)
-
-        if self.chunks == 1:
-            return (
-                base + f"    input_quantizer=({input_q}),\n"
-                f"    weight_quantizer=({weight_q})\n"
-                f")"
-            )
-        return (
-            base + f"    input_quantizers=[\n      {input_q}\n  ],\n"
-            f"    weight_quantizers=[\n      {weight_q}\n  ]\n"
-            f")"
+        main_info = (
+            f"{self.__class__.__name__}("
+            f"alpha={self.alpha}, "
+            f"low_rank={self.low_rank}, "
+            f"precision={self.precision}, "
+            f"search_alpha={self.search_alpha}"
         )
-    
-    def to(self, device):
-        super().to(device)
-        self.l1s = [l1.to(device) for l1 in self.l1s]
-        self.l2s = [l2.to(device) for l2 in self.l2s]
+        if self.search_alpha:
+            main_info += f", candidate_alphas_remaining={[len(a) for a in self.candidate_alphas]}"
+        main_info += ")"
+        return main_info
 
-    def _svd_w(self, smooth_weight_chunks: List[torch.Tensor]):
-        assert self.has_smoothed, 'SVDOptimizer: linear is not smoothed'
-        assert len(smooth_weight_chunks) == self.chunks, \
-            f'SVDOptimizer: weight chunks must equal to chunks but get [{len(smooth_weight_chunks)}]'
+    @torch.no_grad()
+    def on_trace_finish(self, weight_chunks: nn.ParameterList):
+        smoothed_weight_chunks = super().on_trace_finish(weight_chunks=weight_chunks)
 
-        svd_weight_chunk = []
-
-        for idx, smooth_weight_chunk in enumerate(smooth_weight_chunks):
-            chunk = smooth_weight_chunk.t()
-            u, s, vt = torch.linalg.svd(chunk.to(getattr(torch, self.precision)), full_matrices=False)
-
+        ## smooth ok, do svd
+        svd_weight_chunks = []
+        for i, smoothed_weight_chunk in enumerate(smoothed_weight_chunks):
+            weight_chunk = smoothed_weight_chunk.t()  # (in, out)
+            u, s, vt = torch.linalg.svd(
+                weight_chunk.to(getattr(torch, self.precision)), full_matrices=False
+            )
             if u.shape[1] < self.low_rank or vt.shape[0] < self.low_rank:
                 raise ValueError(
                     f"Low-rank dimension {self.low_rank} exceeds layer "
                     f"dimensions {u.shape[1]} and {vt.shape[0]}."
                 )
-
             us = u[:, :self.low_rank] * s[:self.low_rank] # (m, r)
             vt = vt[:self.low_rank, :]                    # (r, n)
 
-            device, dtype = smooth_weight_chunk.device, smooth_weight_chunk.dtype
-            l1 = us.to(device=device, dtype=dtype)
-            l2 = vt.to(device=device, dtype=dtype)
-            self.l1s[idx] = l1
-            self.l2s[idx] = l2
+            device, dtype = smoothed_weight_chunk.device, smoothed_weight_chunk.dtype
 
-            weight_svd = (chunk.to(torch.float64) - us @ vt).t().to(device=device, dtype=dtype)
-            svd_weight_chunk.append(weight_svd)
-            del u, s, vt, us, chunk
-        return svd_weight_chunk
+            l1 = getattr(self.upper_module, f'svd_l1_{i}')
+            l2 = getattr(self.upper_module, f'svd_l2_{i}')
+            l1[:] = us.to(device=device, dtype=dtype)
+            l2[:] = vt.to(device=device, dtype=dtype)
 
-    def smooth(self):
-        super().smooth()
-        self.weight_chunks = self._svd_w(self.weight_chunks)
-        self.has_svd = True
-
-    def calibrate(self, input_chunks):
-        assert self.has_svd, 'SVDOptimizer: linear is not svd'
-        super().calibrate(input_chunks)
-
-    def forward(self, input_chunks):
-        funcs = self._get_funcs(self.input_quantized_indices, self.weight_quantized_indices)
-        input_chunks = self._smooth_x(input_chunks)
-        quantized_output_chunks = [
-            input_chunks[self.input_chunk_indices[i]] @ self.l1s[i] @ self.l2s[i] +
-            funcs[i](
-                input_chunks[self.input_chunk_indices[i]].contiguous(),
-                self.weight_chunks[self.weight_chunk_indices[i]].contiguous(),
+            weight_svd = (
+                (weight_chunk.to(torch.float64) - us @ vt)
+                .t()
+                .to(device=device, dtype=dtype)
             )
-            for i in range(self.chunks)
-        ]
+            svd_weight_chunks.append(weight_svd)
 
+        return svd_weight_chunks
+
+    def chunk_forward(self, quantized_input_chunks, quantized_weight_chunks):
+        quantized_output_chunks = []
+        for i, (quantized_input_chunk, quantized_weight_chunk) in enumerate(
+            zip(quantized_input_chunks, quantized_weight_chunks)
+        ):
+            quantized_output_chunks.append(
+                quantized_input_chunk
+                @ getattr(self.upper_module, f"svd_l1_{i}")
+                @ getattr(self.upper_module, f"svd_l2_{i}")
+                + F.linear(quantized_input_chunk, quantized_weight_chunk)
+            )
         return quantized_output_chunks
 
 
-@OptimizerRegistry.register("ortho")
-class OrthoOptimizer:
+@OptimizerRegistry.register("givens")
+class GivensOptimizer(BaseOptimizer):
     def __init__(
         self,
-        layer_mode,
-        seg_mode,
-        chunks,
-        chunksizes,
-        weight_chunks,
-        input_calibrators,
-        weight_calibrators,
-        real_quant=False,
-        dual_scale=False,
-        kernel_type=None,
-        layer_kwargs={},
-        verbose=False,
-        givens_m=None,
-        cpu_storage=False,
-        val_sample_batch=0,
+        upper_module: nn.Module,
+        in_features: int,
+        out_features: int,
+        seg_mode: str,
+        chunks: int,
+        chunksizes: List[int],
+        device: torch.device,
+        ### sub opt
         sub_optimizer_type="default",
         sub_optimizer_kwargs={},
-        optimizer_config={},
+        ### extra args
+        verbose=False,
+        optim_type="SGD",
+        optim_config={},
+        givens_num=None,
+        sample_mode="rand",
+        init_vecs_mode="identity",
+        dtype=torch.float32,
+        enable_autograd=False,
+        enable_grad_buffer=False,
+        enable_low_memory_grad=False,
+        cpu_storage=False,
         stop_criteria={},
+        val_sample_batch=0,
         **kwargs,
     ):
-        '''
-        pipeline:
-            determine all scale params(scale, zero_point keep unchanged) for input and weight
-            find opt Q
-
-
-        '''
-        assert len(input_calibrators) == len(weight_calibrators) and \
-            len(weight_calibrators) == len(weight_chunks), \
-            f"Lengths mismatch: input_calibrators={len(input_calibrators)}, " \
-            f"weight_calibrators={len(weight_calibrators)}, " \
-            f"weight_chunks={len(weight_chunks)}"
-
-        ### sub optimizer
+        super().__init__(upper_module, **kwargs)
         self.sub_optimizer = OptimizerRegistry.create(
             sub_optimizer_type,
-            layer_mode = layer_mode,
-            seg_mode = seg_mode,
-            chunks = chunks,
-            chunksizes = chunksizes,
-            weight_chunks = weight_chunks,
-            input_calibrators = input_calibrators,
-            weight_calibrators = weight_calibrators,
-            real_quant = real_quant,
-            dual_scale = dual_scale,
-            kernel_type = kernel_type,
-            layer_kwargs = layer_kwargs,
+            upper_module=upper_module,
+            in_features=in_features,
+            out_features=out_features,
+            seg_mode=seg_mode,
+            chunks=chunks,
+            chunksizes=chunksizes,
+            device=device,
             **sub_optimizer_kwargs
         )
 
-        self.cpu_storage = cpu_storage
-        if self.cpu_storage:
-            print('[Warning] OrthoOptimizer set CPU Storage.')
+        if sample_mode not in ['rand', 'ascending', 'descending', 'custom']:
+            raise ValueError(f"Unsupported sample_mode: {sample_mode}")
+        if sample_mode == 'custom':
+            # todo custom func
+            sample_func = None
+            raise NotImplementedError("Custom sample_mode not implemented yet.")
+        else:
+            sample_func = None
 
         self.verbose = verbose
-        self.has_descended = False
 
-        if givens_m is None:
-            # todo: auto infer
-            self.givens_m = self.weight_chunks[-1].shape[1]
+        if optim_type == 'SGD':
+            OptimClass = torch.optim.SGD
+        elif optim_type == 'Adam':
+            OptimClass = torch.optim.Adam
+        elif optim_type == 'AdamW':
+            OptimClass = torch.optim.AdamW
         else:
-            self.givens_m = givens_m
+            raise ValueError(f"Unsupported optim_type: {optim_type}")
 
-        ## buffer
+        if seg_mode == "input":
+            upper_module.givens = nn.ModuleList(
+                [
+                    GivensOrthogonal(
+                        k=sz,
+                        givens_num=givens_num,
+                        sample_mode=sample_mode,
+                        sample_func=sample_func,
+                        init_vecs_mode=init_vecs_mode,
+                        generator=None,
+                        dtype=dtype,
+                        device=device,
+                        requires_grad=True,
+                        enable_autograd=enable_autograd,
+                        enable_grad_buffer=enable_grad_buffer,
+                        enable_low_memory_grad=enable_low_memory_grad,
+                    ) for sz in chunksizes
+                ]
+            )
+        elif seg_mode == "weight":
+            upper_module.givens = nn.ModuleList(
+                [
+                    GivensOrthogonal(
+                        k=in_features,
+                        givens_num=givens_num,
+                        sample_mode=sample_mode,
+                        sample_func=sample_func,
+                        init_vecs_mode=init_vecs_mode,
+                        generator=None,
+                        dtype=dtype,
+                        device=device,
+                        requires_grad=True,
+                        enable_autograd=enable_autograd,
+                        enable_grad_buffer=enable_grad_buffer,
+                        enable_low_memory_grad=enable_low_memory_grad,
+                    )
+                    for _ in chunksizes
+                ]
+            )
+
+        self.optims = [
+            OptimClass(params=upper_module.givens[i].parameters(), **optim_config)
+            for i in range(chunks)
+        ]
+
+        self.enable_autograd = enable_autograd
+        if not enable_autograd:
+            # make buffer
+            buffer_device = device if not cpu_storage else torch.device('cpu')
+            if seg_mode == "input":
+                for i, sz in enumerate(chunksizes):
+                    upper_module.register_buffer(
+                        f"givens_X_rel_{i}",
+                        torch.zeros((3, sz, sz), dtype=dtype, device=buffer_device),
+                        persistent=False,
+                    )  # (xtx, xtex, extex) dim = 0
+            elif seg_mode == "weight":
+                for i, sz in enumerate(chunksizes):
+                    upper_module.register_buffer(
+                        f"givens_X_rel_{i}",
+                        torch.zeros(
+                            (3, in_features, in_features),
+                            dtype=dtype,
+                            device=buffer_device,
+                        ),
+                        persistent=False,
+                    )  # (xtx, xtex, extex) dim = 0
+
+        self.dtype = dtype
         self.nsamples = 0
-        self.x_rel_buffers = [None] * len(self.input_calibrators) # (xtx, xtex, extex) dim = 0
-        self.weight_rel_buffers = [None] * self.chunks # (wwt, wewt, ewewt) dim = 0
-
-        ## val batch
+        self.stop_criteria = stop_criteria
+        if enable_autograd:
+            self.val_sample_batch = 0
+            self.losses = [
+                torch.tensor(
+                    0.0, device=device, dtype=self.dtype, requires_grad=True
+                )
+                for _ in range(chunks)
+            ]
+            self.Ws = None
+            self.eWs = None
         self.val_sample_batch = val_sample_batch
         self.val_x_buffer = []
 
-        # todo: init strategy
-        if len(self.weight_chunks) != self.chunks:
-            # seginput, k = chunksizes
-            self.k_s = chunksizes.copy()
-        else:
-            # segweight, k = weight's in
-            self.k_s = [chunk.shape[1] for chunk in self.weight_chunks]
-        # todo: pairs
-        self.pairs = [self._generate_upper_triangular_pairs(k) for k in self.k_s]
-        # self.thetas = [
-        #     nn.Parameter(
-        #         (torch.rand(self.givens_m, dtype=torch.float32, device=self.weight_chunks[i].device) * 2 - 1) * math.pi
-        #     )
-        #     for i in range(self.chunks)
-        # ]
-        self.thetas = [
-            nn.Parameter(torch.zeros(self.givens_m, dtype=torch.float32, device=self.weight_chunks[i].device)) 
-            for i in range(self.chunks)]
-        self.Qs = [None] * self.chunks
-
-        ## opt
-        self.stop_criteria = stop_criteria
-        this_optimizer_config = optimizer_config.copy()
-        optimize_type = this_optimizer_config.pop('type')  # 'Adam' or 'SGD'
-        if optimize_type.lower() == 'adam':
-            OptimClass = torch.optim.Adam
-        elif optimize_type.lower() == 'sgd':
-            OptimClass = torch.optim.SGD
-        else:
-            raise ValueError(f"Unsupported optimizer type: {optimize_type}")
-        self.optimizers = [
-            OptimClass(params=[self.thetas[i]], **this_optimizer_config)
-            for i in range(self.chunks)
-        ]
+        self.has_givens_optimized = False
 
     @staticmethod
-    def _generate_upper_triangular_pairs(k):
-        pairs = []
-        for i in range(k-1):
-            for j in range(i+1, k):
-                pairs.append((i, j))
-        return pairs
+    def loss(manager: GivensOrthogonal, X, W, epsX, epsW):
+        Q = manager.forward()
+        term = X @ Q @ epsW + epsX @ Q.t() @ W + epsX @ epsW
+        return torch.norm(term, p="fro") ** 2, Q
 
     @staticmethod
-    def _givens_rotation_matrix(k, i, j, theta, device=None):
-        G = torch.eye(k, device=device)
-        c = torch.cos(theta)
-        s = torch.sin(theta)
-        G[i, i] = c
-        G[j, j] = c
-        G[i, j] = -s
-        G[j, i] = s
-        return G
-    
+    @torch.no_grad()
+    def manual_grad_Q_buffer(Q, XtX, XteX, eXteX, W, eW):
+        eWeWt = eW @ eW.t()
+        WWt = W @ W.t()
+        WeWt = W @ eW.t()
+
+        grad = (
+            XtX @ Q @ eWeWt
+            + WWt @ Q @ eXteX
+            + XteX @ Q.t() @ WeWt
+            + WeWt @ Q.t() @ XteX
+            + XteX @ eWeWt
+            + WeWt @ eXteX
+        )
+
+        return grad
+
     @staticmethod
-    def _build_Q(k, thetas, pairs, device):
-        Q = torch.eye(k, device=device)
-        for theta, (p, q) in zip(thetas, pairs):
-            G = OrthoOptimizer._givens_rotation_matrix(k, p, q, theta, device)
-            Q = Q @ G
-        return Q
-    
+    @torch.no_grad()
+    def manual_grad_buffer(manager: GivensOrthogonal, X_buffer, W, epsW):
+        Q = manager.forward()
+        XtX, XteX, eXteX = X_buffer
+        gQ = GivensOptimizer.manual_grad_Q_buffer(Q, XtX, XteX, eXteX, W, epsW)
+        g = manager.try_grad(chain_grad=gQ)
+        return g
+
     @staticmethod
-    def _grad_thetas(thetas, pq, grad_Q):
-        m = thetas.shape[0]
-        k = grad_Q.shape[0]
+    @torch.no_grad()
+    def manual_grad_Q(Q, X, W, epsX, epsW):
+        XtX = X.t() @ X
+        WWT = W @ W.t()
+        epsXtX = epsX.t() @ epsX
+        epsWDW = epsW @ epsW.t()
 
-        device = thetas.device
-        dtype = thetas.dtype
+        grad = 2 * (XtX @ Q @ epsWDW + WWT @ Q @ epsXtX)
+        grad += 2 * (
+            X.t() @ epsX @ Q.t() @ W @ epsW.t() + W @ epsW.t() @ Q.t() @ X.t() @ epsX
+        )
+        grad += 2 * (X.t() @ epsX @ epsWDW + W @ epsW.t() @ epsXtX)
+        return grad
 
-        # Prefix products
-        P = [torch.eye(k, device=device, dtype=dtype)]
-        for j in range(m):
-            p, q = pq[j]
-            Pj = P[-1].clone()
-            u = Pj[p, p]
-            v = Pj[p, q]
-            r = Pj[q, p]
-            t = Pj[q, q]
-            c, s = torch.cos(thetas[j]), torch.sin(thetas[j])
-            Pj[p, p] = c * u + s * v
-            Pj[p, q] = -s * u + c * v
-            Pj[q, p] = c * r + s * t
-            Pj[q, q] = -s * r + c * t
-            P.append(Pj)
-
-        # Suffix products
-        S = [torch.eye(k, device=device, dtype=dtype)]  # S_{m+1}
-        for j in reversed(range(m)):
-            p, q = pq[j]
-            Sj = S[0].clone()
-            u = Sj[p, p]
-            v = Sj[p, q]
-            r = Sj[q, p]
-            t = Sj[q, q]
-            c, s = torch.cos(thetas[j]), torch.sin(thetas[j])
-            Sj[p, p] = c * u - s * r
-            Sj[p, q] = c * v - s * t
-            Sj[q, p] = s * u + c * r
-            Sj[q, q] = s * v + c * t
-            S.insert(0, Sj)
-
-        # Compute all gradients
-        g = torch.zeros(m, device=device, dtype=dtype)
-        for j in range(m):
-            p, q = pq[j]
-            cos_theta, sin_theta = torch.cos(thetas[j]), torch.sin(thetas[j])
-            dG = torch.tensor([[-sin_theta, -cos_theta],
-                            [ cos_theta, -sin_theta]], device=device, dtype=dtype)
-            L = P[j][:,[p, q]]          # shape (k, 2)
-            R = S[j+1][[p, q],:]        # shape (2, k)
-            A = L @ dG @ R               # shape (k, k)
-            g[j] = torch.sum(grad_Q * A)
-
+    @staticmethod
+    @torch.no_grad()
+    def manual_grad(manager: GivensOrthogonal, X, W, epsX, epsW):
+        Q = manager.forward()
+        gQ = GivensOptimizer.manual_grad_Q(Q, X, W, epsX, epsW)
+        g = manager.try_grad(chain_grad=gQ)
         return g
 
     def __getattr__(self, name):
         return getattr(self.sub_optimizer, name)
 
     def __setattr__(self, name, value):
-        if name == "sub_optimizer" or name in self.__dict__:
+        if name == "sub_optimizer":
+            super().__setattr__(name, value)
+        elif name in self.__dict__ or not hasattr(self, "sub_optimizer"):
             super().__setattr__(name, value)
         else:
             setattr(self.sub_optimizer, name, value)
 
-    def after_calibrate(self, input_chunks):
-        if hasattr(self.sub_optimizer, '_smooth_x'):
-            input_chunks = self._smooth_x(input_chunks)
+    @torch.no_grad()
+    def stat_error(self, Xs: List[torch.tensor], eXs: List[torch.tensor], Ws: List[torch.tensor], eWs: List[torch.tensor]):
+        if self.enable_autograd:
+            if Ws is not None and eWs is not None:
+                self.Ws = Ws
+                self.eWs = eWs
 
-        if self.val_sample_batch > 0:
-            input_chunks_cpu = [chunk.detach().cpu() for chunk in input_chunks]
-            self.val_x_buffer.extend(input_chunks_cpu)
-            self.val_sample_batch -= 1
+            for i, (x, ex, w, ew) in enumerate(zip(Xs, eXs, self.Ws, self.eWs)):
+                if self.val_sample_batch > 0:
+                    x_cpu = x.detach().cpu()
+                    ex_cpu = ex.detach().cpu()
+                    self.val_x_buffer.append((x_cpu, ex_cpu))
+                    self.val_sample_batch -= 1
 
-        ## init weight_rel_buffers
-        if self.weight_rel_buffers[-1] is None:
-            if self.seg_mode == 'input':
-                assert len(self.weight_chunks) == 1, "weight_chunks size not 1"
-                weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
-            else:
-                weight_chunks = self.weight_chunks
-
-            for i, weight in enumerate(weight_chunks):
-                ew = self.weight_calibrators[self.weight_quantized_indices[i]].fake_quantize(weight) - weight
-                W = weight.to(dtype=torch.float32, device=weight.device).t()   # (in, out)
-                EW = ew.to(dtype=torch.float32, device=weight.device).t()      # (in, out)
-                buf_gpu = torch.stack([
-                    W @ W.t(),    # wwt
-                    W @ EW.t(),   # wewt
-                    EW @ EW.t()   # ewewt
-                ], dim=0)
-
-                if self.cpu_storage:
-                    buf_cpu = buf_gpu.cpu()
-                    self.weight_rel_buffers[i] = buf_cpu
+                if len(x.shape) == 2:
+                    this_batch = 1
+                elif len(x.shape) == 1:
+                    x = x.unsqueeze(0)
+                    ex = ex.unsqueeze(0)
+                    this_batch = 1
                 else:
-                    self.weight_rel_buffers[i] = buf_gpu
+                    x = x.reshape((-1, x.shape[-1]))
+                    ex = ex.reshape((-1, ex.shape[-1]))
+                    this_batch = x.shape[0]
+                self.nsamples += this_batch
 
-        # compute xtx, xtex, extex
-        for i, input_calibrator in enumerate(self.input_calibrators):
-            x = input_chunks[i]
-            ex = input_calibrator.fake_quantize(x) - x
+                loss, _ = GivensOptimizer.loss(
+                    self.upper_module.givens[i],
+                    x.to(w.device),
+                    w.to(w.device),
+                    ex.to(w.device),
+                    ew.to(w.device),
+                )
+                self.losses[i] = self.losses[i] + loss
+        else:
+            for i, (x, ex) in enumerate(zip(Xs, eXs)):
+                if self.val_sample_batch > 0:
+                    x_cpu = x.detach().cpu()
+                    ex_cpu = ex.detach().cpu()
+                    self.val_x_buffer.append((x_cpu, ex_cpu))
+                    self.val_sample_batch -= 1
 
-            if len(x.shape) == 2:
-                this_batch = 1
-            elif len(x.shape) == 1:
-                x = x.unsqueeze(0)
-                ex = ex.unsqueeze(0)
-                this_batch = 1
-            else:
-                x = x.reshape((-1, x.shape[-1]))
-                ex = ex.reshape((-1, ex.shape[-1]))
-                this_batch = x.shape[0]
+                # compute xtx, xtex, extex
+                if len(x.shape) == 2:
+                    this_batch = 1
+                elif len(x.shape) == 1:
+                    x = x.unsqueeze(0)
+                    ex = ex.unsqueeze(0)
+                    this_batch = 1
+                else:
+                    x = x.reshape((-1, x.shape[-1]))
+                    ex = ex.reshape((-1, ex.shape[-1]))
+                    this_batch = x.shape[0]
 
-            x = x.to(dtype=torch.float32, device=x.device).t()  # (in, b)
-            ex = ex.to(dtype=torch.float32, device=x.device).t()  # (in, b)
-            device = x.device
+                x = x.to(dtype=self.dtype, device=x.device).t()  # (in, b)
+                ex = ex.to(dtype=self.dtype, device=x.device).t()  # (in, b)
 
-            if self.x_rel_buffers[i] is None:
-                self.x_rel_buffers[i] = torch.zeros(
-                    (3, x.shape[0], x.shape[0]),
-                    device='cpu' if self.cpu_storage else device,
-                    dtype=torch.float32,
-                    pin_memory=True if self.cpu_storage else False
+                buffer = getattr(
+                    self.upper_module, f"givens_X_rel_{i}"
                 )
 
-            if self.cpu_storage:
-                buffer = self.x_rel_buffers[i].to(device, non_blocking=True)
-            else:
-                buffer = self.x_rel_buffers[i]
+                tmp_buffer = buffer.to(x.device, non_blocking=True)
+                tmp_buffer.mul_(self.nsamples / (self.nsamples + this_batch))
+                self.nsamples += this_batch
 
-            buffer.mul_(self.nsamples / (self.nsamples + this_batch))
-            self.nsamples += this_batch
+                scale = math.sqrt(2 / self.nsamples)
+                x = x * scale
+                ex = ex * scale
 
-            scale = math.sqrt(2 / self.nsamples)
-            x.mul_(scale)
-            ex.mul_(scale)
+                tmp_buffer[0].addmm_(x, x.t(), beta=1.0, alpha=1.0)
+                tmp_buffer[1].addmm_(x, ex.t(), beta=1.0, alpha=1.0)
+                tmp_buffer[2].addmm_(ex, ex.t(), beta=1.0, alpha=1.0)
 
-            buffer[0].addmm_(x, x.t(), beta=1.0, alpha=1.0)
-            buffer[1].addmm_(x, ex.t(), beta=1.0, alpha=1.0)
-            buffer[2].addmm_(ex, ex.t(), beta=1.0, alpha=1.0)
+                buffer.copy_(tmp_buffer.to(buffer.device))
 
-            if self.cpu_storage:
-                self.x_rel_buffers[i].copy_(buffer, non_blocking=True)
-
-    def _grad_Q(self, Q, i, device):
-        xtx, xtex, extex = self.x_rel_buffers[self.input_quantized_indices[i]]
-        wwt, wewt, ewewt = self.weight_rel_buffers[i]
-        if xtx.device != device:
-            xtx, xtex, extex = xtx.to(device), xtex.to(device), extex.to(device)
-
-        if wwt.device != device:    
-            wwt, wewt, ewewt = wwt.to(device), wewt.to(device), ewewt.to(device)
-
-        Q_T = Q.T
-        grad = (xtx @ Q @ ewewt
-                + wwt @ Q @ extex
-                + xtex @ Q_T @ wewt
-                + wewt @ Q_T @ xtex
-                + xtex @ ewewt
-                + wewt @ extex)
-        return grad
-    
-    def grad_func(self, i, device):
-        thetas = self.thetas[i]
-        k = self.k_s[i]
-        pairs = self.pairs[i]
-        Q = self._build_Q(k, thetas, pairs, device=device)
-        grad_Q = self._grad_Q(Q, i, device=device)
-        return self._grad_thetas(thetas, pairs, grad_Q)
-
-    def loss_thetas(self, W, i, device):
-        Q = self._build_Q(self.k_s[i], self.thetas[i], self.pairs[i], device=device)
-        quant_W = self.weight_calibrators[self.weight_quantized_indices[i]].fake_quantize(W @ Q)  # (out, in)
-        X_quantizer = self.input_calibrators[self.input_quantized_indices[i]]
-        loss_total = 0.0
-        for X in self.val_x_buffer:
-            X = X.to(device=device, dtype=torch.float32)
-            quant_X = X_quantizer.fake_quantize(X @ Q)  # (b, in)
-            loss = torch.norm(X @ W.t() - quant_X @ quant_W.t(), p='fro') ** 2
-            loss_total += loss.item()
-        
-        if len(self.val_x_buffer) == 0:
-            return 0.0
-        return loss_total / len(self.val_x_buffer)
-
-    def step(self):
+    def on_calibrate_prepare_finish(self, Ws, eWs):
         criteria = self.stop_criteria
         max_steps = criteria.get('max_steps', 100)
         grad_tol = criteria.get('grad_tol', 1e-4)
@@ -1054,20 +777,15 @@ class OrthoOptimizer:
         patience = criteria.get('patience', 5)
         ema_decay = criteria.get('ema_grad_decay', 0.9)
         check_every = criteria.get('check_every', 1)
-        update_w_every = criteria.get('update_w_every', 1)
 
-        grad_ema = [None] * self.chunks
-        prev_grad = [None] * self.chunks
-        stop_counter = [0] * self.chunks
-        active = [True] * self.chunks
+        grad_ema = [None] * len(Ws)
+        prev_grad = [None] * len(Ws)
+        stop_counter = [0] * len(Ws)
+        active = [True] * len(Ws)
 
-        if self.seg_mode == 'input':
-            assert len(self.weight_chunks) == 1, "weight_chunks size not 1"
-            weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
-        else:
-            weight_chunks = self.weight_chunks
-        
-        print("init thetas", self.thetas)
+        if self.enable_autograd:
+            for i in range(len(Ws)):
+                self.losses[i] = self.losses[i] / self.nsamples
 
         for step in range(max_steps):
             if not any(active):
@@ -1075,26 +793,50 @@ class OrthoOptimizer:
                     print(f"All chunks converged by step {step}")
                 break
 
-            for i in range(self.chunks):
+            for i, (w_, ew_, givens_layer, optim) in enumerate(zip(Ws, eWs, self.upper_module.givens, self.optims)):
                 if not active[i]:
                     continue
-                
-                W = weight_chunks[i].to(dtype=torch.float32)
-                device = W.device
-                loss = self.loss_thetas(W, i=i, device=device)
-                self.thetas[i].grad = self.grad_func(i=i, device=device)
-                grad = self.thetas[i].grad.detach()
-                self.optimizers[i].step()
-                self.optimizers[i].zero_grad()
-                Q_new = self._build_Q(self.k_s[i], self.thetas[i], self.pairs[i], device=device)
 
+                w = w_.to(dtype=self.dtype, device=w.device).t()  # (in, out)
+                ew = ew_.to(dtype=self.dtype, device=ew.device).t() # (in, out)
+
+                ### grad optims
+                optim.zero_grad()
+                if self.enable_autograd:
+                    self.losses[i].backward()
+                else:
+                    grad = GivensOptimizer.manual_grad_buffer(
+                        givens_layer,
+                        getattr(self.upper_module, f"givens_X_rel_{i}"),
+                        w,
+                        ew,
+                    )
+                    givens_layer.vecs.grad = grad
+
+                optim.step()
+
+                # get loss
+                total_loss = 0.0
+                Q_new_result = None
+                n = len(self.val_x_buffer)
+                with torch.no_grad():
+                    for idx, (x, ex) in enumerate(self.val_x_buffer):
+                        loss, Q_new = GivensOptimizer.loss(givens_layer, x.to(w.device), w, ex.to(w.device), ew)
+                        total_loss += loss
+                        if Q_new_result is None:
+                            Q_new_result = Q_new
+                avg_loss = total_loss / n
+
+                # update grad
                 if grad_ema[i] is None:
                     grad_ema[i] = grad.clone()
                 else:
                     grad_ema[i] = ema_decay * grad_ema[i] + (1 - ema_decay) * grad
 
                 grad_norm = torch.norm(grad_ema[i])
-                grad_diff = torch.norm(grad - prev_grad[i]) if prev_grad[i] is not None else 0.0
+                grad_diff = (
+                    torch.norm(grad - prev_grad[i]) if prev_grad[i] is not None else 0.0
+                )
                 prev_grad[i] = grad.clone()
 
                 if grad_norm < grad_tol or grad_diff < grad_change_tol:
@@ -1108,70 +850,47 @@ class OrthoOptimizer:
                         print(f"Chunk {i} converged at step {step}")
 
                 if self.verbose and step % check_every == 0:
-                    print(f"[Chunk {i}] Step {step}: loss={loss:.6f}, ortho={torch.norm(Q_new @ Q_new.t() - torch.eye(Q_new.shape[0], device=Q_new.device)).item():.4e}, grad_norm={grad_norm:.6f}, grad_diff={grad_diff:.6f}, stop_count={stop_counter[i]}")
+                    ortho_err = torch.norm(
+                        Q_new @ Q_new.t() - torch.eye(Q_new.shape[0], device=Q_new.device)
+                    ).item()
+                    print(
+                        f"[Chunk {i}] Step {step}: "
+                        f"loss={avg_loss:.6f}, "
+                        f"ortho={ortho_err:.4e}, "
+                        f"grad_norm={grad_norm:.6f}, "
+                        f"grad_diff={grad_diff:.6f}, "
+                        f"stop_count={stop_counter[i]}"
+                    )
 
-                ### update w rel
-                if step % update_w_every == 0:
-                    weight = W @ Q_new  # (out, in)
-                    ew = self.weight_calibrators[self.weight_quantized_indices[i]].fake_quantize(weight) - weight
-                    W = weight.t()   # (in, out)
-                    EW = ew.t()      # (in, out)
-                    buf_gpu = torch.stack([
-                        W @ W.t(),    # wwt
-                        W @ EW.t(),   # wewt
-                        EW @ EW.t()   # ewewt
-                    ], dim=0)
-                    if self.cpu_storage:
-                        buf_cpu = buf_gpu.cpu()
-                        self.weight_rel_buffers[i] = buf_cpu
-                    else:
-                        self.weight_rel_buffers[i] = buf_gpu
+        if self.verbose:
+            print("Givens optimization finished.")
+            for i, givens_layer in enumerate(self.upper_module.givens):
+                Q_final = givens_layer.forward()
+                ortho_err = torch.norm(
+                    Q_final @ Q_final.t() - torch.eye(Q_final.shape[0], device=Q_final.device)
+                ).item()
+                print(f"Final ortho check for chunk {i}: {ortho_err:.4e}")
+                print(f"Givens rotations: {givens_layer.vecs}")
 
-        print(self.thetas)
+        ## givens weight
+        givens_weight_chunks = []
+        for i, (w, givens_layer) in enumerate(zip(Ws, self.upper_module.givens)):
+            Q = givens_layer.forward()
+            givens_weight_chunks.append(w @ Q)  # (Q.t @ W.t).t --> (W @ Q)
+        self.has_givens_optimized = True
 
-        for i in range(self.chunks):
-            device = weight_chunks[i].device
-            self.Qs[i] = self._build_Q(self.k_s[i], self.thetas[i], self.pairs[i], device=device)
-            weight_chunks[i] = (weight_chunks[i].float() @ self.Qs[i]).to(dtype=weight_chunks[i].dtype, device=weight_chunks[i].device)
-        if self.seg_mode == 'input':
-            self.weight_chunks = [torch.cat(weight_chunks, dim=-1)]
+        return givens_weight_chunks
+
+    def preprocess_x(self, x_chunks):
+        # slow version for fake quant
+        x_chunks = self.sub_optimizer.preprocess_x(x_chunks)
+        if self.has_givens_optimized:
+            givens_x_chunks = []
+            for i, (x_chunk, givens_layer) in enumerate(
+                zip(x_chunks, self.upper_module.givens)
+            ):
+                givens_x_chunks.append(x_chunk @ givens_layer.forward())
+
+            return givens_x_chunks
         else:
-            self.weight_chunks = weight_chunks
-
-        self.val_x_buffer = None
-        self.x_rel_buffers = None
-        self.weight_rel_buffers = None
-        self.optimizers = None
-        self.has_descended = True
-
-    def _ortho_x(self, input_chunks: List[torch.Tensor]):
-        input_broadcast = self._broadcast_list(input_chunks)
-        ortho_input_chunks = []
-        for i in range(self.chunks):
-            # todo kernel implementation
-            chunk = input_broadcast[i].clone()
-            thetas = self.thetas[i]
-            pairs = self.pairs[i]
-            for theta, (p, q) in zip(thetas, pairs):
-                c, s = torch.cos(theta), torch.sin(theta)
-                tmp_p = chunk[:, p].clone()
-                tmp_q = chunk[:, q].clone()
-                chunk[:, p] = c*tmp_p - s*tmp_q
-                chunk[:, q] = s*tmp_p + c*tmp_q
-
-            ortho_input_chunks.append(chunk.to(dtype=chunk.dtype, device=chunk.device))
-
-        return ortho_input_chunks
-
-    def to(self, device):
-        self.sub_optimizer.to(device)
-        self.Qs = [Q.to(device) for Q in self.Qs if Q is not None]
-
-    def forward(self, input_chunks):
-        if not self.has_descended:
-            raise RuntimeError("OrthoOptimizer: must cayley_descent first")
-
-        if hasattr(self.sub_optimizer, '_smooth_x'):
-            input_chunks = self._smooth_x(input_chunks)
-        input_chunks = self._ortho_x(input_chunks)
-        return self.sub_optimizer.forward(input_chunks)
+            return x_chunks

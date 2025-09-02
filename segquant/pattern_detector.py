@@ -36,6 +36,7 @@ Example:
     ```
 """
 import inspect
+from typing import Tuple
 import warnings
 from collections import namedtuple
 import torch
@@ -368,10 +369,37 @@ if __name__ == "__main__":
                 hidden_states = module(hidden_states)
             return hidden_states
 
-    class MyModel(nn.Module):
-        def __init__(self):
+    class TestModel(nn.Module):
+        def __init__(self, embedding_dim: int = 16, bias=True):
             super().__init__()
-            self.linear1 = nn.Linear(10, 20)
+
+            self.silu = nn.SiLU()
+            self.linear = nn.Linear(embedding_dim, 6 * embedding_dim, bias=bias)
+            self.linear2 = nn.Linear(2 * embedding_dim, embedding_dim, bias=bias)
+            self.norm = nn.LayerNorm(embedding_dim, elementwise_affine=False, eps=1e-6)
+
+        def forward(
+            self, x: torch.Tensor, emb: torch.Tensor,
+        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            linear_input = self.silu(emb)
+            linear_out = self.linear(linear_input)
+
+            (
+                shift_msa,
+                scale_msa,
+                gate_msa,
+                shift_mlp,
+                scale_mlp,
+                gate_mlp,
+            ) = linear_out.chunk(6, dim=1)
+            x = self.linear2(torch.cat([x, shift_msa], dim=1))
+            x = self.norm(x) * (1 + scale_msa[:, None]) + shift_msa[:, None]
+            return x, gate_msa, shift_mlp, scale_mlp, gate_mlp
+
+    class MyModel(nn.Module):
+        def __init__(self, **kwargs):
+            super().__init__()
+            self.linear1 = nn.Linear(10, 10)
             self.linear2 = nn.Linear(20, 10)
             self.act = nn.SiLU()
 
@@ -379,21 +407,22 @@ if __name__ == "__main__":
             out = self.linear1(x)
             # a, b, c = out.chunk(3, dim=1)
             # a, b = out.split(10, dim=1)
-            # out = torch.cat([a, b, c], dim=1)
+            # out = torch.cat([out, x], dim=1)
             # out = torch.stack([a, b, c], dim=1)
             # c, d = out.split(2, dim=1)
             # out = torch.stack([c, d], dim=0)
-            out = self.act(out)
-            out = self.linear2(out)
+            # out = self.act(out)
+            out = self.linear2(torch.cat([out, x], dim=1))
             return out
 
     search_patterns = [
         # "linear_to_chunk",
-        "activation_to_linear",
+        # "activation_to_linear",
+        "concat_to_linear",
     ]
     detector = SegQuantPatternDetector(
-        FeedForward(dim=10),
-        example_inputs=(torch.randn(2, 10),),
+        TestModel(embedding_dim=16),
+        example_inputs=(torch.randn(2, 16), torch.randn(2, 16)),
         search_patterns_lst=search_patterns,
     )
     results = detector.find_all_patterns()

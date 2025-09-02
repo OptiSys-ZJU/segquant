@@ -91,7 +91,6 @@ class CalibratorRegistry:
 class AMaxCalibrator(BaseCalibrator):
     def __init__(self, data_type, quant_type, quant_args, **kwargs,):
         super().__init__(data_type, quant_type, quant_args)
-        self.has_calibrated = False
 
     def __repr__(self):
         base = (
@@ -100,14 +99,10 @@ class AMaxCalibrator(BaseCalibrator):
         return base
     
     def reset(self):
-        self.has_calibrated = False
         self.quantizer.reset()
 
     def calibrate(self, x, **kwargs):
-        if self.data_type == 'weight' and self.has_calibrated:
-            return
         self.quantizer.calibrate(x)
-        self.has_calibrated = True
 
     def finish_calibrate(self, weight_data=None):
         if self.data_type == 'weight':
@@ -147,6 +142,8 @@ class GPTQCalibrator(BaseCalibrator):
         if self.cpu_storage:
             print('[Warning] GPTQCalibrator set CPU Storage.')
 
+        self.has_calibrated = False
+
     def __repr__(self):
         base = (
             f"GPTQCalibrator(blocksize={self.blocksize}, percdamp={self.percdamp}, groupsize={self.groupsize}, actorder={self.actorder}, static_groups={self.static_groups},\n"
@@ -161,9 +158,11 @@ class GPTQCalibrator(BaseCalibrator):
         self.err = 0
         self.quantizer.reset()
 
-    def calibrate(self, x, input_data):
+    def calibrate(self, x):
         assert x.dim() == 2, "Weight tensor x must be 2D for GPTQCalibrator."
+        self.quantizer.calibrate(x.float())
 
+    def stat(self, input_data):
         if len(input_data.shape) == 2:
             this_batch = 1
         elif len(input_data.shape) == 1:
@@ -173,15 +172,15 @@ class GPTQCalibrator(BaseCalibrator):
             input_data = input_data.reshape((-1, input_data.shape[-1]))
             this_batch = input_data.shape[0]
 
-        input_data = input_data.to(dtype=torch.float32, device=x.device).t()  # (in, b)
-        device = x.device
+        input_data = input_data.to(dtype=torch.float32).t()  # (in, b)
+        device = input_data.device
 
         if self.H is None:
             self.H = torch.zeros(
-                (x.shape[1], x.shape[1]),
-                device='cpu' if self.cpu_storage else device,
+                (input_data.shape[0], input_data.shape[0]),
+                device="cpu" if self.cpu_storage else device,
                 dtype=torch.float32,
-                pin_memory=True if self.cpu_storage else False
+                pin_memory=True if self.cpu_storage else False,
             )
 
         if self.cpu_storage:
@@ -223,6 +222,7 @@ class GPTQCalibrator(BaseCalibrator):
 
         return Q_repacked.reshape(-1)  # shape: (out * cols // 2,)
 
+    @torch.no_grad()
     def finish_calibrate(self, weight_data=None):
         assert weight_data.dim() == 2, "Weight tensor must be 2D for GPTQCalibrator."
 
@@ -236,8 +236,6 @@ class GPTQCalibrator(BaseCalibrator):
         W = weight_data
         W = W.float()
         column = W.shape[1]
-
-        self.quantizer.calibrate(W)
 
         H = (
             self.H.to(dtype=torch.float32, device=weight_data.device, non_blocking=True)
@@ -326,7 +324,7 @@ class GPTQCalibrator(BaseCalibrator):
 
         if actorder:
             Q = Q[:, invperm]
-        
+
         if hasattr(self.quantizer, 'num_bits') and self.quantizer.num_bits == 4 and self.quantizer.real_quant:
             # For int4 quantization, convert column-packed 1D to row-packed 1D
             Q = self.colpacked1d_to_rowpacked1d(Q, W.shape[0], W.shape[1])

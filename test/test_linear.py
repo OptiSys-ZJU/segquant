@@ -1,4 +1,5 @@
 from typing import Tuple
+from sympy import N, true
 import torch
 import torch.nn as nn
 import copy
@@ -71,6 +72,7 @@ class TestModel(nn.Module):
 
         self.silu = nn.SiLU()
         self.linear = nn.Linear(embedding_dim, 6 * embedding_dim, bias=bias)
+        self.linear2 = nn.Linear(2 * embedding_dim, embedding_dim, bias=bias)
         self.norm = nn.LayerNorm(embedding_dim, elementwise_affine=False, eps=1e-6)
 
     def forward(
@@ -87,6 +89,7 @@ class TestModel(nn.Module):
             scale_mlp,
             gate_mlp,
         ) = linear_out.chunk(6, dim=1)
+        x = self.linear2(torch.cat([x, shift_msa], dim=1))
         x = self.norm(x) * (1 + scale_msa[:, None]) + shift_msa[:, None]
         return x, gate_msa, shift_mlp, scale_mlp, gate_mlp
 
@@ -258,7 +261,6 @@ def test_default_int8():
             "enable": True,
             "seglinear": True,
             "search_patterns": [],
-            # "search_patterns": SegPattern.all(),
             "real_quant": False,
             "opt": {
                 "type": Optimum.DEFAULT,
@@ -281,7 +283,8 @@ def test_default_int8():
         copy.deepcopy(test_model),
         seg_data_loader,
         config,
-        True,
+        tmp_device=None,
+        verbose=True,
         example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
@@ -321,14 +324,17 @@ def test_smooth_int8():
             "enable": True,
             "seglinear": True,
             "search_patterns": [],
-            # "search_patterns": SegPattern.all(),
             "real_quant": False,
             "opt": {
                 "type": Optimum.SMOOTH,
-                "alpha": 0.2,
-                "search": True,
-                "step": 0.1,
-                "end": 0.8
+                "alpha": 0.5,
+                "verbose": True,
+                "search_alpha_config":{
+                    "enable": False,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.1,
+                },
             },
             "calib": {
                 "type": Calibrate.AMAX,
@@ -347,7 +353,8 @@ def test_smooth_int8():
         copy.deepcopy(test_model),
         seg_data_loader,
         config,
-        True,
+        tmp_device=None,
+        verbose=True,
         example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
@@ -367,6 +374,7 @@ def test_smooth_int8():
 
     print('origin-modelopt', torch.norm(a - b).item())
     print('origin-segquant', torch.norm(a - c).item())
+    print('modelopt-segquant', torch.norm(b - c).item())
 
 def test_smooth_int8_real():
     test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
@@ -466,70 +474,76 @@ def test_svd_int4():
             #     "enable": True,
             # },
         },
-        "algorithm": {"method": "svdquant", "lowrank": 16},
+        "algorithm": {"method": "svdquant"},
     }
     modelopt_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
     mtq.print_quant_summary(modelopt_model)
     ######################################
-    CFG = {
-        "quant_cfg": {
-            "*weight_quantizer": {"num_bits": 8, "axis": None},
-            "*input_quantizer": {"num_bits": 8, "axis": -1},
-            # "linear.weight_quantizer": {
-            #     "num_bits": 8,
-            #     "block_sizes": {0: 10},
-            #     "enable": True,
-            # },
-        },
-        "algorithm": {"method": "smoothquant", "alpha": 0.5},
-    }
-    modelopt_smooth_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
-    mtq.print_quant_summary(modelopt_smooth_model)
+    # CFG = {
+    #     "quant_cfg": {
+    #         "*weight_quantizer": {"num_bits": 8, "axis": None},
+    #         "*input_quantizer": {"num_bits": 8, "axis": -1},
+    #         # "linear.weight_quantizer": {
+    #         #     "num_bits": 8,
+    #         #     "block_sizes": {0: 10},
+    #         #     "enable": True,
+    #         # },
+    #     },
+    #     "algorithm": {"method": "smoothquant", "alpha": 0.5},
+    # }
+    # modelopt_smooth_model = mtq.quantize(copy.deepcopy(test_model), CFG, forward_loop)
+    # mtq.print_quant_summary(modelopt_smooth_model)
     ######################################
-    smooth_config = {
-        "default": {
-            "enable": True,
-            "seglinear": True,
-            "search_patterns": [],
-            # "search_patterns": SegPattern.all(),
-            "real_quant": False,
-            "opt": {
-                "type": Optimum.SMOOTH,
-                "alpha": 0.5,
-                "low_rank": 16,
-            },
-            "calib": {
-                "type": Calibrate.AMAX,
-            },
-            "input_quant": {
-                "type": DType.INT8,
-                "axis": None,
-            },
-            "weight_quant": {
-                "type": DType.INT8,
-                "axis": None,
-            },
-        },
-    }
-    smooth_model = quantize(
-        copy.deepcopy(test_model),
-        seg_data_loader,
-        smooth_config,
-        True,
-        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
-    )
+    # smooth_config = {
+    #     "default": {
+    #         "enable": True,
+    #         "seglinear": True,
+    #         "search_patterns": [],
+    #         "real_quant": False,
+    #         "opt": {
+    #             "type": Optimum.SMOOTH,
+    #             "alpha": 0.5,
+    #             "low_rank": 32,
+    #         },
+    #         "calib": {
+    #             "type": Calibrate.AMAX,
+    #         },
+    #         "input_quant": {
+    #             "type": DType.INT8,
+    #             "axis": None,
+    #         },
+    #         "weight_quant": {
+    #             "type": DType.INT8,
+    #             "axis": None,
+    #         },
+    #     },
+    # }
+    # smooth_model = quantize(
+    #     copy.deepcopy(test_model),
+    #     seg_data_loader,
+    #     smooth_config,
+    #     tmp_device=None,
+    #     verbose=True,
+    #     example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+    # )
     ######################################
     config = {
         "default": {
             "enable": True,
             "seglinear": True,
             "search_patterns": [],
-            # "search_patterns": SegPattern.all(),
             "real_quant": False,
             "opt": {
                 "type": Optimum.SVD,
                 "alpha": 0.5,
-                "low_rank": 16,
+                "low_rank": 32,
+                "verbose": True,
+                "search_alpha_config": {
+                    "enable": True,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.1,
+                },
             },
             "calib": {
                 "type": Calibrate.AMAX,
@@ -548,7 +562,8 @@ def test_svd_int4():
         copy.deepcopy(test_model),
         seg_data_loader,
         config,
-        True,
+        tmp_device=None,
+        verbose=True,
         example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
@@ -566,17 +581,17 @@ def test_svd_int4():
     print("segquant:", res)
     c = res.clone()
 
-    res = modelopt_smooth_model.forward(x.clone(), emb.clone())[0].clone()
-    print("segquant-smooth:", res)
-    d = res.clone()
-    res = smooth_model.forward(x.clone(), emb.clone())[0].clone()
-    print("smooth:", res)
-    e = res.clone()
+    # res = modelopt_smooth_model.forward(x.clone(), emb.clone())[0].clone()
+    # print("segquant-smooth:", res)
+    # d = res.clone()
+    # res = smooth_model.forward(x.clone(), emb.clone())[0].clone()
+    # print("smooth:", res)
+    # e = res.clone()
     print('origin-modelopt-svd', torch.norm(a - b).item())
     print('origin-segquant-svd', torch.norm(a - c).item())
 
-    print('origin-modelopt-smooth', torch.norm(a - d).item())
-    print('origin-segquant-smooth', torch.norm(a - e).item())
+    # print('origin-modelopt-smooth', torch.norm(a - d).item())
+    # print('origin-segquant-smooth', torch.norm(a - e).item())
 
 
 def test_svd_int4_real():
@@ -673,10 +688,10 @@ def test_gptq():
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [],
+            "search_patterns": SegPattern.all(),
             "real_quant": False,
             "opt": {
-                "type": Optimum.DEFAULT,
+                "type": Optimum.SMOOTH,
                 "alpha": 0.5,
             },
             "calib": {
@@ -696,7 +711,8 @@ def test_gptq():
         copy.deepcopy(test_model),
         seg_data_loader,
         config,
-        True,
+        tmp_device=None,
+        verbose=True,
         example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
@@ -704,10 +720,10 @@ def test_gptq():
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [],
+            "search_patterns": SegPattern.all(),
             "real_quant": False,
             "opt": {
-                "type": Optimum.DEFAULT,
+                "type": Optimum.SMOOTH,
                 "alpha": 0.5,
             },
             "calib": {
@@ -727,7 +743,8 @@ def test_gptq():
         copy.deepcopy(test_model),
         seg_data_loader,
         config_gptq,
-        True,
+        tmp_device=None,
+        verbose=True,
         example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
@@ -942,4 +959,4 @@ def test_ortho():
 
 if __name__ == "__main__":
     print("embedding_dim =", embedding_dim)
-    test_ortho()
+    test_smooth_int8()

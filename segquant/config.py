@@ -32,7 +32,7 @@ class Optimum(Enum):
     DEFAULT = "default"
     SMOOTH = "smooth"
     SVD = "svd"
-    ORTHO = "ortho"
+    GIVENS = "givens"
 
 class Calibrate(Enum):
     """Calibrate methods for quantization."""
