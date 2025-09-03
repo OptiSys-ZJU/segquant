@@ -72,3 +72,48 @@ segquant-gptq:
       type: "int8"
     weight_quant:
       type: "int8"
+
+segquant-givens:
+  default:
+    enable: true
+    seglinear: true
+    search_patterns: []
+    real_quant: false
+    opt:
+      type: "givens"
+      sub_optimizer_type: "smooth"
+      sub_optimizer_kwargs:
+        alpha: 0.5
+        search_alpha_config:
+          enable: false
+          min: 0.0
+          max: 1.0
+          step: 0.1
+        verbose: true
+      verbose: true
+      optim_config:
+        lr: 0.5
+        momentum: 0.9
+        dampening: 0
+        weight_decay: 0
+      givens_num: 100
+      sample_mode: "rand"
+      init_vecs_mode: "identity"
+      enable_autograd: false
+      enable_grad_buffer: false
+      enable_low_memory_grad: false
+      cpu_storage: false
+      stop_criteria:
+        max_steps: 500
+        grad_tol: !!float 1e-8
+        grad_change_tol: !!float 1e-8
+        patience: 5
+        ema_grad_decay: 0.9
+        check_every: 10
+      val_sample_batch: 10
+    calib:
+      type: "gptq"
+    input_quant:
+      type: "int8"
+    weight_quant:
+      type: "int8"

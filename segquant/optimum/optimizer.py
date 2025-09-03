@@ -139,9 +139,6 @@ class BaseOptimizer:
     def __init__(self, upper_module, **kwargs):
         self.upper_module = upper_module
 
-    def trace(self, x_chunks, w_chunks):
-        raise NotImplementedError("trace method not implemented")
-
     def preprocess_x(self, x_chunks):
         return x_chunks
 
@@ -149,7 +146,7 @@ class BaseOptimizer:
         return Ws
 
     def on_calibrate_finish_end(self):
-        pass
+        return True
 
     def chunk_forward(self, quantized_input_chunks, quantized_weight_chunks):
         quantized_output_chunks = []
@@ -539,6 +536,7 @@ class GivensOptimizer(BaseOptimizer):
             device=device,
             **sub_optimizer_kwargs
         )
+        self.sub_optimizer_type = sub_optimizer_type
 
         if sample_mode not in ['rand', 'ascending', 'descending', 'custom']:
             raise ValueError(f"Unsupported sample_mode: {sample_mode}")
@@ -839,7 +837,13 @@ class GivensOptimizer(BaseOptimizer):
                 if n != 0:
                     with torch.no_grad():
                         for idx, (x, ex) in enumerate(self.val_x_buffer):
-                            loss, Q_new = GivensOptimizer.loss(givens_layer, x.to(w.device), w, ex.to(w.device), ew)
+                            loss, Q_new = GivensOptimizer.loss(
+                                givens_layer,
+                                x.to(dtype=self.dtype, device=w.device),
+                                w,
+                                ex.to(dtype=self.dtype, device=w.device),
+                                ew,
+                            )
                             total_loss += loss
                             if Q_new_result is None:
                                 Q_new_result = Q_new
@@ -897,10 +901,18 @@ class GivensOptimizer(BaseOptimizer):
         givens_weight_chunks = []
         for i, (w, givens_layer) in enumerate(zip(Ws, self.upper_module.givens)):
             Q = givens_layer.forward()
-            givens_weight_chunks.append(w @ Q)  # (Q.t @ W.t).t --> (W @ Q)
+            givens_weight_chunks.append((w.to(dtype=self.dtype, device=Q.device) @ Q).to(dtype=w.dtype, device=w.device))  # (Q.t @ W.t).t --> (W @ Q)
         self.has_givens_optimized = True
 
+        ## clear buffer
+        if not self.enable_autograd:
+            for i in range(len(self.upper_module.givens)):
+                del self.upper_module._buffers[f"givens_X_rel_{i}"]
+
         return givens_weight_chunks
+
+    def on_calibrate_finish_end(self):
+        return self.sub_optimizer.on_calibrate_finish_end()
 
     def preprocess_x(self, x_chunks):
         # slow version for fake quant

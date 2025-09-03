@@ -417,8 +417,13 @@ def quantize(
 
     # hook all linears at a time
     to_trace_layers = {
-        k: v for k, v in to_calib_layers.items()
-        if v.opt_type in ('smooth', 'svd')
+        k: v
+        for k, v in to_calib_layers.items()
+        if v.opt_type in ("smooth", "svd")
+        or (
+            v.opt_type == "givens"
+            and v.optimizer.sub_optimizer_type in ("smooth", "svd")
+        )
     }
 
     to_search_layers = {
