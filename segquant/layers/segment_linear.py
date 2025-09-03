@@ -364,7 +364,10 @@ class SegmentLinear(nn.Module):
             for w in weight_chunks:
                 output_chunks.append(F.linear(input_chunks[0], w))
         elif self.seg_mode == "input":
-            this_weight_chunks = weight_chunks[0].split(self.chunksizes, dim=1)
+            if len(weight_chunks) < self.chunks:
+                this_weight_chunks = weight_chunks[0].split(self.chunksizes, dim=1)
+            else:
+                this_weight_chunks = weight_chunks
             for i, inp in enumerate(input_chunks):
                 output_chunks.append(F.linear(inp, this_weight_chunks[i]))
 

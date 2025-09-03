@@ -1,19 +1,38 @@
-import enum
+from functools import partial
 import math
-from tkinter import W
-from turtle import up
 from typing import List
 from collections import deque
 
 import numpy as np
-from requests import get
-from sympy import N, per
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from backend.torch.utils.deprecation_utils import deprecate
 from segquant.layers.givens_orthogonal import GivensOrthogonal
+
+
+def identity(x):
+    return x
+
+
+def identity_tuple(x, chunksizes):
+    return (x,)
+
+
+def repeat_tuple(x, chunksizes):
+    return tuple(x for _ in chunksizes)
+
+
+def tuple_wrap(w):
+    return (w,)
+
+
+def chunks_identity(chunks):
+    return chunks
+
+
+def chunks_one(chunks):
+    return 1
 
 class OptimizerRegistry:
     _registry = {}
@@ -21,58 +40,58 @@ class OptimizerRegistry:
     _segment_config = {
         "default": {
             "input": {
-                "input_quantizers_len": lambda chunks: chunks,
-                "weight_quantizers_len": lambda chunks: 1,
-                "split_input_func": lambda x, chunksizes: x.split(chunksizes, dim=-1),
-                "split_weight_func": lambda w, chunksizes: (w,),
+                "input_quantizers_len": chunks_identity,
+                "weight_quantizers_len": chunks_one,
+                "split_input_func": partial(torch.Tensor.split, dim=-1),
+                "split_weight_func": tuple_wrap,
             },
             "weight": {
-                "input_quantizers_len": lambda chunks: 1,
-                "weight_quantizers_len": lambda chunks: chunks,
-                "split_input_func": lambda x, chunksizes: (x,),
-                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=0),
+                "input_quantizers_len": chunks_one,
+                "weight_quantizers_len": chunks_identity,
+                "split_input_func": identity_tuple,
+                "split_weight_func": partial(torch.Tensor.split, dim=0),
             },
         },
         "smooth": {
             "input": {
-                "input_quantizers_len": lambda chunks: chunks,
-                "weight_quantizers_len": lambda chunks: chunks,
-                "split_input_func": lambda x, chunksizes: x.split(chunksizes, dim=-1),
-                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=-1),
+                "input_quantizers_len": chunks_identity,
+                "weight_quantizers_len": chunks_identity,
+                "split_input_func": partial(torch.Tensor.split, dim=-1),
+                "split_weight_func": partial(torch.Tensor.split, dim=-1),
             },
             "weight": {
-                "input_quantizers_len": lambda chunks: chunks,
-                "weight_quantizers_len": lambda chunks: chunks,
-                "split_input_func": lambda x, chunksizes: tuple(x for _ in chunksizes),
-                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=0),
+                "input_quantizers_len": chunks_identity,
+                "weight_quantizers_len": chunks_identity,
+                "split_input_func": repeat_tuple,
+                "split_weight_func": partial(torch.Tensor.split, dim=0),
             },
         },
         "svd": {
             "input": {
-                "input_quantizers_len": lambda chunks: chunks,
-                "weight_quantizers_len": lambda chunks: chunks,
-                "split_input_func": lambda x, chunksizes: x.split(chunksizes, dim=-1),
-                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=-1),
+                "input_quantizers_len": chunks_identity,
+                "weight_quantizers_len": chunks_identity,
+                "split_input_func": partial(torch.Tensor.split, dim=-1),
+                "split_weight_func": partial(torch.Tensor.split, dim=-1),
             },
             "weight": {
-                "input_quantizers_len": lambda chunks: chunks,
-                "weight_quantizers_len": lambda chunks: chunks,
-                "split_input_func": lambda x, chunksizes: tuple(x for _ in chunksizes),
-                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=0),
+                "input_quantizers_len": chunks_identity,
+                "weight_quantizers_len": chunks_identity,
+                "split_input_func": repeat_tuple,
+                "split_weight_func": partial(torch.Tensor.split, dim=0),
             },
         },
         "givens": {
             "input": {
-                "input_quantizers_len": lambda chunks: chunks,
-                "weight_quantizers_len": lambda chunks: chunks,
-                "split_input_func": lambda x, chunksizes: x.split(chunksizes, dim=-1),
-                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=-1),
+                "input_quantizers_len": chunks_identity,
+                "weight_quantizers_len": chunks_identity,
+                "split_input_func": partial(torch.Tensor.split, dim=-1),
+                "split_weight_func": partial(torch.Tensor.split, dim=-1),
             },
             "weight": {
-                "input_quantizers_len": lambda chunks: chunks,
-                "weight_quantizers_len": lambda chunks: chunks,
-                "split_input_func": lambda x, chunksizes: tuple(x for _ in chunksizes),
-                "split_weight_func": lambda w, chunksizes: w.split(chunksizes, dim=0),
+                "input_quantizers_len": chunks_identity,
+                "weight_quantizers_len": chunks_identity,
+                "split_input_func": repeat_tuple,
+                "split_weight_func": partial(torch.Tensor.split, dim=0),
             },
         },
     }
@@ -687,9 +706,7 @@ class GivensOptimizer(BaseOptimizer):
         return getattr(self.sub_optimizer, name)
 
     def __setattr__(self, name, value):
-        if name == "sub_optimizer":
-            super().__setattr__(name, value)
-        elif name in self.__dict__ or not hasattr(self, "sub_optimizer"):
+        if name in ("sub_optimizer", "upper_module") or name in self.__dict__:
             super().__setattr__(name, value)
         else:
             setattr(self.sub_optimizer, name, value)
@@ -797,8 +814,8 @@ class GivensOptimizer(BaseOptimizer):
                 if not active[i]:
                     continue
 
-                w = w_.to(dtype=self.dtype, device=w.device).t()  # (in, out)
-                ew = ew_.to(dtype=self.dtype, device=ew.device).t() # (in, out)
+                w = w_.to(dtype=self.dtype, device=w_.device).t()  # (in, out)
+                ew = ew_.to(dtype=self.dtype, device=ew_.device).t()  # (in, out)
 
                 ### grad optims
                 optim.zero_grad()
@@ -819,13 +836,17 @@ class GivensOptimizer(BaseOptimizer):
                 total_loss = 0.0
                 Q_new_result = None
                 n = len(self.val_x_buffer)
-                with torch.no_grad():
-                    for idx, (x, ex) in enumerate(self.val_x_buffer):
-                        loss, Q_new = GivensOptimizer.loss(givens_layer, x.to(w.device), w, ex.to(w.device), ew)
-                        total_loss += loss
-                        if Q_new_result is None:
-                            Q_new_result = Q_new
-                avg_loss = total_loss / n
+                if n != 0:
+                    with torch.no_grad():
+                        for idx, (x, ex) in enumerate(self.val_x_buffer):
+                            loss, Q_new = GivensOptimizer.loss(givens_layer, x.to(w.device), w, ex.to(w.device), ew)
+                            total_loss += loss
+                            if Q_new_result is None:
+                                Q_new_result = Q_new
+                    avg_loss = total_loss / n
+                else:
+                    Q_new_result = givens_layer.forward()
+                    avg_loss = float('nan')
 
                 # update grad
                 if grad_ema[i] is None:
@@ -870,7 +891,7 @@ class GivensOptimizer(BaseOptimizer):
                     Q_final @ Q_final.t() - torch.eye(Q_final.shape[0], device=Q_final.device)
                 ).item()
                 print(f"Final ortho check for chunk {i}: {ortho_err:.4e}")
-                print(f"Givens rotations: {givens_layer.vecs}")
+                print(f"Givens rotations: {givens_layer.vecs[:5]} ...")
 
         ## givens weight
         givens_weight_chunks = []

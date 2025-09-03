@@ -428,7 +428,7 @@ def quantize(
 
     to_after_calib_layers = {
         k: v for k, v in to_calib_layers.items()
-        if v.opt_type == 'given'
+        if v.opt_type == 'givens'
     }
 
     # search_recovery_file
@@ -498,13 +498,14 @@ def quantize(
     _calib_layers(model, to_calib_layers, calib_data_loader, origin_model_device, target_model_device)
     if verbose:
         print("start descent ...")
-    _after_calib_layers(
-        model,
-        to_after_calib_layers,
-        calib_data_loader,
-        origin_model_device,
-        target_model_device,
-    )
+    if to_after_calib_layers:
+        _after_calib_layers(
+            model,
+            to_after_calib_layers,
+            calib_data_loader,
+            origin_model_device,
+            target_model_device,
+        )
     for l in tqdm(to_calib_layers.values(), desc="[Finishing Calibrate Layers]"):
         l.finish_calibrate()
 

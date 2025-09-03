@@ -323,7 +323,7 @@ def test_smooth_int8():
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [],
+            "search_patterns": [SegPattern.LINEAR2CHUNK],
             "real_quant": False,
             "opt": {
                 "type": Optimum.SMOOTH,
@@ -869,11 +869,11 @@ def test_ortho():
                 "type": Calibrate.AMAX,
             },
             "input_quant": {
-                "type": DType.INT8,
+                "type": DType.INT4,
                 "axis": None,
             },
             "weight_quant": {
-                "type": DType.INT8,
+                "type": DType.INT4,
                 "axis": None,
             },
         },
@@ -895,37 +895,43 @@ def test_ortho():
             "search_patterns": [],
             "real_quant": False,
             "opt": {
-                "type": Optimum.ORTHO,
-                "verbose": True,
-                "givens_m": 100,
-                "val_sample_batch": 2,
+                "type": Optimum.GIVENS,
                 "sub_optimizer_type": "default",
                 "sub_optimizer_kwargs": {},
-                "optimizer_config": {
-                    "type": "sgd",
-                    "lr": 0.1,
+                "verbose": True,
+                "optim_type": "SGD",
+                "optim_config": {
+                    "lr": 0.5,
                     "momentum": 0.9,
                     "dampening": 0,
                     "weight_decay": 0,
                 },
+                "givens_num": 100,
+                "sample_mode": "rand",
+                "init_vecs_mode": "identity",
+                "enable_autograd": False,
+                "enable_grad_buffer": True,
+                "enable_low_memory_grad": False,
+                "cpu_storage": False,
                 "stop_criteria": {
                     "max_steps": 500,
                     "grad_tol": 1e-8,
                     "grad_change_tol": 1e-8,
                     "patience": 5,
-                    "ema_grad_decay": 0,
+                    "ema_grad_decay": 0.9,
                     "check_every": 1,
                 },
+                "val_sample_batch": 2,
             },
             "calib": {
                 "type": Calibrate.AMAX,
             },
             "input_quant": {
-                "type": DType.INT8,
+                "type": DType.INT4,
                 "axis": None,
             },
             "weight_quant": {
-                "type": DType.INT8,
+                "type": DType.INT4,
                 "axis": None,
             },
         },
@@ -959,4 +965,4 @@ def test_ortho():
 
 if __name__ == "__main__":
     print("embedding_dim =", embedding_dim)
-    test_smooth_int8()
+    test_ortho()
