@@ -7,7 +7,7 @@ class AnomalyChannelDetector:
         self.k = k
         self.alpha = alpha
         self.max = torch.zeros(k, dtype=torch.float32, device=device)
-        self.mdns = [PSquare(p=p) for _ in range(k)]
+        # self.mdns = PSquare(k, p=p, device=device)
         self.mus = torch.zeros(k, dtype=torch.float32, device=device)
         self.m2s = torch.zeros(k, dtype=torch.float32, device=device)
         self.n = 0
@@ -33,9 +33,8 @@ class AnomalyChannelDetector:
         self.m2s += M2_batch + delta**2 * n_old * this_batch / self.n
 
         # ## P² algorithm
-        # for i in range(this_batch):
-        #     for j in range(self.k):
-        #         self.mdns[j].update(X_abs[i, j].item())
+        # for x_line in X_abs:
+        #     self.mdns.update(x_line) # (k,)
 
         self.max = torch.maximum(self.max, X_abs.max(dim=0).values)
 
@@ -49,14 +48,8 @@ class AnomalyChannelDetector:
         ) # （k,)
 
         fishers_norm = fishers / (fishers.sum() + eps)
-        # mdns = torch.tensor(
-        #     [mdn.p_estimate() for mdn in self.mdns],
-        #     dtype=torch.float32,
-        #     device=self.mus.device,
-        # )
-        # todo: tmp
+        # mdns = self.mdns.p_estimate() # (k,)
         mdns = self.mus
-
         tails = self.max / (mdns + eps) * self.weight_norm_2  # (k,)
         tails_norm = tails / (tails.sum() + eps)
 

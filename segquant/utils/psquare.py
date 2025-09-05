@@ -1,142 +1,156 @@
-# P² algorithm for dynamic quantile estimation
-# Original implementation adapted from:
-#   Rémy Frenoy, "psquare", GitHub repository:
-#   https://github.com/rfrenoy/psquare
-# This code is used under the original license.
-import numpy as np
+import torch
+
 
 class PSquare:
     """
-    Python implementation of the p square algo from this paper: https://www1.cse.wustl.edu/~jain/papers/ftp/psqr.pdf
-    The aim of p square is to estimate the p quantile of a distribution without storing data. Every time a new
-    value is drawn from the distribution p square updates its estimates.
-    This algo is particularly valuable when you work on online models and want to iteratively know a quantile, say
-    the median or the 95 percentile to build your own confidence
+    Batch P² algorithm for dynamic quantile estimation.
+    Estimates the p-quantile per channel without storing all data.
     """
 
-    def __init__(self, p):
+    def __init__(self, k, p=50, device="cpu"):
         """
-        Initiate p square models with the p value to estimate and five first observations
-        :param p: the percentile to iteratively estimate
+        :param k: number of channels (batch dimension)
+        :param p: percentile to track (0-100)
+        :param device: torch device
         """
-        p = p / 100.0
+        self.k = k
+        self.p = p / 100.0
+        self.device = device
         self.initiated = False
-        self.marker_heights = np.array([])
-        self.marker_positions = np.array(range(1, 6))  # marker positions are 1-based
-        self.desired_positions = np.array(
-            [1.0, 1.0 + 2.0 * p, 1.0 + 4.0 * p, 3.0 + 2.0 * p, 5.0]
-        )
-        self.increments = np.array([0.0, p / 2.0, p, (1.0 + p) / 2.0, 1.0])
 
-    def find_cell(self, new_observation):
+        # marker heights and positions
+        self.marker_heights = torch.empty((k, 0), device=device, dtype=torch.float32)
+        self.marker_positions = (
+            torch.arange(1, 6, device=device, dtype=torch.float32)
+            .unsqueeze(0)
+            .repeat(k, 1)
+        )
+        self.desired_positions = (
+            torch.tensor(
+                [1.0, 1.0 + 2 * self.p, 1.0 + 4 * self.p, 3.0 + 2 * self.p, 5.0],
+                device=device,
+                dtype=torch.float32,
+            )
+            .unsqueeze(0)
+            .repeat(k, 1)
+        )
+        self.increments = (
+            torch.tensor(
+                [0.0, self.p / 2, self.p, (1 + self.p) / 2, 1.0],
+                device=device,
+                dtype=torch.float32,
+            )
+            .unsqueeze(0)
+            .repeat(k, 1)
+        )
+
+    def find_cell(self, obs: torch.Tensor):
         """
-        Find the higher marker whose height is lower than observation.
-        Return -1 if observation is lower than any known marker heigth
-        :param new_observation: new observation, numeric value
-        :return: index of the higher marker whose height is lower than observation. Return -1 if obs is lower
-        than any marker height
+        For each channel, find the highest marker <= obs
+        :param obs: tensor(k,)
+        :return: tensor(k,) with index -1..4
         """
-        if new_observation < self.marker_heights[0]:
-            return -1
-        i = 0
-        while i + 1 < len(self.marker_heights) and (
-            new_observation >= self.marker_heights[i + 1]
-        ):
-            i = i + 1
+        ge = obs[:, None] >= self.marker_heights  # (k,5)
+        i = ge.sum(dim=1) - 1
+        i[i < 0] = -1
         return i
 
-    def _parabolic(self, i, d):
+    def _parabolic(self, i, d, rows):
         """
-        Parabolic formula for updating marker heights
-        :param i: index of the marker height to update
-        :param d: sign of (position - desired position)
-        :return: new value for marker height at index i
+        Batched parabolic update for rows
+        :param i: int, marker index
+        :param d: tensor(num_rows,)
+        :param rows: tensor(num_rows,)
         """
-        term1 = d / float(self.marker_positions[i + 1] - self.marker_positions[i - 1])
+        h = self.marker_heights[rows]
+        pos = self.marker_positions[rows]
 
+        term1 = d / (pos[:, i + 1] - pos[:, i - 1])
         term2 = (
-            (self.marker_positions[i] - self.marker_positions[i - 1] + d)
-            * (self.marker_heights[i + 1] - self.marker_heights[i])
-            / float(self.marker_positions[i + 1] - self.marker_positions[i])
+            (pos[:, i] - pos[:, i - 1] + d)
+            * (h[:, i + 1] - h[:, i])
+            / (pos[:, i + 1] - pos[:, i])
         )
-
         term3 = (
-            (self.marker_positions[i + 1] - self.marker_positions[i] - d)
-            * (self.marker_heights[i] - self.marker_heights[i - 1])
-            / float(self.marker_positions[i] - self.marker_positions[i - 1])
+            (pos[:, i + 1] - pos[:, i] - d)
+            * (h[:, i] - h[:, i - 1])
+            / (pos[:, i] - pos[:, i - 1])
+        )
+        return h[:, i] + term1 * (term2 + term3)
+
+    def _linear(self, i, d, rows):
+        """
+        Batched linear update for rows
+        """
+        h = self.marker_heights[rows]
+        pos = self.marker_positions[rows]
+        idx_to = (i + d).long()
+        return h[:, i] + d * (h.gather(1, idx_to[:, None])[:, 0] - h[:, i]) / (
+            pos.gather(1, idx_to[:, None])[:, 0] - pos[:, i]
         )
 
-        return self.marker_heights[i] + term1 * (term2 + term3)
-
-    def _linear(self, i, d):
+    def update(self, obs: torch.Tensor):
         """
-        Linear formula for updating marker heights
-        :param i: index of the marker height to update
-        :param d: sign of (position - desired position)
-        :return: new value for marker height at index i
-        """
-        return self.marker_heights[i] + d * (
-            self.marker_heights[i + d] - self.marker_heights[i]
-        ) / float(self.marker_positions[i + d] - self.marker_positions[i])
-
-    def update(self, new_observation):
-        """
-        Step B.1 and B.2 in the paper algo
-        Find cell k containing new observation and update current and desired marker positions
-        :param new_observation: a new observation (numeric value)
+        Update P² markers for each channel
+        :param obs: tensor(k,)
         """
         if not self.initiated:
-            self.marker_heights = np.append(self.marker_heights, new_observation)
-            if len(self.marker_heights) == 5:
+            self.marker_heights = torch.cat([self.marker_heights, obs[:, None]], dim=1)
+            if self.marker_heights.shape[1] == 5:
                 self.initiated = True
-                self.marker_heights = np.sort(self.marker_heights)
+                self.marker_heights, _ = torch.sort(self.marker_heights, dim=1)
             return
 
-        i = self.find_cell(new_observation)
-        if i == -1:
-            self.marker_heights[0] = new_observation
-            k = 0
-        elif i == 4:
-            self.marker_heights[4] = new_observation
-            k = 3
-        else:
-            k = i
+        i = self.find_cell(obs)
+        mask_lower = i == -1
+        mask_upper = i == 4
+        self.marker_heights[mask_lower, 0] = obs[mask_lower]
+        self.marker_heights[mask_upper, 4] = obs[mask_upper]
 
-        self.marker_positions[k + 1 :] = self.marker_positions[k + 1 :] + 1
-        self.desired_positions = self.desired_positions + self.increments
+        k_vals = i.clone()
+        k_vals[mask_lower] = 0
+        k_vals[mask_upper] = 3
+
+        for ch in range(self.k):
+            k_ch = k_vals[ch]
+            if k_ch < 4:
+                self.marker_positions[ch, k_ch + 1 :] += 1
+
+        self.desired_positions += self.increments
         self.adjust_height_values()
 
     def adjust_height_values(self):
         """
-        Step B.3 in the paper algo
-        Adjust height values using either parabolic or linear formula
+        Step B.3: adjust marker heights using parabolic or linear formula
         """
         for i in range(1, 4):
-            d = self.desired_positions[i] - self.marker_positions[i]
-            if (
-                d >= 1 and (self.marker_positions[i + 1] - self.marker_positions[i]) > 1
-            ) or (
-                d <= -1
-                and (self.marker_positions[i - 1] - self.marker_positions[i]) < -1
-            ):
+            d = self.desired_positions[:, i] - self.marker_positions[:, i]
+            mask = (
+                (d >= 1)
+                & ((self.marker_positions[:, i + 1] - self.marker_positions[:, i]) > 1)
+            ) | (
+                (d <= -1)
+                & ((self.marker_positions[:, i - 1] - self.marker_positions[:, i]) < -1)
+            )
 
-                d = -1 if d < 0 else 1
+            if mask.any():
+                rows = torch.nonzero(mask, as_tuple=True)[0]
+                d_rows = d[rows].sign()  # -1 or 1
 
-                qprime = self._parabolic(i, d)
-                if self.marker_heights[i - 1] < qprime < self.marker_heights[i + 1]:
-                    self.marker_heights[i] = qprime
+                q_par = self._parabolic(i, d_rows, rows)
+                q_lin = self._linear(i, d_rows, rows)
 
-                else:
-                    qprime = self._linear(i, d)
-                    self.marker_heights[i] = qprime
-
-                self.marker_positions[i] += d
+                valid = (self.marker_heights[rows, i - 1] < q_par) & (
+                    q_par < self.marker_heights[rows, i + 1]
+                )
+                self.marker_heights[rows, i] = torch.where(valid, q_par, q_lin)
+                self.marker_positions[rows, i] += d_rows
 
     def p_estimate(self):
         """
-        :return: current estimation of quantile p, NaN if not enough information
+        Return current estimate of the p-quantile for each channel
         """
-        if len(self.marker_heights) > 2:
-            return self.marker_heights[2]
+        if self.initiated:
+            return self.marker_heights[:, 2]
         else:
-            return np.nan
+            return torch.full((self.k,), float("nan"), device=self.device)
