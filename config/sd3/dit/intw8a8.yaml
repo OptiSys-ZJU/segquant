@@ -91,28 +91,27 @@ segquant-givens:
           step: 0.1
         verbose: true
       verbose: true
+      optim_type: "AdamW"
       optim_config:
-        lr: 0.5
-        momentum: 0.9
-        dampening: 0
-        weight_decay: 0
+        lr: 0.01
+        weight_decay: !!float 1e-5
       givens_num: 100
-      sample_mode: "rand"
+      sample_mode: "custom"
       init_vecs_mode: "identity"
       enable_autograd: false
       enable_grad_buffer: false
       enable_low_memory_grad: false
       cpu_storage: false
       stop_criteria:
-        max_steps: 500
-        grad_tol: !!float 1e-8
-        grad_change_tol: !!float 1e-8
+        max_steps: 2000
+        grad_tol: !!float 1e-5
+        grad_diff_rel: !!float 5e-3
         patience: 5
         ema_grad_decay: 0.9
         check_every: 10
       val_sample_batch: 10
     calib:
-      type: "gptq"
+      type: "amax"
     input_quant:
       type: "int8"
     weight_quant:

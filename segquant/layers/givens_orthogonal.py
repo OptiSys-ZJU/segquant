@@ -8,8 +8,6 @@ class GivensOrthogonal(nn.Module):
         self,
         k,
         givens_num=None,
-        sample_mode="rand",
-        sample_func=None,
         init_vecs_mode="identity",
         generator=None,
         dtype=torch.float32,
@@ -30,22 +28,6 @@ class GivensOrthogonal(nn.Module):
             assert givens_num <= self.dof, f"givens_num should be <= {self.dof}"
             self.givens_num = givens_num
 
-        assert sample_mode in [
-            "rand",
-            "ascending",
-            "descending",
-            "custom",
-        ], "sample_mode should be one of ['rand', 'ascending', 'descending', 'custom']"
-
-        all_pairs = GivensOrthogonal.generate_upper_triangular_pairs(k)
-        if sample_mode == "custom":
-            assert sample_func is not None
-            indices = sample_func(k, self.givens_num)
-        else:
-            indices = GivensOrthogonal.sample_pairs_indices(
-                k, self.givens_num, sample_mode=sample_mode, generator=generator
-            )
-        self.pairs = [all_pairs[i] for i in indices]
         self.device = device
         self.dtype = dtype
         self.enable_autograd = enable_autograd
@@ -75,6 +57,29 @@ class GivensOrthogonal(nn.Module):
             self.register_buffer("dG_dc", torch.tensor([[1.0,0.0],[0.0,1.0]], device=device, dtype=dtype))
             self.register_buffer("dG_ds", torch.tensor([[0.0,-1.0],[1.0,0.0]], device=device, dtype=dtype))
             GivensOrthogonal.cal_cs_inplace(self.cs, self.vecs)
+
+    def init_pairs(self, sample_mode="rand", sample_func=None, generator=None):
+        assert sample_mode in [
+            "rand",
+            "ascending",
+            "descending",
+            "custom",
+        ], "sample_mode should be one of ['rand', 'ascending', 'descending', 'custom']"
+
+        if sample_mode == "custom":
+            assert sample_func is not None
+            self.pairs = sample_func(self.k, self.givens_num)
+        else:
+            all_pairs = GivensOrthogonal.generate_upper_triangular_pairs(self.k)
+            indices = GivensOrthogonal.sample_pairs_indices(
+                self.k, self.givens_num, sample_mode=sample_mode, generator=generator
+            )
+            self.pairs = [all_pairs[i] for i in indices]
+
+    def clear_buffer(self):
+        for key in ["P", "S", "dG_dc", "dG_ds"]:
+            if key in self._buffers:
+                del self._buffers[key]
 
     @staticmethod
     def init_vecs(n, mode="identity", dtype=torch.float32, device=None, generator=None):

@@ -2,6 +2,7 @@ from functools import partial
 import math
 from typing import List
 from collections import deque
+from itertools import combinations
 
 import numpy as np
 import torch
@@ -9,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from segquant.layers.givens_orthogonal import GivensOrthogonal
+from segquant.utils.anomaly_channel_detector import AnomalyChannelDetector
 
 
 def identity(x):
@@ -541,11 +543,10 @@ class GivensOptimizer(BaseOptimizer):
         if sample_mode not in ['rand', 'ascending', 'descending', 'custom']:
             raise ValueError(f"Unsupported sample_mode: {sample_mode}")
         if sample_mode == 'custom':
-            # todo custom func
-            sample_func = None
-            raise NotImplementedError("Custom sample_mode not implemented yet.")
+            self.enable_anomaly_detection = True
         else:
-            sample_func = None
+            self.enable_anomaly_detection = False
+        self.sample_mode = sample_mode
 
         self.verbose = verbose
 
@@ -564,8 +565,6 @@ class GivensOptimizer(BaseOptimizer):
                     GivensOrthogonal(
                         k=sz,
                         givens_num=givens_num,
-                        sample_mode=sample_mode,
-                        sample_func=sample_func,
                         init_vecs_mode=init_vecs_mode,
                         generator=None,
                         dtype=dtype,
@@ -583,8 +582,6 @@ class GivensOptimizer(BaseOptimizer):
                     GivensOrthogonal(
                         k=in_features,
                         givens_num=givens_num,
-                        sample_mode=sample_mode,
-                        sample_func=sample_func,
                         init_vecs_mode=init_vecs_mode,
                         generator=None,
                         dtype=dtype,
@@ -603,6 +600,7 @@ class GivensOptimizer(BaseOptimizer):
             for i in range(chunks)
         ]
 
+        self.detectors = []
         self.enable_autograd = enable_autograd
         if not enable_autograd:
             # make buffer
@@ -614,6 +612,10 @@ class GivensOptimizer(BaseOptimizer):
                         torch.zeros((3, sz, sz), dtype=dtype, device=buffer_device),
                         persistent=False,
                     )  # (xtx, xtex, extex) dim = 0
+                    if self.enable_anomaly_detection:
+                        self.detectors.append(
+                            AnomalyChannelDetector(k=sz, alpha=0.5, device=device)
+                        )
             elif seg_mode == "weight":
                 for i, sz in enumerate(chunksizes):
                     upper_module.register_buffer(
@@ -625,24 +627,51 @@ class GivensOptimizer(BaseOptimizer):
                         ),
                         persistent=False,
                     )  # (xtx, xtex, extex) dim = 0
+                    if self.enable_anomaly_detection:
+                        self.detectors.append(
+                            AnomalyChannelDetector(k=in_features, alpha=0.5, device=device)
+                        )
+        else:
+            raise NotImplementedError("Autograd mode not implemented yet.")
 
         self.dtype = dtype
         self.nsamples = 0
         self.stop_criteria = stop_criteria
-        if enable_autograd:
-            self.val_sample_batch = 0
-            self.losses = [
-                torch.tensor(
-                    0.0, device=device, dtype=self.dtype, requires_grad=True
-                )
-                for _ in range(chunks)
-            ]
-            self.Ws = None
-            self.eWs = None
         self.val_sample_batch = val_sample_batch
         self.val_x_buffer = []
 
         self.has_givens_optimized = False
+
+    @staticmethod
+    def score2pair(k, givens_num, scores):
+        assert scores.shape[0] == k
+        _, idx_sorted = torch.sort(scores, descending=True)
+        idx_sorted = idx_sorted.tolist()
+        pairs = []
+        indices = list(range(k))
+        for delta in range(k - 1):
+            this_left_sub_indices = indices[: k - delta]
+            this_right_sub_indices = indices[delta:]
+            for i in range(len(this_left_sub_indices) // 2):
+                pairs.append(
+                    (
+                        idx_sorted[this_left_sub_indices[i]],
+                        idx_sorted[this_left_sub_indices[-(i + 1)]],
+                    )
+                )
+                if len(pairs) >= givens_num:
+                    return pairs
+            if delta != 0:
+                for i in range(len(this_right_sub_indices) // 2):
+                    pairs.append(
+                        (
+                            idx_sorted[this_right_sub_indices[i]],
+                            idx_sorted[this_right_sub_indices[-(i + 1)]],
+                        )
+                    )
+                    if len(pairs) >= givens_num:
+                        return pairs
+        return pairs
 
     @staticmethod
     def loss(manager: GivensOrthogonal, X, W, epsX, epsW):
@@ -700,6 +729,16 @@ class GivensOptimizer(BaseOptimizer):
         g = manager.try_grad(chain_grad=gQ)
         return g
 
+    def __getstate__(self):
+        return {
+            "sub_optimizer": self.sub_optimizer,
+            "upper_module": getattr(self, "upper_module", None),
+        }
+
+    def __setstate__(self, state):
+        self.sub_optimizer = state["sub_optimizer"]
+        self.upper_module = state.get("upper_module", None)
+
     def __getattr__(self, name):
         return getattr(self.sub_optimizer, name)
 
@@ -710,85 +749,61 @@ class GivensOptimizer(BaseOptimizer):
             setattr(self.sub_optimizer, name, value)
 
     @torch.no_grad()
-    def stat_error(self, Xs: List[torch.tensor], eXs: List[torch.tensor], Ws: List[torch.tensor], eWs: List[torch.tensor]):
-        if self.enable_autograd:
-            if Ws is not None and eWs is not None:
-                self.Ws = Ws
-                self.eWs = eWs
+    def stat_error(
+        self,
+        Xs: List[torch.Tensor],
+        eXs: List[torch.Tensor],
+        Ws: List[torch.Tensor],
+        eWs: List[torch.Tensor],
+    ):
+        for i, (x, ex, w, ew) in enumerate(zip(Xs, eXs, Ws, eWs)):
+            if self.val_sample_batch > 0:
+                x_cpu = x.detach().cpu()
+                ex_cpu = ex.detach().cpu()
+                self.val_x_buffer.append((x_cpu, ex_cpu))
+                self.val_sample_batch -= 1
 
-            for i, (x, ex, w, ew) in enumerate(zip(Xs, eXs, self.Ws, self.eWs)):
-                if self.val_sample_batch > 0:
-                    x_cpu = x.detach().cpu()
-                    ex_cpu = ex.detach().cpu()
-                    self.val_x_buffer.append((x_cpu, ex_cpu))
-                    self.val_sample_batch -= 1
+            # compute xtx, xtex, extex
+            if len(x.shape) == 2:
+                this_batch = 1
+            elif len(x.shape) == 1:
+                x = x.unsqueeze(0)
+                ex = ex.unsqueeze(0)
+                this_batch = 1
+            else:
+                x = x.reshape((-1, x.shape[-1]))
+                ex = ex.reshape((-1, ex.shape[-1]))
+                this_batch = x.shape[0]
 
-                if len(x.shape) == 2:
-                    this_batch = 1
-                elif len(x.shape) == 1:
-                    x = x.unsqueeze(0)
-                    ex = ex.unsqueeze(0)
-                    this_batch = 1
-                else:
-                    x = x.reshape((-1, x.shape[-1]))
-                    ex = ex.reshape((-1, ex.shape[-1]))
-                    this_batch = x.shape[0]
-                self.nsamples += this_batch
+            if self.enable_anomaly_detection:
+                self.detectors[i].update(x, w)
 
-                loss, _ = GivensOptimizer.loss(
-                    self.upper_module.givens[i],
-                    x.to(w.device),
-                    w.to(w.device),
-                    ex.to(w.device),
-                    ew.to(w.device),
-                )
-                self.losses[i] = self.losses[i] + loss
-        else:
-            for i, (x, ex) in enumerate(zip(Xs, eXs)):
-                if self.val_sample_batch > 0:
-                    x_cpu = x.detach().cpu()
-                    ex_cpu = ex.detach().cpu()
-                    self.val_x_buffer.append((x_cpu, ex_cpu))
-                    self.val_sample_batch -= 1
+            x = x.to(dtype=self.dtype, device=x.device).t()  # (in, b)
+            ex = ex.to(dtype=self.dtype, device=x.device).t()  # (in, b)
 
-                # compute xtx, xtex, extex
-                if len(x.shape) == 2:
-                    this_batch = 1
-                elif len(x.shape) == 1:
-                    x = x.unsqueeze(0)
-                    ex = ex.unsqueeze(0)
-                    this_batch = 1
-                else:
-                    x = x.reshape((-1, x.shape[-1]))
-                    ex = ex.reshape((-1, ex.shape[-1]))
-                    this_batch = x.shape[0]
+            buffer = getattr(
+                self.upper_module, f"givens_X_rel_{i}"
+            )
 
-                x = x.to(dtype=self.dtype, device=x.device).t()  # (in, b)
-                ex = ex.to(dtype=self.dtype, device=x.device).t()  # (in, b)
+            tmp_buffer = buffer.to(x.device, non_blocking=True)
+            tmp_buffer.mul_(self.nsamples / (self.nsamples + this_batch))
+            self.nsamples += this_batch
 
-                buffer = getattr(
-                    self.upper_module, f"givens_X_rel_{i}"
-                )
+            scale = math.sqrt(2 / self.nsamples)
+            x = x * scale
+            ex = ex * scale
 
-                tmp_buffer = buffer.to(x.device, non_blocking=True)
-                tmp_buffer.mul_(self.nsamples / (self.nsamples + this_batch))
-                self.nsamples += this_batch
+            tmp_buffer[0].addmm_(x, x.t(), beta=1.0, alpha=1.0)
+            tmp_buffer[1].addmm_(x, ex.t(), beta=1.0, alpha=1.0)
+            tmp_buffer[2].addmm_(ex, ex.t(), beta=1.0, alpha=1.0)
 
-                scale = math.sqrt(2 / self.nsamples)
-                x = x * scale
-                ex = ex * scale
-
-                tmp_buffer[0].addmm_(x, x.t(), beta=1.0, alpha=1.0)
-                tmp_buffer[1].addmm_(x, ex.t(), beta=1.0, alpha=1.0)
-                tmp_buffer[2].addmm_(ex, ex.t(), beta=1.0, alpha=1.0)
-
-                buffer.copy_(tmp_buffer.to(buffer.device))
+            buffer.copy_(tmp_buffer.to(buffer.device))
 
     def on_calibrate_prepare_finish(self, Ws, eWs):
         criteria = self.stop_criteria
         max_steps = criteria.get('max_steps', 100)
         grad_tol = criteria.get('grad_tol', 1e-4)
-        grad_change_tol = criteria.get('grad_change_tol', 1e-5)
+        grad_diff_rel = criteria.get("grad_diff_rel", 0.1)
         patience = criteria.get('patience', 5)
         ema_decay = criteria.get('ema_grad_decay', 0.9)
         check_every = criteria.get('check_every', 1)
@@ -798,9 +813,15 @@ class GivensOptimizer(BaseOptimizer):
         stop_counter = [0] * len(Ws)
         active = [True] * len(Ws)
 
-        if self.enable_autograd:
-            for i in range(len(Ws)):
-                self.losses[i] = self.losses[i] / self.nsamples
+        for i, givens_layer in enumerate(self.upper_module.givens):
+            if self.enable_anomaly_detection:
+                assert self.sample_mode == 'custom', "Anomaly detection requires sample_mode='custom'"
+                scores = self.detectors[i].get_anomaly_scores()
+                if self.verbose:
+                    print(f"Chunk {i} anomaly scores: max={scores.max():.4f}, min={scores.min():.4f}, mean={scores.mean():.4f}")
+                givens_layer.init_pairs(self.sample_mode, sample_func=partial(GivensOptimizer.score2pair, scores=scores))
+            else:
+                givens_layer.init_pairs(self.sample_mode)
 
         for step in range(max_steps):
             if not any(active):
@@ -817,16 +838,13 @@ class GivensOptimizer(BaseOptimizer):
 
                 ### grad optims
                 optim.zero_grad()
-                if self.enable_autograd:
-                    self.losses[i].backward()
-                else:
-                    grad = GivensOptimizer.manual_grad_buffer(
-                        givens_layer,
-                        getattr(self.upper_module, f"givens_X_rel_{i}"),
-                        w,
-                        ew,
-                    )
-                    givens_layer.vecs.grad = grad
+                grad = GivensOptimizer.manual_grad_buffer(
+                    givens_layer,
+                    getattr(self.upper_module, f"givens_X_rel_{i}"),
+                    w,
+                    ew,
+                )
+                givens_layer.vecs.grad = grad
 
                 optim.step()
 
@@ -858,13 +876,15 @@ class GivensOptimizer(BaseOptimizer):
                 else:
                     grad_ema[i] = ema_decay * grad_ema[i] + (1 - ema_decay) * grad
 
-                grad_norm = torch.norm(grad_ema[i])
+                grad_norm = torch.norm(grad_ema[i]) / grad.numel() ** 0.5
                 grad_diff = (
-                    torch.norm(grad - prev_grad[i]) if prev_grad[i] is not None else 0.0
+                    torch.norm(grad - prev_grad[i]) / (torch.norm(prev_grad[i]) + 1e-12)
+                    if prev_grad[i] is not None
+                    else 0.0
                 )
                 prev_grad[i] = grad.clone()
 
-                if grad_norm < grad_tol or grad_diff < grad_change_tol:
+                if grad_norm < grad_tol or grad_diff < grad_diff_rel:
                     stop_counter[i] += 1
                 else:
                     stop_counter[i] = 0
@@ -902,6 +922,10 @@ class GivensOptimizer(BaseOptimizer):
         for i, (w, givens_layer) in enumerate(zip(Ws, self.upper_module.givens)):
             Q = givens_layer.forward()
             givens_weight_chunks.append((w.to(dtype=self.dtype, device=Q.device) @ Q).to(dtype=w.dtype, device=w.device))  # (Q.t @ W.t).t --> (W @ Q)
+
+            # clear buffer
+            givens_layer.clear_buffer()
+
         self.has_givens_optimized = True
 
         ## clear buffer
@@ -922,7 +946,7 @@ class GivensOptimizer(BaseOptimizer):
             for i, (x_chunk, givens_layer) in enumerate(
                 zip(x_chunks, self.upper_module.givens)
             ):
-                givens_x_chunks.append(x_chunk @ givens_layer.forward())
+                givens_x_chunks.append(x_chunk @ givens_layer.forward().to(dtype=x_chunk.dtype, device=x_chunk.device))
 
             return givens_x_chunks
         else:

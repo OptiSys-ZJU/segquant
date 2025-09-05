@@ -8,7 +8,7 @@ from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 
-embedding_dim = 1536
+embedding_dim = 128
 
 class RandomTensorDataset:
     def __init__(self, num_batches=6, seed=42):
@@ -855,7 +855,9 @@ def test_mix_real():
                 step_mix(atype, wtype, axis, dual)
 
 def test_ortho():
-    test_model = TestModel(embedding_dim)
+    device = torch.device("cuda:0")
+
+    test_model = TestModel(embedding_dim).to(device)
     config = {
         "default": {
             "enable": True,
@@ -899,24 +901,24 @@ def test_ortho():
                 "sub_optimizer_type": "default",
                 "sub_optimizer_kwargs": {},
                 "verbose": True,
-                "optim_type": "SGD",
+                "optim_type": "AdamW",
                 "optim_config": {
-                    "lr": 0.5,
-                    "momentum": 0.9,
-                    "dampening": 0,
-                    "weight_decay": 0,
+                    "lr": 0.01,
+                    # "momentum": 0.9,
+                    # "dampening": 0,
+                    "weight_decay": 1e-5,
                 },
                 "givens_num": 100,
-                "sample_mode": "rand",
+                "sample_mode": "custom",
                 "init_vecs_mode": "identity",
                 "enable_autograd": False,
-                "enable_grad_buffer": True,
+                "enable_grad_buffer": False,
                 "enable_low_memory_grad": False,
                 "cpu_storage": False,
                 "stop_criteria": {
-                    "max_steps": 500,
-                    "grad_tol": 1e-8,
-                    "grad_change_tol": 1e-8,
+                    "max_steps": 2000,
+                    "grad_tol": 1e-5,
+                    "grad_diff_rel": 5e-3,
                     "patience": 5,
                     "ema_grad_decay": 0.9,
                     "check_every": 1,
@@ -945,10 +947,12 @@ def test_ortho():
         example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
     )
     ######################################
-    x_generator = torch.Generator()
+    x_generator = torch.Generator(device=device)
     x_generator.manual_seed(1234)
-    x = torch.rand(2, embedding_dim, generator=x_generator)
-    emb = torch.rand(2, embedding_dim, generator=x_generator)
+    x = torch.rand(2, embedding_dim, generator=x_generator, device=device)
+    emb = torch.rand(
+        2, embedding_dim, generator=x_generator, device=device
+    )
     res = test_model.forward(x, emb)
     print("origin:", res)
     a = res[0]
@@ -962,6 +966,14 @@ def test_ortho():
     print('origin-default', torch.norm(a - b).item())
     print('origin-segquant', torch.norm(a - c).item())
     print('default-segquant', torch.norm(b - c).item())
+
+    print("=== Parameters ===")
+    for name, param in segquant_model.named_parameters():
+        print(name, param.shape, param.requires_grad)
+
+    print("\n=== Buffers ===")
+    for name, buf in segquant_model.named_buffers():
+        print(name, buf.shape, buf.requires_grad if isinstance(buf, torch.Tensor) else None)
 
 if __name__ == "__main__":
     print("embedding_dim =", embedding_dim)

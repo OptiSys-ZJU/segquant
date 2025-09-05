@@ -330,8 +330,8 @@ class SegmentLinear(nn.Module):
                 Ws = list(self.weight_chunks)
             eWs = [wq.fake_quantize(w) - w for wq, w in zip(self.weight_quantizers, Ws)]
         else:
-            Ws = None
-            eWs = None
+            Ws = [None] * len(self.chunks)
+            eWs = [None] * len(self.chunks)
 
         self.optimizer.stat_error(Xs, eXs, Ws, eWs)
 
