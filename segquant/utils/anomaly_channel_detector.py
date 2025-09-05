@@ -3,7 +3,7 @@ from segquant.utils.psquare import PSquare
 
 
 class AnomalyChannelDetector:
-    def __init__(self, k: int, alpha=0.5, device=None, p=0.5):
+    def __init__(self, k: int, alpha=0.5, device=None, p=50):
         self.k = k
         self.alpha = alpha
         self.max = torch.zeros(k, dtype=torch.float32, device=device)
@@ -56,7 +56,7 @@ class AnomalyChannelDetector:
         # )
         # todo: tmp
         mdns = self.mus
-        
+
         tails = self.max / (mdns + eps) * self.weight_norm_2  # (k,)
         tails_norm = tails / (tails.sum() + eps)
 
