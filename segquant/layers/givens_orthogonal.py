@@ -58,6 +58,21 @@ class GivensOrthogonal(nn.Module):
             self.register_buffer("dG_ds", torch.tensor([[0.0,-1.0],[1.0,0.0]], device=device, dtype=dtype))
             GivensOrthogonal.cal_cs_inplace(self.cs, self.vecs)
 
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}("
+            f"k={self.k}, "
+            f"dof={self.dof}, "
+            f"givens_num={self.givens_num}, "
+            f"init_vecs_mode='{('identity' if torch.allclose(self.vecs[:,1], torch.zeros_like(self.vecs[:,1])) else 'random')}', "
+            f"enable_autograd={self.enable_autograd}, "
+            f"enable_grad_buffer={self.enable_grad_buffer}, "
+            f"enable_low_memory_grad={self.enable_low_memory_grad}, "
+            f"dtype={self.dtype}, "
+            f"device={self.device}"
+            ")"
+        )
+
     def init_pairs(self, sample_mode="rand", sample_func=None, generator=None):
         assert sample_mode in [
             "rand",

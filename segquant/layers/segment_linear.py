@@ -293,6 +293,7 @@ class SegmentLinear(nn.Module):
     def calibrate(self, x):
         x_chunks = self.split_input_func(x, self.chunksizes)
         processed_x_chunks = self.optimizer.preprocess_x(x_chunks)
+
         for iq, processed_x_chunk in zip(self.input_quantizers, processed_x_chunks):
             iq.calibrate(processed_x_chunk)
 
@@ -305,6 +306,17 @@ class SegmentLinear(nn.Module):
             for i, wq in enumerate(self.weight_quantizers):
                 wq.stat(fit_x_chunks[i].clone())
 
+        if hasattr(self.optimizer, "process_detector"):
+            if len(self.optimizer.detectors) != len(self.weight_chunks):
+                weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=1)
+            else:
+                weight_chunks = list(self.weight_chunks)
+            if len(self.optimizer.detectors) != len(processed_x_chunks):
+                x_chunks = [processed_x_chunks[0]] * len(self.optimizer.detectors)
+            else:
+                x_chunks = processed_x_chunks
+            self.optimizer.process_detector(x_chunks, weight_chunks)
+
         if not self.has_calibrated_w:
             for wq, processed_weight_chunk in zip(
                 self.weight_quantizers, self.weight_chunks
@@ -312,37 +324,28 @@ class SegmentLinear(nn.Module):
                 wq.calibrate(processed_weight_chunk)
             self.has_calibrated_w = True
 
-    def after_calibrate(self, x):
+    def step_cal_grads(self, x):
         x_chunks = self.split_input_func(x, self.chunksizes)
-
-        ### calculate eps for X
         Xs = self.optimizer.preprocess_x(x_chunks)
-        eXs = [iq.fake_quantize(x) - x for iq, x in zip(self.input_quantizers, Xs)]
-        if len(Xs) < len(self.weight_chunks):
-            Xs = Xs * len(self.weight_chunks)
-            eXs = eXs * len(self.weight_chunks)
-
-        if not self.has_calculated_epsw:
-            ### calculate eps for W
-            if len(self.weight_chunks) < self.chunks:
-                Ws = self.weight_chunks[0].split(self.chunksizes, dim=1)
-            else:
-                Ws = list(self.weight_chunks)
-            eWs = [wq.fake_quantize(w) - w for wq, w in zip(self.weight_quantizers, Ws)]
+        if len(self.input_quantizers) == 1:
+            iqs = [self.input_quantizers[0]] * self.chunks
         else:
-            Ws = [None] * len(self.chunks)
-            eWs = [None] * len(self.chunks)
+            iqs = self.input_quantizers
+        if len(self.weight_quantizers) == 1:
+            wqs = [self.weight_quantizers[0]] * self.chunks
+        else:
+            wqs = self.weight_quantizers
 
-        self.optimizer.stat_error(Xs, eXs, Ws, eWs)
+        Ws = list(self.weight_chunks)
+        self.optimizer.step_cal_grads(Xs, Ws, iqs, wqs)
 
-    def finish_calibrate(self):
+    def finish_calibrate(self,):
         for iq in self.input_quantizers:
             iq.finish_calibrate()
 
         # change weight_chunks to quantized weight_chunks
         Ws = list(self.weight_chunks)
-        eWs = [wq.fake_quantize(w) - w for wq, w in zip(self.weight_quantizers, Ws)]
-        Ws = self.optimizer.on_calibrate_prepare_finish(Ws, eWs)
+        Ws = self.optimizer.on_calibrate_prepare_finish(Ws)
         for i, wq in enumerate(self.weight_quantizers):
             self.weight_chunks[i] = nn.Parameter(wq.finish_calibrate(Ws[i]))
 

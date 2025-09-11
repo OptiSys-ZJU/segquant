@@ -1,13 +1,11 @@
 import torch
-from segquant.utils.psquare import PSquare
-
 
 class AnomalyChannelDetector:
-    def __init__(self, k: int, alpha=0.5, device=None, p=50):
+    def __init__(self, k: int, alpha=0.5, device=None):
         self.k = k
         self.alpha = alpha
         self.max = torch.zeros(k, dtype=torch.float32, device=device)
-        # self.mdns = PSquare(k, p=p, device=device)
+        self.square_sum = torch.zeros(k, dtype=torch.float32, device=device)
         self.mus = torch.zeros(k, dtype=torch.float32, device=device)
         self.m2s = torch.zeros(k, dtype=torch.float32, device=device)
         self.n = 0
@@ -32,10 +30,7 @@ class AnomalyChannelDetector:
         self.mus += delta * this_batch / self.n
         self.m2s += M2_batch + delta**2 * n_old * this_batch / self.n
 
-        # ## P² algorithm
-        # for x_line in X_abs:
-        #     self.mdns.update(x_line) # (k,)
-
+        self.square_sum += (X_abs**2).sum(dim=0)  # (k,)
         self.max = torch.maximum(self.max, X_abs.max(dim=0).values)
 
     def get_anomaly_scores(self):
@@ -48,9 +43,8 @@ class AnomalyChannelDetector:
         ) # （k,)
 
         fishers_norm = fishers / (fishers.sum() + eps)
-        # mdns = self.mdns.p_estimate() # (k,)
-        mdns = self.mus
-        tails = self.max / (mdns + eps) * self.weight_norm_2  # (k,)
+        rms = torch.sqrt(self.square_sum / self.n + eps)  # (k,)
+        tails = self.max / (rms + eps) * self.weight_norm_2  # (k,)
         tails_norm = tails / (tails.sum() + eps)
 
         scores = self.alpha * tails_norm + (1 - self.alpha) * fishers_norm

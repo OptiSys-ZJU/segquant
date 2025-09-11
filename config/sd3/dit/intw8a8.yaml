@@ -18,7 +18,7 @@ ptq4dit:
     enable: true
     seglinear: false
     search_patterns: []
-    real_quant: true
+    real_quant: false
     opt:
       type: "smooth"
       alpha: 0.5
@@ -76,7 +76,9 @@ segquant-gptq:
 segquant-givens:
   default:
     enable: true
-    seglinear: true
+  # transformer_blocks.22.norm1.linear:
+  #   enable: true
+    seglinear: false
     search_patterns: []
     real_quant: false
     opt:
@@ -93,9 +95,9 @@ segquant-givens:
       verbose: true
       optim_type: "AdamW"
       optim_config:
-        lr: 0.01
+        lr: !!float 5e-3
         weight_decay: !!float 1e-5
-      givens_num: 100
+      givens_num: 192
       sample_mode: "custom"
       init_vecs_mode: "identity"
       enable_autograd: false
@@ -103,13 +105,13 @@ segquant-givens:
       enable_low_memory_grad: false
       cpu_storage: false
       stop_criteria:
-        max_steps: 2000
+        max_steps: 400
         grad_tol: !!float 1e-5
         grad_diff_rel: !!float 5e-3
         patience: 5
-        ema_grad_decay: 0.9
-        check_every: 10
-      val_sample_batch: 10
+        ema_decay: 0.9
+        check_every: 1
+      mini_batch_size: 32
     calib:
       type: "amax"
     input_quant:

@@ -5,6 +5,7 @@ linear layers and pattern detection for advanced quantization techniques.
 """
 
 import fnmatch
+import random
 import torch
 import uuid
 from torch import nn
@@ -191,29 +192,74 @@ def _after_calib_layers(
     origin_model_device,
     target_model_device,
 ):
+    def random_mini_batch_loader(dataset, n):
+        while True:
+            idx = random.sample(range(len(dataset)), n)
+            batch = [dataset[i] for i in idx]
+            yield batch
+
     hooks = []
     for name, module in model.named_modules():
         if name in to_after_calib_layers:
-
             def get_hook(n):
                 def hook_fn(_mod, inp, _out, n=n):
-                    to_after_calib_layers[n].after_calibrate(
+                    to_after_calib_layers[n].step_cal_grads(
                         _move_to_device(inp[0], target_model_device)
                     )
-
                 return hook_fn
-
             hooks.append(module.register_forward_hook(get_hook(name)))
+
+    max_step = 0
+    for name, l in to_after_calib_layers.items():
+        l.optimizer.init_pairs(meta=name)
+        max_step = max(max_step, l.optimizer.learning_config["max_steps"])
+        mini_batch_size = l.optimizer.learning_config.get("mini_batch_size", 16)
+
+    dataset = calib_data_loader.dataset
+    dataloader = random_mini_batch_loader(dataset, mini_batch_size)
+
+    def batchify(mini_batch):
+        # handle empty mini_batch
+        if len(mini_batch) == 0:
+            return None
+
+        first_item = mini_batch[0]
+
+        # base cases
+        if first_item is None:
+            return None
+        elif isinstance(first_item, torch.Tensor):
+            return torch.cat(mini_batch, dim=0)
+        elif isinstance(first_item, (list, tuple)):
+            # recursively batch each element in the structure
+            batched = []
+            for i in range(len(first_item)):
+                # collect ith element from each sample
+                ith_items = [b[i] if b[i] is not None else None for b in mini_batch]
+                batched.append(batchify(ith_items))
+            # preserve the type (list or tuple)
+            return type(first_item)(batched)
+        else:
+            # fallback: convert to tensor if possible
+            try:
+                return torch.tensor(mini_batch)
+            except:
+                # if cannot convert, keep as list
+                return mini_batch
 
     model.eval()
     with torch.no_grad():
-        for batch in tqdm(
-            calib_data_loader, desc="[After-Calib Layers] Running model on calibration data"
-        ):
-            this_input_tuple = _move_to_device(batch[0], origin_model_device)
-            _ = model(*this_input_tuple) if isinstance(this_input_tuple, tuple) else model(
-                **this_input_tuple
+        for step in tqdm(range(max_step), desc="[After Calib Layers] Running descent steps"):
+            mini_batch = next(dataloader)
+            b_batch = batchify(mini_batch)
+            this_input_tuple = _move_to_device(b_batch, origin_model_device)
+            _ = (
+                model(*this_input_tuple)
+                if isinstance(this_input_tuple, tuple)
+                else model(**this_input_tuple)
             )
+            for name, l in to_after_calib_layers.items():
+                l.optimizer.step_mini_batch(step, meta=name)
     for h in hooks:
         h.remove()
 
@@ -348,6 +394,12 @@ def quantize(
         'linear': _get_all_layers(model, final_config["default"]['enable'], final_config, layer_cls=nn.Linear),
         # 'conv2d': _get_all_layers(model, final_config["default"]['enable'], final_config, layer_cls=nn.Conv2d),
     }
+    # debug
+    import os
+    path = "anomaly"
+    os.makedirs(path, exist_ok=True)
+    torch.save(list(layers["linear"].keys()), f"{path}/linear_names.pt")
+
     if verbose:
         for k, v in layers.items():
             print(f"[INFO] Found {len(v)} {k} layers for quantization")

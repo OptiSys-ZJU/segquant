@@ -2,7 +2,6 @@ from functools import partial
 import math
 from typing import List
 from collections import deque
-from itertools import combinations
 
 import numpy as np
 import torch
@@ -523,7 +522,7 @@ class GivensOptimizer(BaseOptimizer):
         enable_low_memory_grad=False,
         cpu_storage=False,
         stop_criteria={},
-        val_sample_batch=0,
+        mini_batch_size=16,
         **kwargs,
     ):
         super().__init__(upper_module, **kwargs)
@@ -601,46 +600,72 @@ class GivensOptimizer(BaseOptimizer):
         ]
 
         self.detectors = []
+        if seg_mode == "input":
+            for i, sz in enumerate(chunksizes):
+                if self.enable_anomaly_detection:
+                    self.detectors.append(
+                        AnomalyChannelDetector(k=sz, alpha=0.5, device=device)
+                    )
+        elif seg_mode == "weight":
+            for i, sz in enumerate(chunksizes):
+                if self.enable_anomaly_detection:
+                    self.detectors.append(
+                        AnomalyChannelDetector(k=in_features, alpha=0.5, device=device)
+                    )
+
         self.enable_autograd = enable_autograd
-        if not enable_autograd:
-            # make buffer
-            buffer_device = device if not cpu_storage else torch.device('cpu')
-            if seg_mode == "input":
-                for i, sz in enumerate(chunksizes):
-                    upper_module.register_buffer(
-                        f"givens_X_rel_{i}",
-                        torch.zeros((3, sz, sz), dtype=dtype, device=buffer_device),
-                        persistent=False,
-                    )  # (xtx, xtex, extex) dim = 0
-                    if self.enable_anomaly_detection:
-                        self.detectors.append(
-                            AnomalyChannelDetector(k=sz, alpha=0.5, device=device)
-                        )
-            elif seg_mode == "weight":
-                for i, sz in enumerate(chunksizes):
-                    upper_module.register_buffer(
-                        f"givens_X_rel_{i}",
-                        torch.zeros(
-                            (3, in_features, in_features),
-                            dtype=dtype,
-                            device=buffer_device,
-                        ),
-                        persistent=False,
-                    )  # (xtx, xtex, extex) dim = 0
-                    if self.enable_anomaly_detection:
-                        self.detectors.append(
-                            AnomalyChannelDetector(k=in_features, alpha=0.5, device=device)
-                        )
-        else:
+        if enable_autograd:
             raise NotImplementedError("Autograd mode not implemented yet.")
 
         self.dtype = dtype
-        self.nsamples = 0
-        self.stop_criteria = stop_criteria
-        self.val_sample_batch = val_sample_batch
-        self.val_x_buffer = []
+
+        criteria = stop_criteria
+        max_steps = criteria.get("max_steps", 100)
+        grad_tol = criteria.get("grad_tol", 1e-4)
+        grad_diff_rel = criteria.get("grad_diff_rel", 0.1)
+        patience = criteria.get("patience", 5)
+        ema_decay = criteria.get("ema_decay", 0.9)
+        check_every = criteria.get("check_every", 1)
+
+        self.learning_config = {
+            "mini_batch_size": mini_batch_size,
+            "max_steps": max_steps,
+            "grad_tol": grad_tol,
+            "grad_diff_rel": grad_diff_rel,
+            "patience": patience,
+            "ema_decay": ema_decay,
+            "check_every": check_every,
+        }
+
+        self.learning_state = {
+            "loss_ema": [None] * chunks,
+            "grad_ema": [None] * chunks,
+            "prev_grad": [None] * chunks,
+            "stop_counter": [0] * chunks,
+            "active": [True] * chunks,
+        }
+
+        self.n_samples = [0] * chunks
+        self.losses = [None] * chunks
+        self.grads = [None] * chunks
+        self.best_loss = [None] * chunks
+        self.best_state = [None] * chunks
 
         self.has_givens_optimized = False
+        self.has_finished_grads = False
+
+    def __repr__(self):
+        optim_type = self.optims[0].__class__.__name__ if self.optims else "N/A"
+
+        main_info = (
+            f"{self.__class__.__name__}("
+            f"optim_type={optim_type}, "
+            f"sample_mode='{self.sample_mode}', "
+            f"sub_optimizer={repr(self.sub_optimizer)}, "
+            f"givens={repr(self.upper_module.givens)}"
+            ")"
+        )
+        return main_info
 
     @staticmethod
     def score2pair(k, givens_num, scores):
@@ -674,58 +699,61 @@ class GivensOptimizer(BaseOptimizer):
         return pairs
 
     @staticmethod
-    def loss(manager: GivensOrthogonal, X, W, epsX, epsW):
+    @torch.no_grad()
+    def loss(manager: GivensOrthogonal, X, W, quantizer_X, quantizer_W):
         Q = manager.forward()
-        term = X @ Q @ epsW + epsX @ Q.t() @ W + epsX @ epsW
-        return torch.norm(term, p="fro") ** 2, Q
+        tmp_x = X @ Q
+        tmp_w = Q.t() @ W
+        qX = quantizer_X.fake_quantize(tmp_x)
+        qW = quantizer_W.fake_quantize(tmp_w)
+
+        term = X @ W - qX @ qW
+        return torch.norm(term, p="fro") ** 2
 
     @staticmethod
     @torch.no_grad()
-    def manual_grad_Q_buffer(Q, XtX, XteX, eXteX, W, eW):
-        eWeWt = eW @ eW.t()
-        WWt = W @ W.t()
-        WeWt = W @ eW.t()
+    def manual_grad_Q(Q: torch.Tensor, X: torch.Tensor, W: torch.Tensor,
+                  quantizer_X, quantizer_W):
+        """
+        Compute manual STE gradient w.r.t. Q for:
+            L = || Quant(X @ Q) @ Quant(Q.T @ W) - X @ W ||_F^2
 
-        grad = (
-            XtX @ Q @ eWeWt
-            + WWt @ Q @ eXteX
-            + XteX @ Q.t() @ WeWt
-            + WeWt @ Q.t() @ XteX
-            + XteX @ eWeWt
-            + WeWt @ eXteX
-        )
+        Args:
+            Q: (k, k)
+            X: (batch, k)
+            W: (k, n)
+            quantizer_X, quantizer_W: objects with .fake_quantize(tensor) -> tensor
 
-        return grad
+        Returns:
+            grad_Q: tensor of shape (k, k) equal to dL/dQ (or averaged if reduction="mean")
+        """
+        # forward
+        XQ = X @ Q               # (m, k)
+        QW = Q.t() @ W           # (k, n)
+
+        A = quantizer_X.fake_quantize(XQ)   # (m, k)
+        B = quantizer_W.fake_quantize(QW)   # (k, n)
+
+        Y_pred = A @ B           # (m, n)
+        Y_true = X @ W           # (m, n)
+        E = Y_pred - Y_true      # (m, n)
+
+        G = 2.0 * E              # (m, n)
+
+        # grad parts
+        # part1 = X^T * G * B^T
+        # part2 = A^T * G * W^T
+        grad1 = X.t().mm(G).mm(B.t())     # (k, k)
+        grad2 = A.t().mm(G).mm(W.t())     # (k, k)
+
+        grad_Q = (grad1 + grad2)
+        return grad_Q
 
     @staticmethod
     @torch.no_grad()
-    def manual_grad_buffer(manager: GivensOrthogonal, X_buffer, W, epsW):
+    def manual_grad(manager: GivensOrthogonal, X, W, quantizer_X, quantizer_W):
         Q = manager.forward()
-        XtX, XteX, eXteX = X_buffer
-        gQ = GivensOptimizer.manual_grad_Q_buffer(Q, XtX, XteX, eXteX, W, epsW)
-        g = manager.try_grad(chain_grad=gQ)
-        return g
-
-    @staticmethod
-    @torch.no_grad()
-    def manual_grad_Q(Q, X, W, epsX, epsW):
-        XtX = X.t() @ X
-        WWT = W @ W.t()
-        epsXtX = epsX.t() @ epsX
-        epsWDW = epsW @ epsW.t()
-
-        grad = 2 * (XtX @ Q @ epsWDW + WWT @ Q @ epsXtX)
-        grad += 2 * (
-            X.t() @ epsX @ Q.t() @ W @ epsW.t() + W @ epsW.t() @ Q.t() @ X.t() @ epsX
-        )
-        grad += 2 * (X.t() @ epsX @ epsWDW + W @ epsW.t() @ epsXtX)
-        return grad
-
-    @staticmethod
-    @torch.no_grad()
-    def manual_grad(manager: GivensOrthogonal, X, W, epsX, epsW):
-        Q = manager.forward()
-        gQ = GivensOptimizer.manual_grad_Q(Q, X, W, epsX, epsW)
+        gQ = GivensOptimizer.manual_grad_Q(Q, X, W, quantizer_X, quantizer_W)
         g = manager.try_grad(chain_grad=gQ)
         return g
 
@@ -748,164 +776,196 @@ class GivensOptimizer(BaseOptimizer):
         else:
             setattr(self.sub_optimizer, name, value)
 
-    @torch.no_grad()
-    def stat_error(
-        self,
-        Xs: List[torch.Tensor],
-        eXs: List[torch.Tensor],
-        Ws: List[torch.Tensor],
-        eWs: List[torch.Tensor],
-    ):
-        for i, (x, ex, w, ew) in enumerate(zip(Xs, eXs, Ws, eWs)):
-            if self.val_sample_batch > 0:
-                x_cpu = x.detach().cpu()
-                ex_cpu = ex.detach().cpu()
-                self.val_x_buffer.append((x_cpu, ex_cpu))
-                self.val_sample_batch -= 1
+    def process_detector(self, Xs, Ws):
+        for i, (x, w, detector) in enumerate(zip(Xs, Ws, self.detectors)):
+            if len(x.shape) == 2:
+                pass
+            elif len(x.shape) == 1:
+                x = x.unsqueeze(0)
+            else:
+                x = x.reshape((-1, x.shape[-1]))
+            detector.update(x, w)
 
-            # compute xtx, xtex, extex
+    def init_pairs(self, meta=None):
+        # debug: save pairs
+        global a_counter
+        linear_idx = a_counter
+        a_counter += 1
+
+        for i, givens_layer in enumerate(self.upper_module.givens):
+            if self.enable_anomaly_detection:
+                assert (
+                    self.sample_mode == "custom"
+                ), "Anomaly detection requires sample_mode='custom'"
+                scores = self.detectors[i].get_anomaly_scores()
+                if self.verbose:
+                    print(
+                        f"[{meta}] Chunk {i} anomaly scores: max={scores.max():.4f}, min={scores.min():.4f}, mean={scores.mean():.4f}"
+                    )
+                givens_layer.init_pairs(
+                    self.sample_mode,
+                    sample_func=partial(GivensOptimizer.score2pair, scores=scores),
+                )
+
+                # debug
+                anomaly_scores = scores.detach().cpu()
+                selected_pairs = givens_layer.pairs.copy()
+                torch.save(
+                    {
+                        "anomaly_scores": anomaly_scores,
+                        "selected_pairs": selected_pairs,
+                    },
+                    f"anomaly/pairs_{linear_idx}_chunk_{i}.pt",
+                )
+            else:
+                givens_layer.init_pairs(self.sample_mode)
+
+    @torch.no_grad()
+    def step_cal_grads(
+        self,
+        Xs,
+        Ws,
+        iqs,
+        wqs,
+    ):
+        if self.has_finished_grads:
+            return
+
+        for i, (x, w_, iq, wq, givens_layer) in enumerate(zip(Xs, Ws, iqs, wqs, self.upper_module.givens)):
             if len(x.shape) == 2:
                 this_batch = 1
             elif len(x.shape) == 1:
                 x = x.unsqueeze(0)
-                ex = ex.unsqueeze(0)
                 this_batch = 1
             else:
                 x = x.reshape((-1, x.shape[-1]))
-                ex = ex.reshape((-1, ex.shape[-1]))
                 this_batch = x.shape[0]
+            w = w_.to(dtype=self.dtype, device=w_.device).t()  # (in, out)
 
-            if self.enable_anomaly_detection:
-                self.detectors[i].update(x, w)
+            self.n_samples[i] += this_batch
 
-            x = x.to(dtype=self.dtype, device=x.device).t()  # (in, b)
-            ex = ex.to(dtype=self.dtype, device=x.device).t()  # (in, b)
-
-            buffer = getattr(
-                self.upper_module, f"givens_X_rel_{i}"
+            this_loss = GivensOptimizer.loss(
+                givens_layer,
+                x.to(dtype=self.dtype, device=w.device),
+                w,
+                iq,
+                wq,
             )
 
-            tmp_buffer = buffer.to(x.device, non_blocking=True)
-            tmp_buffer.mul_(self.nsamples / (self.nsamples + this_batch))
-            self.nsamples += this_batch
+            this_grad = GivensOptimizer.manual_grad(
+                givens_layer,
+                x.to(dtype=self.dtype, device=w.device),
+                w,
+                iq,
+                wq,
+            )
 
-            scale = math.sqrt(2 / self.nsamples)
-            x = x * scale
-            ex = ex * scale
-
-            tmp_buffer[0].addmm_(x, x.t(), beta=1.0, alpha=1.0)
-            tmp_buffer[1].addmm_(x, ex.t(), beta=1.0, alpha=1.0)
-            tmp_buffer[2].addmm_(ex, ex.t(), beta=1.0, alpha=1.0)
-
-            buffer.copy_(tmp_buffer.to(buffer.device))
-
-    def on_calibrate_prepare_finish(self, Ws, eWs):
-        criteria = self.stop_criteria
-        max_steps = criteria.get('max_steps', 100)
-        grad_tol = criteria.get('grad_tol', 1e-4)
-        grad_diff_rel = criteria.get("grad_diff_rel", 0.1)
-        patience = criteria.get('patience', 5)
-        ema_decay = criteria.get('ema_grad_decay', 0.9)
-        check_every = criteria.get('check_every', 1)
-
-        grad_ema = [None] * len(Ws)
-        prev_grad = [None] * len(Ws)
-        stop_counter = [0] * len(Ws)
-        active = [True] * len(Ws)
-
-        for i, givens_layer in enumerate(self.upper_module.givens):
-            if self.enable_anomaly_detection:
-                assert self.sample_mode == 'custom', "Anomaly detection requires sample_mode='custom'"
-                scores = self.detectors[i].get_anomaly_scores()
-                if self.verbose:
-                    print(f"Chunk {i} anomaly scores: max={scores.max():.4f}, min={scores.min():.4f}, mean={scores.mean():.4f}")
-                givens_layer.init_pairs(self.sample_mode, sample_func=partial(GivensOptimizer.score2pair, scores=scores))
+            if self.losses[i] is None:
+                self.losses[i] = this_loss.item()
+                self.grads[i] = this_grad
             else:
-                givens_layer.init_pairs(self.sample_mode)
+                self.losses[i] += this_loss.item()
+                self.grads[i] += this_grad
 
-        for step in range(max_steps):
-            if not any(active):
+    def step_mini_batch(self, current_step, meta=None):
+        loss_ema, grad_ema, prev_grad, stop_counter, active = (
+            self.learning_state["loss_ema"],
+            self.learning_state["grad_ema"],
+            self.learning_state["prev_grad"],
+            self.learning_state["stop_counter"],
+            self.learning_state["active"],
+        )
+
+        grad_tol, grad_diff_rel, patience, ema_decay, check_every = (
+            self.learning_config["grad_tol"],
+            self.learning_config["grad_diff_rel"],
+            self.learning_config["patience"],
+            self.learning_config["ema_decay"],
+            self.learning_config["check_every"],
+        )
+
+        if current_step >= self.learning_config["max_steps"]:
+            if self.verbose:
+                print(f"Reached max steps {current_step}")
+            self.has_finished_grads = True
+            return
+
+        if not any(self.learning_state["active"]):
+            if self.verbose:
+                print(f"All chunks converged by step {current_step}")
+            self.has_finished_grads = True
+            return
+
+        for i, (givens_layer, optim) in enumerate(zip(self.upper_module.givens, self.optims)):
+            if not active[i]:
+                continue
+
+            this_loss = self.losses[i] / (self.n_samples[i] + 1e-12)
+            if loss_ema[i] is None:
+                loss_ema[i] = this_loss
+            else:
+                loss_ema[i] = ema_decay * loss_ema[i] + (1 - ema_decay) * this_loss
+
+            if self.best_loss[i] is None or loss_ema[i] < self.best_loss[i]:
+                self.best_loss[i] = loss_ema[i]
+                self.best_state[i] = givens_layer.vecs.detach().clone()
+                print(
+                    f"[{meta}] New best loss for chunk {i}: {loss_ema[i]:.6f} at step {current_step}"
+                )
+
+            optim.zero_grad()
+            grad = self.grads[i] / (self.n_samples[i] + 1e-12)
+            givens_layer.vecs.grad = grad
+            optim.step()
+            Q_new = givens_layer.forward()
+
+            # update grad
+            if grad_ema[i] is None:
+                grad_ema[i] = grad.clone()
+            else:
+                grad_ema[i] = ema_decay * grad_ema[i] + (1 - ema_decay) * grad
+
+            grad_norm = torch.norm(grad_ema[i]) / grad.numel() ** 0.5
+            grad_diff = (
+                torch.norm(grad - prev_grad[i]) / (torch.norm(prev_grad[i]) + 1e-12)
+                if prev_grad[i] is not None
+                else 0.0
+            )
+            prev_grad[i] = grad.clone()
+
+            if grad_norm < grad_tol or grad_diff < grad_diff_rel:
+                stop_counter[i] += 1
+            else:
+                stop_counter[i] = 0
+
+            if stop_counter[i] >= patience:
+                active[i] = False
                 if self.verbose:
-                    print(f"All chunks converged by step {step}")
-                break
+                    print(f"Chunk {i} converged at step {current_step}")
 
-            for i, (w_, ew_, givens_layer, optim) in enumerate(zip(Ws, eWs, self.upper_module.givens, self.optims)):
-                if not active[i]:
-                    continue
-
-                w = w_.to(dtype=self.dtype, device=w_.device).t()  # (in, out)
-                ew = ew_.to(dtype=self.dtype, device=ew_.device).t()  # (in, out)
-
-                ### grad optims
-                optim.zero_grad()
-                grad = GivensOptimizer.manual_grad_buffer(
-                    givens_layer,
-                    getattr(self.upper_module, f"givens_X_rel_{i}"),
-                    w,
-                    ew,
+            if self.verbose and current_step % check_every == 0:
+                ortho_err = torch.norm(
+                    Q_new @ Q_new.t() - torch.eye(Q_new.shape[0], device=Q_new.device)
+                ).item()
+                print(
+                    f"[{meta}][Chunk {i}] Step {current_step}: "
+                    f"loss={loss_ema[i]:.6f}, "
+                    f"ortho={ortho_err:.4e}, "
+                    f"grad_norm={grad_norm:.6f}, "
+                    f"grad_diff={grad_diff:.6f}, "
+                    f"stop_count={stop_counter[i]}"
                 )
-                givens_layer.vecs.grad = grad
 
-                optim.step()
+            # reset
+            self.n_samples[i] = 0
+            self.losses[i] = None
+            self.grads[i] = None
 
-                # get loss
-                total_loss = 0.0
-                Q_new_result = None
-                n = len(self.val_x_buffer)
-                if n != 0:
-                    with torch.no_grad():
-                        for idx, (x, ex) in enumerate(self.val_x_buffer):
-                            loss, Q_new = GivensOptimizer.loss(
-                                givens_layer,
-                                x.to(dtype=self.dtype, device=w.device),
-                                w,
-                                ex.to(dtype=self.dtype, device=w.device),
-                                ew,
-                            )
-                            total_loss += loss
-                            if Q_new_result is None:
-                                Q_new_result = Q_new
-                    avg_loss = total_loss / n
-                else:
-                    Q_new_result = givens_layer.forward()
-                    avg_loss = float('nan')
-
-                # update grad
-                if grad_ema[i] is None:
-                    grad_ema[i] = grad.clone()
-                else:
-                    grad_ema[i] = ema_decay * grad_ema[i] + (1 - ema_decay) * grad
-
-                grad_norm = torch.norm(grad_ema[i]) / grad.numel() ** 0.5
-                grad_diff = (
-                    torch.norm(grad - prev_grad[i]) / (torch.norm(prev_grad[i]) + 1e-12)
-                    if prev_grad[i] is not None
-                    else 0.0
-                )
-                prev_grad[i] = grad.clone()
-
-                if grad_norm < grad_tol or grad_diff < grad_diff_rel:
-                    stop_counter[i] += 1
-                else:
-                    stop_counter[i] = 0
-
-                if stop_counter[i] >= patience:
-                    active[i] = False
-                    if self.verbose:
-                        print(f"Chunk {i} converged at step {step}")
-
-                if self.verbose and step % check_every == 0:
-                    ortho_err = torch.norm(
-                        Q_new @ Q_new.t() - torch.eye(Q_new.shape[0], device=Q_new.device)
-                    ).item()
-                    print(
-                        f"[Chunk {i}] Step {step}: "
-                        f"loss={avg_loss:.6f}, "
-                        f"ortho={ortho_err:.4e}, "
-                        f"grad_norm={grad_norm:.6f}, "
-                        f"grad_diff={grad_diff:.6f}, "
-                        f"stop_count={stop_counter[i]}"
-                    )
+    def on_calibrate_prepare_finish(self, Ws):
+        # debug: save pairs
+        global _counter
+        linear_idx = _counter
+        _counter += 1
 
         if self.verbose:
             print("Givens optimization finished.")
@@ -917,9 +977,23 @@ class GivensOptimizer(BaseOptimizer):
                 print(f"Final ortho check for chunk {i}: {ortho_err:.4e}")
                 print(f"Givens rotations: {givens_layer.vecs[:5]} ...")
 
+                # debug
+                vecs = givens_layer.vecs.detach().cpu()
+                s = getattr(self.upper_module, f"smooth_s_{i}")
+                torch.save(
+                    {
+                        "vecs": vecs,
+                        "smooth": s,
+                    },
+                    f"anomaly/givens_{linear_idx}_chunk{i}.pt",
+                )
+
         ## givens weight
         givens_weight_chunks = []
-        for i, (w, givens_layer) in enumerate(zip(Ws, self.upper_module.givens)):
+        for i, (w, givens_layer, bs) in enumerate(zip(Ws, self.upper_module.givens, self.best_state)):
+            givens_layer.vecs.data.copy_(
+                bs.to(device=givens_layer.vecs.device, dtype=givens_layer.vecs.dtype)
+            )
             Q = givens_layer.forward()
             givens_weight_chunks.append((w.to(dtype=self.dtype, device=Q.device) @ Q).to(dtype=w.dtype, device=w.device))  # (Q.t @ W.t).t --> (W @ Q)
 
@@ -928,10 +1002,15 @@ class GivensOptimizer(BaseOptimizer):
 
         self.has_givens_optimized = True
 
-        ## clear buffer
-        if not self.enable_autograd:
-            for i in range(len(self.upper_module.givens)):
-                del self.upper_module._buffers[f"givens_X_rel_{i}"]
+        del self.learning_config
+
+        del self.learning_state
+
+        del self.n_samples
+        del self.losses
+        del self.grads
+        del self.best_loss
+        del self.best_state
 
         return givens_weight_chunks
 
@@ -951,3 +1030,7 @@ class GivensOptimizer(BaseOptimizer):
             return givens_x_chunks
         else:
             return x_chunks
+
+# debug
+_counter = 0
+a_counter = 0
