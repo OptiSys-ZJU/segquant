@@ -75,9 +75,9 @@ segquant-gptq:
 
 segquant-givens:
   default:
+    enable: false
+  transformer_blocks.1.attn.to_out.0:
     enable: true
-  # transformer_blocks.22.norm1.linear:
-  #   enable: true
     seglinear: false
     search_patterns: []
     real_quant: false
@@ -97,7 +97,7 @@ segquant-givens:
       optim_config:
         lr: !!float 5e-3
         weight_decay: !!float 1e-5
-      givens_num: 192
+      givens_num: 768
       sample_mode: "custom"
       init_vecs_mode: "identity"
       enable_autograd: false
@@ -105,7 +105,7 @@ segquant-givens:
       enable_low_memory_grad: false
       cpu_storage: false
       stop_criteria:
-        max_steps: 400
+        max_steps: 2000
         grad_tol: !!float 1e-5
         grad_diff_rel: !!float 5e-3
         patience: 5

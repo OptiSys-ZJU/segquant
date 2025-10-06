@@ -104,7 +104,7 @@ def collect_linear_input_stats(model, dataloader, givens_dict, device="cuda"):
 
     linear_stats = {}
     for name, inputs in tqdm(activations.items(), desc="[Stat Layers] Computing statistics"):
-        linear_stats[name] = compute_per_channel_stats_tensor(inputs, device=device)
+        linear_stats[name] = compute_per_channel_stats_tensor(inputs, device="cpu")
 
     ks = [inp[0].shape[-1] for inp in activations.values()]
 
@@ -118,14 +118,14 @@ def collect_linear_input_stats(model, dataloader, givens_dict, device="cuda"):
         vecs = givens_dict[name]["vecs"]
         pairs = givens_dict[name]["selected_pairs"]
         k = ks[i]
-        Q = buildQ(pairs, vecs, k, dtype=torch.float32, device=device)
+        Q = buildQ(pairs, vecs, k, dtype=torch.float32, device="cpu")
 
         for j in range(len(inputs)):
             inp = inputs[j]
-            inputs[j] = (inp.to(device) @ Q.to(dtype=inp.dtype)).to("cpu")
+            inputs[j] = (inp.to("cuda") @ Q.to(dtype=inp.dtype, device='cuda')).to("cpu")
 
         rotation_stats[name] = compute_per_channel_stats_tensor(
-            inputs, device=device
+            inputs, device="cpu"
         )
 
     for h in hooks:
@@ -184,7 +184,23 @@ def run_percentile(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    stats = collect_linear_input_stats(part_model, calib_loader, device="cuda:0")
+    # create givens dict
+    linear_name_lst = torch.load("anomaly/linear_names.pt")
+    givens_dict = {}
+    for i, name in enumerate(linear_name_lst):
+        if i == 27:
+            print(f"[{i}] {name}")
+            givens = torch.load(f"anomaly/givens_{i}_chunk0.pt")
+            pairs = torch.load(f"anomaly/pairs_{i}_chunk_0.pt")
+            givens_dict[name] = {
+                "vecs": givens["vecs"],
+                "selected_pairs": pairs["selected_pairs"],
+                "smooth": givens["smooth"],
+            }
+    torch.save(givens_dict, "anomaly/givens_dict.pt")
+    stats = collect_linear_input_stats(
+        part_model, calib_loader, givens_dict, device="cuda:0"
+    )
     torch.save(stats, "anomaly/linear_input_stats.pt")
 
 

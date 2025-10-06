@@ -10,7 +10,7 @@ def visualize_anomalies(folder, idx=-1):
     indices = range(len(linear_names)) if idx < 0 else [idx]
 
     for i in indices:
-        pair_path = os.path.join(folder, f"givens_{i}_chunk0.pt")
+        pair_path = os.path.join(folder, f"pairs_{i}_chunk_0.pt")
         if not os.path.exists(pair_path):
             print(f"[Skip] Missing {pair_path}")
             continue

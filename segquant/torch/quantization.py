@@ -210,10 +210,13 @@ def _after_calib_layers(
             hooks.append(module.register_forward_hook(get_hook(name)))
 
     max_step = 0
+    mini_batch_size = 16
     for name, l in to_after_calib_layers.items():
         l.optimizer.init_pairs(meta=name)
         max_step = max(max_step, l.optimizer.learning_config["max_steps"])
-        mini_batch_size = l.optimizer.learning_config.get("mini_batch_size", 16)
+        mini_batch_size = max(mini_batch_size, l.optimizer.learning_config["mini_batch_size"])
+
+    print(f"[After Calib Layers] Running descent for {max_step} steps, mini_batch_size={mini_batch_size}")
 
     dataset = calib_data_loader.dataset
     dataloader = random_mini_batch_loader(dataset, mini_batch_size)

@@ -776,6 +776,12 @@ class GivensOptimizer(BaseOptimizer):
         else:
             setattr(self.sub_optimizer, name, value)
 
+    def __delattr__(self, name):
+        if name in ("sub_optimizer", "upper_module") or name in self.__dict__:
+            super().__delattr__(name)
+        else:
+            delattr(self.sub_optimizer, name)
+
     def process_detector(self, Xs, Ws):
         for i, (x, w, detector) in enumerate(zip(Xs, Ws, self.detectors)):
             if len(x.shape) == 2:
@@ -787,11 +793,6 @@ class GivensOptimizer(BaseOptimizer):
             detector.update(x, w)
 
     def init_pairs(self, meta=None):
-        # debug: save pairs
-        global a_counter
-        linear_idx = a_counter
-        a_counter += 1
-
         for i, givens_layer in enumerate(self.upper_module.givens):
             if self.enable_anomaly_detection:
                 assert (
@@ -815,7 +816,7 @@ class GivensOptimizer(BaseOptimizer):
                         "anomaly_scores": anomaly_scores,
                         "selected_pairs": selected_pairs,
                     },
-                    f"anomaly/pairs_{linear_idx}_chunk_{i}.pt",
+                    f"anomaly/pairs_{27}_chunk_{i}.pt",
                 )
             else:
                 givens_layer.init_pairs(self.sample_mode)
@@ -962,11 +963,6 @@ class GivensOptimizer(BaseOptimizer):
             self.grads[i] = None
 
     def on_calibrate_prepare_finish(self, Ws):
-        # debug: save pairs
-        global _counter
-        linear_idx = _counter
-        _counter += 1
-
         if self.verbose:
             print("Givens optimization finished.")
             for i, givens_layer in enumerate(self.upper_module.givens):
@@ -985,7 +981,7 @@ class GivensOptimizer(BaseOptimizer):
                         "vecs": vecs,
                         "smooth": s,
                     },
-                    f"anomaly/givens_{linear_idx}_chunk{i}.pt",
+                    f"anomaly/givens_{27}_chunk{i}.pt",
                 )
 
         ## givens weight
@@ -1002,15 +998,14 @@ class GivensOptimizer(BaseOptimizer):
 
         self.has_givens_optimized = True
 
-        del self.learning_config
-
         del self.learning_state
-
         del self.n_samples
         del self.losses
         del self.grads
         del self.best_loss
         del self.best_state
+        del self.detectors
+        del self.learning_config
 
         return givens_weight_chunks
 
@@ -1030,7 +1025,3 @@ class GivensOptimizer(BaseOptimizer):
             return givens_x_chunks
         else:
             return x_chunks
-
-# debug
-_counter = 0
-a_counter = 0
