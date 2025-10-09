@@ -56,7 +56,7 @@ dualscale:
     weight_quant:
       type: "int8"
 
-segquant-amax:
+segquant:
   default:
     enable: true
     seglinear: true
