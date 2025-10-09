@@ -53,6 +53,7 @@ ChunkInfo = namedtuple("ChunkInfo", ["found", "chunks"])
 SplitInfo = namedtuple("SplitInfo", ["found", "split_size_or_sections"])
 ConcatInfo = namedtuple("ConcatInfo", ["found", "chunksizes"])
 StackInfo = namedtuple("StackInfo", ["found", "chunksizes"])
+ReshapeInfo = namedtuple("ReshapeInfo", ["found", "chunksizes"])
 ActInfo = namedtuple("ActInfo", ["found", "name"])
 
 
@@ -95,7 +96,7 @@ class SegQuantPatternDetector:
                     {f"{key}_{i+1}": tensor for i, tensor in enumerate(value)}
                 )
                 del concrete[key]
-        
+
         # for sdxl
         concrete['timestep_cond'] = None
         concrete['cross_attention_kwargs'] = None
@@ -195,6 +196,20 @@ class SegQuantPatternDetector:
                     if len(chunksizes) == len(tensor_list):
                         return StackInfo(True, chunksizes)
         return StackInfo(False, None)
+
+    @staticmethod
+    def _is_valid_reshape(node, in_features):
+        if (node.op == "call_method" and node.target == "reshape") or (
+            node.op == "call_function" and node.target is torch.reshape
+        ):
+            tensor = node.args[0]
+            shape = getattr(tensor.meta.get("tensor_meta", None), "shape", None)
+            if shape is not None:
+                chunks, chunksize = shape[-2], shape[-1]
+                if chunks * chunksize == in_features:
+                    chunksizes = [chunksize] * chunks
+                    return ReshapeInfo(True, chunksizes)
+        return ReshapeInfo(False, None)
 
     def _is_activation(self, node):
         if node.op == "call_module":
@@ -297,7 +312,25 @@ class SegQuantPatternDetector:
                         input_node = input_node.args[0]
                         continue
                     break
+        elif pattern_type == "reshape_to_linear":
+            linear_info = self._is_linear(node)
+            if linear_info.found:
+                input_node = node.args[0]
+                while isinstance(input_node, torch.fx.Node):
+                    info = self._is_valid_reshape(input_node, linear_info.in_features)
+                    if info.found:
+                        return {
+                            "seg_mode": "input",
+                            "linear_name": linear_info.name,
+                            "linear_in": linear_info.in_features,
+                            "linear_out": linear_info.out_features,
+                            "chunksizes": info.chunksizes,
+                        }
 
+                    if self._is_transparent(input_node):
+                        input_node = input_node.args[0]
+                        continue
+                    break
         elif pattern_type == "activation_to_linear":
             linear_info = self._is_linear(node)
             if linear_info.found:
@@ -373,22 +406,24 @@ if __name__ == "__main__":
 
         def forward(self, x):
             out = self.linear1(x)
+            out = out.reshape(-1, 2, 10) # [.., 2, 10]
+            out = out.reshape(-1, 20)
             # a, b, c = out.chunk(3, dim=1)
             # a, b = out.split(10, dim=1)
             # out = torch.cat([a, b, c], dim=1)
             # out = torch.stack([a, b, c], dim=1)
             # c, d = out.split(2, dim=1)
             # out = torch.stack([c, d], dim=0)
-            out = self.act(out)
+            # out = self.act(out)
             out = self.linear2(out)
             return out
 
     search_patterns = [
         # "linear_to_chunk",
-        "activation_to_linear",
+        "reshape_to_linear",
     ]
     detector = SegQuantPatternDetector(
-        FeedForward(dim=10),
+        MyModel(),
         example_inputs=(torch.randn(2, 10),),
         search_patterns_lst=search_patterns,
     )
