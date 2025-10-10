@@ -1,4 +1,5 @@
 from typing import Literal
+from segquant.layers.segment_tensor_manager import InputSegmentTensorManager, WeightSegmentTensorManager
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -76,8 +77,13 @@ class SegmentLinear(nn.Module):
         else:
             assert len(chunksizes) == self.chunks and sum(chunksizes) == target_features
             self.chunksizes = chunksizes
-
-        self.splitter = BaseSplitter(self.chunksizes, seg_mode)
+        
+        self.enable_broadcast = False
+        if len(set(self.chunksizes)) == 1:
+            # boost branch
+            self.enable_broadcast = True
+        else:
+            self.splitter = BaseSplitter(self.chunksizes, seg_mode)
 
         real_quant = False
         dual_scale = False
@@ -113,34 +119,29 @@ class SegmentLinear(nn.Module):
         input_quant_args['real_quant'] = real_quant
         weight_quant_args['real_quant'] = real_quant
 
-        input_len = self.chunks
-        weight_len = self.chunks
+        input_calibrator_nums = None
+        weight_calibrator_nums = None
         self.opt_type = opt_type
-        if opt_type == 'default':
+        if self.opt_type == 'default':
             if seg_mode == 'input':
-                weight_len = 1
+                input_calibrator_nums, weight_calibrator_nums = (self.chunks, 1)
             elif seg_mode == 'weight':
-                input_len = 1
-            else:
-                raise ValueError("seg_mode not found")
+                input_calibrator_nums, weight_calibrator_nums = (1, self.chunks)
         elif opt_type in ('smooth', 'svd'):
             if seg_mode == 'input':
-                weight_len = 1
+                input_calibrator_nums, weight_calibrator_nums = (self.chunks, self.chunks)
             elif seg_mode == 'weight':
-                pass
-            else:
-                raise ValueError("seg_mode not found")
-        else:
-            raise ValueError("opt_type not found")
+                input_calibrator_nums, weight_calibrator_nums = (self.chunks, self.chunks)
 
-        weight_chunks = self._chunk_w(custom_weight_tensor)
+        if self.enable_broadcast:
+            weight_manager = WeightSegmentTensorManager(custom_weight_tensor, seg_mode=self.seg_mode, segments=self.chunks, segment_size=self.chunksizes[0])
 
         self.optimizer = OptimizerRegistry.create(
             opt_type,
             seg_mode=seg_mode,
             chunks=self.chunks,
             chunksizes=self.chunksizes,
-            weight_chunks=weight_chunks,
+            weight_manager=weight_manager,
             input_calibrators=[
                 CalibratorRegistry.create(
                     "amax",
@@ -149,7 +150,7 @@ class SegmentLinear(nn.Module):
                     quant_args=input_quant_args,
                     **calib_kwargs,
                 )
-                for _ in range(input_len)
+                for _ in range(input_calibrator_nums)
             ],
             weight_calibrators=[
                 CalibratorRegistry.create(
@@ -159,12 +160,11 @@ class SegmentLinear(nn.Module):
                     quant_args=weight_quant_args,
                     **calib_kwargs,
                 )
-                for _ in range(weight_len)
+                for _ in range(weight_calibrator_nums)
             ],
             real_quant=real_quant,
             dual_scale=dual_scale,
             kernel_type=kernel_type,
-            device=self.origin_device,
             **opt_kwargs,
         )
 
@@ -185,28 +185,9 @@ class SegmentLinear(nn.Module):
         base = f"SegmentLinear(\n{inner_content}\n)"
         return base
 
-    def _chunk_x(self, x):
-        if self.seg_mode == "input":
-            input_chunks = self.splitter.split_input(x)
-        elif self.seg_mode == "weight":
-            input_chunks = [x]
-        else:
-            raise ValueError("seg_mode not found")
-
-        return input_chunks
-
-    def _chunk_w(self, w):
-        if self.seg_mode == "input":
-            weight_chunks = [w]
-        elif self.seg_mode == "weight":
-            weight_chunks = self.splitter.split_weight(w)
-        else:
-            raise ValueError("seg_mode not found")
-        return weight_chunks
-
     def calibrate(self, input_data):
-        input_chunks = self._chunk_x(input_data)
-        self.optimizer.calibrate(input_chunks)
+        input_manager = InputSegmentTensorManager(input_data, seg_mode=self.seg_mode, segments=self.chunks, segment_size=self.chunksizes[0])
+        self.optimizer.calibrate(input_manager)
 
     def finish_calibrate(self):
         self.optimizer.finish_calibrate()
@@ -249,8 +230,8 @@ class SegmentLinear(nn.Module):
             self.bias_data = self.bias_data.to(self.origin_device)
 
     def forward(self, x, chunked=False):
-        input_chunks = self._chunk_x(x)
-        quantized_output_chunks = self.optimizer.forward(input_chunks)
+        input_manager = InputSegmentTensorManager(x, seg_mode=self.seg_mode, segments=self.chunks, segment_size=self.chunksizes[0])
+        quantized_output_chunks = self.optimizer.forward(input_manager)
         if chunked:
             return quantized_output_chunks
         if self.seg_mode == "weight":

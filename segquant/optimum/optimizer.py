@@ -3,6 +3,7 @@ from typing import List
 from collections import deque
 
 import numpy as np
+from segquant.layers.segment_tensor_manager import InputSegmentTensorManager, WeightSegmentTensorManager
 import torch
 import torch.nn.functional as F
 from segquant.layers import ext_dict
@@ -14,26 +15,22 @@ class BaseOptimizer:
         seg_mode,
         chunks,
         chunksizes,
-        weight_chunks,
+        weight_manager,
         input_calibrators,
         weight_calibrators,
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
-        device=None,
     ):
         super().__init__()
         self.seg_mode = seg_mode
         self.chunks = chunks
         self.chunksizes = chunksizes
-        self.weight_chunks = weight_chunks
+        self.weight_manager = weight_manager
         self.input_calibrators = input_calibrators
         self.weight_calibrators = weight_calibrators
         self.real_quant = real_quant
         self.kernel_type = kernel_type
-
-        # unused
-        self.device = device
 
         self.dual_scale = dual_scale
         if self.real_quant and dual_scale:
@@ -164,13 +161,12 @@ class DefaultOptimizer(BaseOptimizer):
         seg_mode,
         chunks,
         chunksizes,
-        weight_chunks,
+        weight_manager,
         input_calibrators,
         weight_calibrators,
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
-        device=None,
         **kwargs,
     ):
         assert len(input_calibrators) == 1 or len(weight_calibrators) == 1, \
@@ -179,13 +175,12 @@ class DefaultOptimizer(BaseOptimizer):
             seg_mode,
             chunks,
             chunksizes,
-            weight_chunks,
+            weight_manager,
             input_calibrators,
             weight_calibrators,
             real_quant,
             dual_scale,
             kernel_type,
-            device,
         )
 
         if seg_mode == 'weight':
@@ -230,29 +225,47 @@ class DefaultOptimizer(BaseOptimizer):
             f")"
         )
 
-    def _inv_input_list(self, l):
-        if len(l) == 1:
-            return l * self.chunks
-        return [torch.cat(l, dim=-1)]
-
-    def _calibrate_weights(self, input_chunks):
-        inv_input_chunks = self._inv_input_list(input_chunks)
-        assert len(inv_input_chunks) == len(self.weight_chunks), "inv_input_chunks failed"
-
+    def _calibrate_weights(self, i_view, w_view):
         for weight_calibrator, weight_chunk, input_copy_or_chunk in zip(
-            self.weight_calibrators, self.weight_chunks, inv_input_chunks
+            self.weight_calibrators, w_view, i_view
         ):
             weight_calibrator.calibrate(weight_chunk, input_data=input_copy_or_chunk)
 
-    def finish_calibrate(self):
-        super().finish_calibrate()
-        if self.seg_mode == 'input':
-            # weights need to be splited when input enabled
-            assert len(self.weight_chunks) == 1, "weight_chunks size not 1"
-            self.weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
-            self.weight_chunk_indices = range(self.chunks)
+    def calibrate(self, input_manager: InputSegmentTensorManager):
+        # input-seg, input calib = segment, chunk (segments, ..., segment_size)
+        # weight-seg, input calib = 1, chunk (segments (repeated), ..., in)
+        for input_calibrator, input_chunk in zip(self.input_calibrators, input_manager.iter_view()):
+            input_calibrator.calibrate(input_chunk)
 
-    def forward(self, input_chunks):
+        if self.seg_mode == 'input':
+            # input-seg, input calib = segment, weight calib = 1
+            # input chunk (1, ..., in), weight chunk (1, out, in)
+            i_view = input_manager.total_view()
+            w_view = self.weight_manager.total_view()
+        elif self.seg_mode == 'weight':
+            # weight-seg, input calib = 1, weight calib = segment
+            # input chunk (segments (repeated), ..., in), weight chunk (segments, segment_size, in)
+            i_view = input_manager.iter_view()
+            w_view = self.weight_manager.iter_view()
+
+        self._calibrate_weights(i_view, w_view)
+    
+    def finish_calibrate(self):
+        for i, input_calibrator in enumerate(self.input_calibrators):
+            input_calibrator.finish_calibrate()
+            self.input_calibrators[i] = input_calibrator.quantizer
+
+        for i, weight_calibrator in enumerate(self.weight_calibrators):
+            if self.seg_mode == 'input':
+                # input-seg, weight calib = 1, view # (1, out, in)
+                self.weight_manager.total_view()[i] = weight_calibrator.finish_calibrate(self.weight_manager.total_view()[i])
+            elif self.seg_mode == 'weight':
+                # weight-seg, weight calib = segments
+                self.weight_manager.iter_view() = weight_calibrator.finish_calibrate(self.weight_manager.iter_view()[i])
+            self.weight_calibrators[i] = weight_calibrator.quantizer
+        self.has_calibrated = True
+
+    def forward(self, input_manager: InputSegmentTensorManager):
         funcs = self._get_funcs(self.input_quantized_indices, self.weight_quantized_indices)
         quantized_output_chunks = [
             funcs[i](
