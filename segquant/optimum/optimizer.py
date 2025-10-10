@@ -107,6 +107,8 @@ class BaseOptimizer:
             input_calibrator.calibrate(input_chunk)
 
         # weight
+        if self.seg_mode == 'input':
+            input_chunks = [torch.cat(input_chunks, dim=-1)]
         self._calibrate_weights(input_chunks)
 
     def finish_calibrate(self):
@@ -290,11 +292,6 @@ class SmoothOptimizer(BaseOptimizer):
 
         Pipeline: Trace -> Smooth -> Calibrate -> Quantize
         """
-        assert len(input_calibrators) == len(weight_calibrators) and \
-            len(weight_calibrators) == len(weight_chunks), \
-            f"Lengths mismatch: input_calibrators={len(input_calibrators)}, " \
-            f"weight_calibrators={len(weight_calibrators)}, " \
-            f"weight_chunks={len(weight_chunks)}"
         super().__init__(
             seg_mode,
             chunks,
@@ -315,14 +312,14 @@ class SmoothOptimizer(BaseOptimizer):
         self.has_smoothed = False
 
         self.input_quantized_indices = range(self.chunks)
-        self.weight_quantized_indices = range(self.chunks)
+        self.weight_chunk_indices = range(self.chunks)
 
         if seg_mode == 'input':
             self.input_chunk_indices = range(self.chunks)
-            self.weight_chunk_indices = range(self.chunks)
+            self.weight_quantized_indices = [0] * self.chunks
         elif seg_mode == 'weight':
             self.input_chunk_indices = [0] * self.chunks
-            self.weight_chunk_indices = range(self.chunks)
+            self.weight_quantized_indices = range(self.chunks)
         else:
             raise ValueError("seg_mode not found")
 
@@ -385,8 +382,12 @@ class SmoothOptimizer(BaseOptimizer):
             raise ValueError("List length not 1")
 
     def _trace_max_w(self, weight_chunks: List[torch.Tensor]):
+        this_weight_chunks = weight_chunks
+        if self.seg_mode == 'input':
+            this_weight_chunks = weight_chunks[0].split(self.chunksizes, dim=-1)
+            assert len(this_weight_chunks) == self.chunks, 'len(this_weight_chunks) != self.chunks'
         if len(self.max_w) < self.chunks:
-            for weight_chunk in weight_chunks:
+            for weight_chunk in this_weight_chunks:
                 weight_chunk_max = (
                     weight_chunk.abs()
                     .amax(dim=tuple(range(weight_chunk.ndim - 1)), keepdim=True)
@@ -454,7 +455,7 @@ class SmoothOptimizer(BaseOptimizer):
         if self.seg_mode == 'input':
             # weights need to be splitted when input enabled
             assert len(self.weight_chunks) == 1, "weight_chunks size not 1"
-            self.weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
+            self.weight_chunks = list(self.weight_chunks[0].split(self.chunksizes, dim=-1))
         elif self.seg_mode == 'weight':
             pass
         else:
@@ -463,6 +464,9 @@ class SmoothOptimizer(BaseOptimizer):
         # smooth weight
         self._smooth_w(self.weight_chunks)
         self.has_smoothed = True
+        if self.seg_mode == 'input':
+            # reshape the weight
+            self.weight_chunks = [torch.cat(self.weight_chunks, dim=1)]
 
     def _smooth_w(self, weight_chunks: List[torch.Tensor]):
         for i, (weight_chunk, s) in enumerate(zip(weight_chunks, self.s)):
@@ -506,6 +510,8 @@ class SmoothOptimizer(BaseOptimizer):
         if self.seg_mode == 'weight':
             # input chunks must be splitted first
             self.input_chunk_indices = range(self.chunks)
+        elif self.seg_mode == 'input':
+            self.weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
         self.has_calibrated = True
 
         if not self.search_alpha:

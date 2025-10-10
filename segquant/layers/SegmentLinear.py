@@ -124,7 +124,12 @@ class SegmentLinear(nn.Module):
             else:
                 raise ValueError("seg_mode not found")
         elif opt_type in ('smooth', 'svd'):
-            pass
+            if seg_mode == 'input':
+                weight_len = 1
+            elif seg_mode == 'weight':
+                pass
+            else:
+                raise ValueError("seg_mode not found")
         else:
             raise ValueError("opt_type not found")
 
