@@ -1,3 +1,6 @@
+import torch
+
+
 class SegmentTensorManager:
     def __init__(self, seg_mode, segments, segment_size):
         self.seg_mode = seg_mode
@@ -16,7 +19,7 @@ class InputSegmentTensorManager(SegmentTensorManager):
             permute_order_tuple = (ndim - 2, *range(ndim - 2), ndim - 1)
             return self.input_tensor.view(new_shape).permute(permute_order_tuple) # (segments, ..., segment_size)
         elif self.seg_mode == 'weight':
-            expand_args = [self.segments] + [-1] * (self.input_tensor.ndim - 1)
+            expand_args = [self.segments] + [-1] * (self.input_tensor.ndim)
             return self.input_tensor.unsqueeze(0).expand(expand_args) # (segments (repeated), ..., in)
 
     def total_view(self):
@@ -25,16 +28,34 @@ class InputSegmentTensorManager(SegmentTensorManager):
 class WeightSegmentTensorManager(SegmentTensorManager):
     def __init__(self, weight_tensor, seg_mode, segments, segment_size):
         super().__init__(seg_mode=seg_mode, segments=segments, segment_size=segment_size)
-        assert weight_tensor.dims == 2, 'weight tensor shape failed.'
+        assert weight_tensor.ndim == 2, "weight tensor shape failed."
 
         self.out_features, self.in_features = weight_tensor.shape
         self.weight_tensor = weight_tensor # (out, in)
-    
+
+    def to(self, device):
+        self.weight_tensor = self.weight_tensor.to(device)
+        return self
+
     def iter_view(self):
         if self.seg_mode == 'input':
             return self.weight_tensor.view(self.out_features, self.segments, self.segment_size).permute(1, 0, 2) # (segments, out, segment_size)
         elif self.seg_mode == 'weight':
             return self.weight_tensor.view(self.segments, self.segment_size, self.in_features) # (segments, segment_size, in)
-    
+
     def total_view(self):
         return self.weight_tensor.unsqueeze(0) # (1, out, in)
+
+
+def segmented_matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """
+    a: (segments, ..., in)
+    b: (segments, out, in)
+    -> (segments, ..., out)
+    """
+    assert a.shape[0] == b.shape[0], "segments must match"
+
+    b_t = b.transpose(-1, -2)  # (segments, in, out)
+    while b_t.ndim < a.ndim:
+        b_t = b_t.unsqueeze(1)
+    return a @ b_t

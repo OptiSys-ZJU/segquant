@@ -3,7 +3,7 @@ from typing import List
 from collections import deque
 
 import numpy as np
-from segquant.layers.segment_tensor_manager import InputSegmentTensorManager, WeightSegmentTensorManager
+from segquant.layers.segment_tensor_manager import InputSegmentTensorManager, WeightSegmentTensorManager, segmented_matmul
 import torch
 import torch.nn.functional as F
 from segquant.layers import ext_dict
@@ -68,7 +68,7 @@ class BaseOptimizer:
             #         for i in range(self.chunks)
             #     ]
         else:
-            res = batch_input @ batch_weight.transpose(-1, -2)
+            res = segmented_matmul(batch_input, batch_weight)
         return res
 
     def _calibrate_weights(self, i_view, w_view):
@@ -81,12 +81,12 @@ class BaseOptimizer:
         pass
 
     def to_cpu(self):
-        self.weight_chunks = [chunk.to('cpu') for chunk in self.weight_chunks]
+        self.weight_manager = self.weight_manager.to('cpu')
         self.input_calibrators = [calibrator.to('cpu') for calibrator in self.input_calibrators]
         self.weight_calibrators = [calibrator.to('cpu') for calibrator in self.weight_calibrators]
 
     def to_cuda(self, device):
-        self.weight_chunks = [chunk.to(device) for chunk in self.weight_chunks]
+        self.weight_manager = self.weight_manager.to(device)
         self.input_calibrators = [calibrator.to(device) for calibrator in self.input_calibrators]
         self.weight_calibrators = [calibrator.to(device) for calibrator in self.weight_calibrators]
 
@@ -270,7 +270,6 @@ class SmoothOptimizer(BaseOptimizer):
             real_quant,
             dual_scale,
             kernel_type,
-            device,
         )
 
         self.max_w = []
@@ -498,7 +497,7 @@ class SmoothOptimizer(BaseOptimizer):
 
     def _reset(self, origin_weight):
         self.weight_manager = WeightSegmentTensorManager(
-            weight_tensor=origin_weight,
+            weight_tensor=origin_weight.clone(),
             seg_mode=self.seg_mode,
             segments=self.chunks,
             segment_size=self.chunksizes[0],
@@ -542,7 +541,6 @@ class SVDOptimizer(SmoothOptimizer):
             real_quant,
             dual_scale,
             kernel_type,
-            device,
             alpha,
             search_alpha_config,
             verbose,

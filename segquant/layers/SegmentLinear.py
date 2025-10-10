@@ -203,7 +203,7 @@ class SegmentLinear(nn.Module):
         input_chunks = InputSegmentTensorManager(x, seg_mode=self.seg_mode, segments=self.chunks, segment_size=self.chunksizes[0]).iter_view()
         weight_chunks = WeightSegmentTensorManager(weight, seg_mode=self.seg_mode, segments=self.chunks, segment_size=self.chunksizes[0]).iter_view()
 
-        return input_chunks @ weight_chunks.transpose(-1, -2)
+        return input_chunks @ weight_chunks.unsqueeze(1).transpose(-1, -2)
 
     def to(self, device):
         if isinstance(device, str):
@@ -233,7 +233,9 @@ class SegmentLinear(nn.Module):
             return quantized_output_chunks
         if self.seg_mode == "weight":
             # (segments, ..., segment_size) -> (..., segments, segment_size) -> (..., out)
-            res = quantized_output_chunks.permute(*range(1, x.ndim), 0).reshape(*x.shape[:-2], -1)
+            res = quantized_output_chunks.movedim(0, -2).reshape(
+                *quantized_output_chunks.shape[1:-1], -1
+            )
         elif self.seg_mode == "input":
             # (segments, ..., out) -> (..., out)
             res = quantized_output_chunks.sum(dim=0)
