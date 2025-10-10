@@ -40,7 +40,7 @@ class BaseOptimizer:
 
         self.has_calibrated = False
 
-    def _get_funcs(self, input_quantized_indices, weight_quantized_indices):
+    def call_func(self, batch_input, batch_weight):
         if self.real_quant:
             def tensor_wrapper(x):
                 if isinstance(x, torch.Tensor):
@@ -48,76 +48,34 @@ class BaseOptimizer:
                 else:
                     return x
 
-            if self.dual_scale:
-                funcs = [
-                    partial(
-                        ext_dict[self.kernel_type][self.func_name],
-                        pos_scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].pos_scale),
-                        neg_scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].neg_scale),
-                        scale_w=tensor_wrapper(self.weight_calibrators[weight_quantized_indices[i]].scale),
-                    )
-                    for i in range(self.chunks)
-                ]
-            else:
-                funcs = [
-                    partial(
-                        ext_dict[self.kernel_type][self.func_name],
-                        scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].scale),
-                        scale_w=tensor_wrapper(self.weight_calibrators[weight_quantized_indices[i]].scale),
-                    )
-                    for i in range(self.chunks)
-                ]
+            # if self.dual_scale:
+            #     funcs = [
+            #         partial(
+            #             ext_dict[self.kernel_type][self.func_name],
+            #             pos_scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].pos_scale),
+            #             neg_scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].neg_scale),
+            #             scale_w=tensor_wrapper(self.weight_calibrators[weight_quantized_indices[i]].scale),
+            #         )
+            #         for i in range(self.chunks)
+            #     ]
+            # else:
+            #     funcs = [
+            #         partial(
+            #             ext_dict[self.kernel_type][self.func_name],
+            #             scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].scale),
+            #             scale_w=tensor_wrapper(self.weight_calibrators[weight_quantized_indices[i]].scale),
+            #         )
+            #         for i in range(self.chunks)
+            #     ]
         else:
-            def quantize_input_decorator(quantizer):
-                def decorator(func):
-                    from functools import wraps
-                    @wraps(func)
-                    def wrapper(input_tensor, weight_tensor, *args, **kwargs):
-                        processed_input = quantizer.quantize(input_tensor)
-                        return func(processed_input, weight_tensor, *args, **kwargs)
-                    return wrapper
-                return decorator
+            res = batch_input @ batch_weight.transpose(-1, -2)
+        return res
 
-            def _create_wrapped_linear_func(q):
-                @quantize_input_decorator(q)
-                def wrapped_linear(input, weight, bias=None):
-                    return F.linear(input, weight, bias)
-                return wrapped_linear
-
-            funcs = [
-                _create_wrapped_linear_func(
-                    self.input_calibrators[input_quantized_indices[i]]
-                )
-                for i in range(self.chunks)
-            ]
-
-        return funcs
-
-    def _calibrate_weights(self, input_chunks):
+    def _calibrate_weights(self, i_view, w_view):
         for weight_calibrator, weight_chunk, input_copy_or_chunk in zip(
-            self.weight_calibrators, self.weight_chunks, input_chunks
+            self.weight_calibrators, w_view, i_view
         ):
             weight_calibrator.calibrate(weight_chunk, input_data=input_copy_or_chunk)
-
-    def calibrate(self, input_chunks):
-        for input_calibrator, input_chunk in zip(self.input_calibrators, input_chunks):
-            input_calibrator.calibrate(input_chunk)
-
-        # weight
-        if self.seg_mode == 'input':
-            input_chunks = [torch.cat(input_chunks, dim=-1)]
-        self._calibrate_weights(input_chunks)
-
-    def finish_calibrate(self):
-        for i, input_calibrator in enumerate(self.input_calibrators):
-            input_calibrator.finish_calibrate()
-            self.input_calibrators[i] = input_calibrator.quantizer
-
-        for i, weight_calibrator in enumerate(self.weight_calibrators):
-            self.weight_chunks[i] = weight_calibrator.finish_calibrate(self.weight_chunks[i])
-            self.weight_calibrators[i] = weight_calibrator.quantizer
-
-        self.has_calibrated = True
 
     def process_step(self, err):
         pass
@@ -126,7 +84,7 @@ class BaseOptimizer:
         self.weight_chunks = [chunk.to('cpu') for chunk in self.weight_chunks]
         self.input_calibrators = [calibrator.to('cpu') for calibrator in self.input_calibrators]
         self.weight_calibrators = [calibrator.to('cpu') for calibrator in self.weight_calibrators]
-    
+
     def to_cuda(self, device):
         self.weight_chunks = [chunk.to(device) for chunk in self.weight_chunks]
         self.input_calibrators = [calibrator.to(device) for calibrator in self.input_calibrators]
@@ -225,12 +183,6 @@ class DefaultOptimizer(BaseOptimizer):
             f")"
         )
 
-    def _calibrate_weights(self, i_view, w_view):
-        for weight_calibrator, weight_chunk, input_copy_or_chunk in zip(
-            self.weight_calibrators, w_view, i_view
-        ):
-            weight_calibrator.calibrate(weight_chunk, input_data=input_copy_or_chunk)
-
     def calibrate(self, input_manager: InputSegmentTensorManager):
         # input-seg, input calib = segment, chunk (segments, ..., segment_size)
         # weight-seg, input calib = 1, chunk (segments (repeated), ..., in)
@@ -249,33 +201,36 @@ class DefaultOptimizer(BaseOptimizer):
             w_view = self.weight_manager.iter_view()
 
         self._calibrate_weights(i_view, w_view)
-    
+
     def finish_calibrate(self):
         for i, input_calibrator in enumerate(self.input_calibrators):
             input_calibrator.finish_calibrate()
             self.input_calibrators[i] = input_calibrator.quantizer
 
+        weight_view = self.weight_manager.total_view()
         for i, weight_calibrator in enumerate(self.weight_calibrators):
             if self.seg_mode == 'input':
                 # input-seg, weight calib = 1, view # (1, out, in)
-                self.weight_manager.total_view()[i] = weight_calibrator.finish_calibrate(self.weight_manager.total_view()[i])
+                calibrated = weight_calibrator.finish_calibrate(weight_view[i])
+                weight_view[i].copy_(calibrated)
             elif self.seg_mode == 'weight':
                 # weight-seg, weight calib = segments
-                self.weight_manager.iter_view() = weight_calibrator.finish_calibrate(self.weight_manager.iter_view()[i])
+                calibrated = weight_calibrator.finish_calibrate(weight_view[i])
+                weight_view[i].copy_(calibrated)
             self.weight_calibrators[i] = weight_calibrator.quantizer
         self.has_calibrated = True
 
     def forward(self, input_manager: InputSegmentTensorManager):
-        funcs = self._get_funcs(self.input_quantized_indices, self.weight_quantized_indices)
-        quantized_output_chunks = [
-            funcs[i](
-                input_chunks[self.input_chunk_indices[i]].contiguous(),
-                self.weight_chunks[self.weight_chunk_indices[i]].contiguous(),
-            )
-            for i in range(self.chunks)
-        ]
+        # input-seg input chunk (segments, ..., segment_size) input calib = segments
+        # weight-seg input chunk (segments (repeated), ..., in) input calib = 1
+        input_chunks = input_manager.iter_view()
+        for idx, calibrator in enumerate(self.input_calibrators):
+            quantized = calibrator.quantize(input_chunks[idx])
+            input_chunks[idx].copy_(quantized)
 
-        return quantized_output_chunks
+        # input-seg weight chunk (segments, out, segment_size) --> (segments, ..., out)
+        # weight-seg weight chunk (segments, segment_size, in) --> (segments, ..., segment_size)
+        return self.call_func(input_chunks, self.weight_manager.iter_view())
 
     def process_step(self, err):
         pass
@@ -287,7 +242,7 @@ class SmoothOptimizer(BaseOptimizer):
         seg_mode,
         chunks,
         chunksizes,
-        weight_chunks,
+        weight_manager,
         input_calibrators,
         weight_calibrators,
         real_quant=False,
@@ -309,7 +264,7 @@ class SmoothOptimizer(BaseOptimizer):
             seg_mode,
             chunks,
             chunksizes,
-            weight_chunks,
+            weight_manager,
             input_calibrators,
             weight_calibrators,
             real_quant,
@@ -379,28 +334,9 @@ class SmoothOptimizer(BaseOptimizer):
             f")"
         )
 
-    def _broadcast_list(self, l):
-        if len(l) == 1:
-            return l * self.chunks
-        return l
-
-    def _broadcast_lists(self, a, b):
-        if len(a) == 1 and len(b) > 1:
-            return a * len(b), b
-        elif len(b) == 1 and len(a) > 1:
-            return a, b * len(a)
-        elif len(a) == len(b):
-            return a, b
-        else:
-            raise ValueError("List length not 1")
-
-    def _trace_max_w(self, weight_chunks: List[torch.Tensor]):
-        this_weight_chunks = weight_chunks
-        if self.seg_mode == 'input':
-            this_weight_chunks = weight_chunks[0].split(self.chunksizes, dim=-1)
-            assert len(this_weight_chunks) == self.chunks, 'len(this_weight_chunks) != self.chunks'
+    def _trace_max_w(self, weight_chunks: torch.Tensor):
         if len(self.max_w) < self.chunks:
-            for weight_chunk in this_weight_chunks:
+            for weight_chunk in weight_chunks:
                 weight_chunk_max = (
                     weight_chunk.abs()
                     .amax(dim=tuple(range(weight_chunk.ndim - 1)), keepdim=True)
@@ -408,7 +344,7 @@ class SmoothOptimizer(BaseOptimizer):
                 )
                 self.max_w.append(weight_chunk_max)
 
-    def _trace_max_x(self, input_chunks: List[torch.Tensor]):
+    def _trace_max_x(self, input_chunks: torch.Tensor):
         for i, input_chunk in enumerate(input_chunks):
             input_chunk_max = (
                 input_chunk.abs()
@@ -420,7 +356,7 @@ class SmoothOptimizer(BaseOptimizer):
             else:
                 self.max_x[i] = torch.maximum(self.max_x[i], input_chunk_max)
 
-    def trace(self, input_chunks: List[torch.Tensor]):
+    def trace(self, input_data: InputSegmentTensorManager):
         """
         Trace the maximum values of input tensors for calibration.
         This method computes the maximum values of the input tensors and weight tensors
@@ -430,17 +366,16 @@ class SmoothOptimizer(BaseOptimizer):
         Args:
             input_chunks: [tensor(batch_size * split_size1), tensor(batch_size * split_size2), ...]
         """
-        input_broadcast = self._broadcast_list(input_chunks)
-        self._trace_max_x(input_broadcast)
+        self._trace_max_x(input_data.iter_view())
 
         if not self.has_traced_w:
-            self._trace_max_w(self.weight_chunks)
+            self._trace_max_w(self.weight_manager.iter_view())
             self.has_traced_w = True
-    
+
     def to_cpu(self):
         super().to_cpu()
         self.s = [s.to('cpu') for s in self.s]
-    
+
     def to_cuda(self, device):
         super().to_cuda(device)
         self.s = [s.to(device) for s in self.s]
@@ -458,55 +393,42 @@ class SmoothOptimizer(BaseOptimizer):
         where max_x is the maximum value of the input tensor chunk and max_w is
         the maximum value of the corresponding weight tensor chunk.
         """
-        max_x, max_w = self._broadcast_lists(self.max_x, self.max_w)
+        assert len(self.max_x) == self.chunks, 'max_x failed'
+        assert len(self.max_w) == self.chunks, 'max_w failed'
         for i in range(self.chunks):
             epsilon = 1.0 / (1 << 31)
-            s = (max_x[i] ** self.alpha[i]) / (max_w[i] ** (1 - self.alpha[i]))
+            s = (self.max_x[i] ** self.alpha[i]) / (self.max_w[i] ** (1 - self.alpha[i]))
             s = torch.where(s <= epsilon, torch.ones_like(s), s)
             self.s[i] = torch.clamp(s.to(dtype=torch.float32), min=1e-4, max=1e4)
 
-        if self.seg_mode == 'input':
-            # weights need to be splitted when input enabled
-            assert len(self.weight_chunks) == 1, "weight_chunks size not 1"
-            self.weight_chunks = list(self.weight_chunks[0].split(self.chunksizes, dim=-1))
-        elif self.seg_mode == 'weight':
-            pass
-        else:
-            raise ValueError("seg_mode not found")
-
         # smooth weight
-        self._smooth_w(self.weight_chunks)
+        self._smooth_w(self.weight_manager.iter_view())
         self.has_smoothed = True
-        if self.seg_mode == 'input':
-            # reshape the weight
-            self.weight_chunks = [torch.cat(self.weight_chunks, dim=1)]
 
-    def _smooth_w(self, weight_chunks: List[torch.Tensor]):
+    def _smooth_w(self, weight_chunks: torch.Tensor):
         for i, (weight_chunk, s) in enumerate(zip(weight_chunks, self.s)):
             weight_chunk.mul_(s.to(weight_chunk.device))
-            weight_chunks[i] = weight_chunk
 
-    def _smooth_x(self, input_chunks: List[torch.Tensor]):
-        smoothed_input_chunks = []
-        input_broadcast = self._broadcast_list(input_chunks)
-        for input_chunk, s in zip(input_broadcast, self.s):
-            input_smooth = input_chunk / s
-            smoothed_input_chunks.append(
-                input_smooth.to(dtype=input_chunk.dtype, device=input_chunk.device)
-            )
-        return smoothed_input_chunks
+    def _smooth_x(self, input_chunks: torch.Tensor):
+        for input_chunk, s in zip(input_chunks, self.s):
+            input_chunk.div_(s.to(input_chunk.device, dtype=input_chunk.dtype))
+        return input_chunks
 
-    def calibrate(self, input_chunks):
-        assert self.has_smoothed, 'SmoothOptimizer: linear is not smoothed'
-        input_chunks = self._smooth_x(input_chunks) # len == chunks
-        super().calibrate(input_chunks)
+    def calibrate(self, input_manager: InputSegmentTensorManager):
+        assert self.has_smoothed, "SmoothOptimizer: linear is not smoothed"
+        input_chunks = self._smooth_x(input_manager.iter_view().clone())
+        for input_calibrator, input_chunk in zip(self.input_calibrators, input_chunks):
+            input_calibrator.calibrate(input_chunk)
+
+        # weight
+        self._calibrate_weights(input_chunks, self.weight_manager.iter_view())
 
     def _clean(self):
         for i, input_calibrator in enumerate(self.input_calibrators):
             self.input_calibrators[i] = input_calibrator.quantizer
         for i, weight_calibrator in enumerate(self.weight_calibrators):
             self.weight_calibrators[i] = weight_calibrator.quantizer
-        
+
         self.max_w = None
         self.max_x = None
 
@@ -517,31 +439,26 @@ class SmoothOptimizer(BaseOptimizer):
         for i, input_calibrator in enumerate(self.input_calibrators):
             input_calibrator.finish_calibrate()
 
+        weight_view = self.weight_manager.iter_view()
         for i, weight_calibrator in enumerate(self.weight_calibrators):
-            self.weight_chunks[i] = weight_calibrator.finish_calibrate(self.weight_chunks[i])
+            calibrated = weight_calibrator.finish_calibrate(weight_view[i])
+            weight_view[i].copy_(calibrated)
 
-        if self.seg_mode == 'weight':
-            # input chunks must be splitted first
-            self.input_chunk_indices = range(self.chunks)
-        elif self.seg_mode == 'input':
-            self.weight_chunks = self.weight_chunks[0].split(self.chunksizes, dim=-1)
         self.has_calibrated = True
 
         if not self.search_alpha:
             self._clean()
 
-    def forward(self, input_chunks):
-        funcs = self._get_funcs(self.input_quantized_indices, self.weight_quantized_indices)
-        input_chunks = self._smooth_x(input_chunks)
-        quantized_output_chunks = [
-            funcs[i](
-                input_chunks[self.input_chunk_indices[i]].contiguous(),
-                self.weight_chunks[self.weight_chunk_indices[i]].contiguous(),
-            )
-            for i in range(self.chunks)
-        ]
+    def forward(self, input_manager: InputSegmentTensorManager):
+        # input-seg input chunk (segments, ..., segment_size)
+        # weight-seg input chunk (segments, ..., in)
+        input_chunks = self._smooth_x(input_manager.iter_view().clone())
+        for i, c in enumerate(self.input_calibrators):
+            input_chunks[i].copy_(c.quantize(input_chunks[i]))
 
-        return quantized_output_chunks
+        # input-seg weight chunk (segments, out, segment_size) --> (segments, ..., out)
+        # weight-seg weight chunk (segments, segment_size, in) --> (segments, ..., segment_size)
+        return self.call_func(input_chunks, self.weight_manager.iter_view())
 
     def search_step(self, errs, origin_weight):
         assert len(errs) == self.chunks, "errlist length must be chunks"
@@ -551,7 +468,7 @@ class SmoothOptimizer(BaseOptimizer):
             if this_err < self.opt_err[i]:
                 self.opt_err[i] = this_err
                 self.opt_alpha[i] = self.alpha[i]
-            
+
             if self.verbose:
                 print(
                     f"Chunk {i}: current err={this_err:.4f}, best err={self.opt_err[i]:.4f}, best alpha={self.opt_alpha[i]:.4f}"
@@ -580,13 +497,12 @@ class SmoothOptimizer(BaseOptimizer):
         self.search_alpha = False
 
     def _reset(self, origin_weight):
-        if self.seg_mode == 'weight':
-            self.input_chunk_indices = [0] * self.chunks
-            weight_chunks = origin_weight.split(self.chunksizes, dim=0)
-            for i in range(len(self.weight_chunks)):
-                self.weight_chunks[i] = weight_chunks[i].clone()
-        elif self.seg_mode == 'input':
-            self.weight_chunks = [origin_weight.clone()]
+        self.weight_manager = WeightSegmentTensorManager(
+            weight_tensor=origin_weight,
+            seg_mode=self.seg_mode,
+            segments=self.chunks,
+            segment_size=self.chunksizes[0],
+        )
 
         for input_calibrator in self.input_calibrators:
             input_calibrator.reset()
@@ -603,7 +519,7 @@ class SVDOptimizer(SmoothOptimizer):
         seg_mode,
         chunks,
         chunksizes,
-        weight_chunks,
+        weight_manager,
         input_calibrators,
         weight_calibrators,
         real_quant=False,
@@ -620,7 +536,7 @@ class SVDOptimizer(SmoothOptimizer):
             seg_mode,
             chunks,
             chunksizes,
-            weight_chunks,
+            weight_manager,
             input_calibrators,
             weight_calibrators,
             real_quant,
@@ -663,67 +579,61 @@ class SVDOptimizer(SmoothOptimizer):
             f"    weight_quantizers=[\n      {weight_q}\n  ]\n"
             f")"
         )
-    
+
     def to_cpu(self):
         super().to_cpu()
         self.l1s = [l1.to('cpu') for l1 in self.l1s]
         self.l2s = [l2.to('cpu') for l2 in self.l2s]
-    
+
     def to_cuda(self, device):
         super().to_cuda(device)
         self.l1s = [l1.to(device) for l1 in self.l1s]
         self.l2s = [l2.to(device) for l2 in self.l2s]
 
-    def _svd_w(self, smooth_weight_chunks: List[torch.Tensor]):
+    def _svd_w(self, smooth_weight_chunks: torch.Tensor):
         assert self.has_smoothed, 'SVDOptimizer: linear is not smoothed'
         assert len(smooth_weight_chunks) == self.chunks, \
             f'SVDOptimizer: weight chunks must equal to chunks but get [{len(smooth_weight_chunks)}]'
 
-        svd_weight_chunk = []
-
         for idx, smooth_weight_chunk in enumerate(smooth_weight_chunks):
-            chunk = smooth_weight_chunk.t()
-            u, s, vt = torch.linalg.svd(chunk.to(getattr(torch, self.precision)), full_matrices=False)
+            # (out, in) -> (in, out)
+            chunk_t = smooth_weight_chunk.t()
+            chunk_t_f = chunk_t.to(getattr(torch, self.precision))
 
+            # SVD
+            u, s, vt = torch.linalg.svd(chunk_t_f, full_matrices=False)
             if u.shape[1] < self.low_rank or vt.shape[0] < self.low_rank:
                 raise ValueError(
                     f"Low-rank dimension {self.low_rank} exceeds layer "
                     f"dimensions {u.shape[1]} and {vt.shape[0]}."
                 )
-
-            us = u[:, :self.low_rank] * s[:self.low_rank] # (m, r)
-            vt = vt[:self.low_rank, :]                    # (r, n)
-
+            us = u[:, :self.low_rank] * s[:self.low_rank] # (in, low_rank)
+            vt = vt[:self.low_rank, :] # (low_rank, out)
             device, dtype = smooth_weight_chunk.device, smooth_weight_chunk.dtype
-            l1 = us.to(device=device, dtype=dtype)
-            l2 = vt.to(device=device, dtype=dtype)
-            self.l1s[idx] = l1
-            self.l2s[idx] = l2
+            self.l1s[idx] = us.to(device=device, dtype=dtype)
+            self.l2s[idx] = vt.to(device=device, dtype=dtype)
+            residual_t = (chunk_t_f.to(torch.float64) - us @ vt).to(dtype=dtype, device=device)
+            smooth_weight_chunk.copy_(residual_t.t())
+            del u, s, vt, us, vt, chunk_t, chunk_t_f, residual_t
 
-            weight_svd = (chunk.to(torch.float64) - us @ vt).t().to(device=device, dtype=dtype)
-            svd_weight_chunk.append(weight_svd)
-            del u, s, vt, us, chunk
-        return svd_weight_chunk
+        self.l1s = torch.stack(self.l1s) # (segments, in, low_rank)
+        self.l2s = torch.stack(self.l2s)  # (segments, low_rank, out)
+        return smooth_weight_chunks
 
     def smooth(self):
         super().smooth()
-        self.weight_chunks = self._svd_w(self.weight_chunks)
+        self.weight_chunks = self._svd_w(self.weight_manager.iter_view())
         self.has_svd = True
 
-    def calibrate(self, input_chunks):
+    def calibrate(self, input_manager: InputSegmentTensorManager):
         assert self.has_svd, 'SVDOptimizer: linear is not svd'
-        super().calibrate(input_chunks)
+        super().calibrate(input_manager)
 
-    def forward(self, input_chunks):
-        funcs = self._get_funcs(self.input_quantized_indices, self.weight_quantized_indices)
-        input_chunks = self._smooth_x(input_chunks)
-        quantized_output_chunks = [
-            input_chunks[self.input_chunk_indices[i]] @ self.l1s[i] @ self.l2s[i] +
-            funcs[i](
-                input_chunks[self.input_chunk_indices[i]].contiguous(),
-                self.weight_chunks[self.weight_chunk_indices[i]].contiguous(),
-            )
-            for i in range(self.chunks)
-        ]
+    def forward(self, input_manager: InputSegmentTensorManager):
+        # input-seg input chunk (segments, ..., segment_size)
+        # weight-seg input chunk (segments, ..., in)
+        input_chunks = self._smooth_x(input_manager.iter_view().clone())
+        for i, c in enumerate(self.input_calibrators):
+            input_chunks[i].copy_(c.quantize(input_chunks[i]))
 
-        return quantized_output_chunks
+        return self.call_func(input_chunks, self.weight_manager.iter_view()) + input_chunks @ self.l1s @ self.l2s

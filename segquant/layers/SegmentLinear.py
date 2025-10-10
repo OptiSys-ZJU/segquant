@@ -77,13 +77,10 @@ class SegmentLinear(nn.Module):
         else:
             assert len(chunksizes) == self.chunks and sum(chunksizes) == target_features
             self.chunksizes = chunksizes
-        
-        self.enable_broadcast = False
-        if len(set(self.chunksizes)) == 1:
-            # boost branch
-            self.enable_broadcast = True
-        else:
-            self.splitter = BaseSplitter(self.chunksizes, seg_mode)
+
+        if len(set(self.chunksizes)) != 1:
+            # todo
+            raise NotImplementedError("Only support equal chunksizes.")
 
         real_quant = False
         dual_scale = False
@@ -133,8 +130,7 @@ class SegmentLinear(nn.Module):
             elif seg_mode == 'weight':
                 input_calibrator_nums, weight_calibrator_nums = (self.chunks, self.chunks)
 
-        if self.enable_broadcast:
-            weight_manager = WeightSegmentTensorManager(custom_weight_tensor, seg_mode=self.seg_mode, segments=self.chunks, segment_size=self.chunksizes[0])
+        weight_manager = WeightSegmentTensorManager(custom_weight_tensor, seg_mode=self.seg_mode, segments=self.chunks, segment_size=self.chunksizes[0])
 
         self.optimizer = OptimizerRegistry.create(
             opt_type,
@@ -169,8 +165,13 @@ class SegmentLinear(nn.Module):
         )
 
     def trace(self, input_data):
-        input_chunks = self._chunk_x(input_data)
-        self.optimizer.trace(input_chunks)
+        input_manager = InputSegmentTensorManager(
+            input_data,
+            seg_mode=self.seg_mode,
+            segments=self.chunks,
+            segment_size=self.chunksizes[0],
+        )
+        self.optimizer.trace(input_manager)
 
     def smooth(self):
         self.optimizer.smooth()
@@ -186,7 +187,12 @@ class SegmentLinear(nn.Module):
         return base
 
     def calibrate(self, input_data):
-        input_manager = InputSegmentTensorManager(input_data, seg_mode=self.seg_mode, segments=self.chunks, segment_size=self.chunksizes[0])
+        input_manager = InputSegmentTensorManager(
+            input_data,
+            seg_mode=self.seg_mode,
+            segments=self.chunks,
+            segment_size=self.chunksizes[0],
+        )
         self.optimizer.calibrate(input_manager)
 
     def finish_calibrate(self):
@@ -194,19 +200,10 @@ class SegmentLinear(nn.Module):
 
     def segment_forward(self, x, weight):
         # only for search
-        input_chunks = self._chunk_x(x)
-        weight_chunks = self._chunk_w(weight)
+        input_chunks = InputSegmentTensorManager(x, seg_mode=self.seg_mode, segments=self.chunks, segment_size=self.chunksizes[0]).iter_view()
+        weight_chunks = WeightSegmentTensorManager(weight, seg_mode=self.seg_mode, segments=self.chunks, segment_size=self.chunksizes[0]).iter_view()
 
-        output_chunks = []
-        if self.seg_mode == 'weight':
-            for w in weight_chunks:
-                output_chunks.append(F.linear(input_chunks[0], w))
-        elif self.seg_mode == 'input':
-            this_weight_chunks = weight_chunks[0].split(self.chunksizes, dim=1)
-            for i, inp in enumerate(input_chunks):
-                output_chunks.append(F.linear(inp, this_weight_chunks[i]))
-
-        return output_chunks
+        return input_chunks @ weight_chunks.transpose(-1, -2)
 
     def to(self, device):
         if isinstance(device, str):
@@ -223,7 +220,7 @@ class SegmentLinear(nn.Module):
         self.optimizer.to_cpu()
         if self.bias_data is not None:
             self.bias_data = self.bias_data.to('cpu')
-    
+
     def to_cuda(self):
         self.optimizer.to_cuda(self.origin_device)
         if self.bias_data is not None:
@@ -235,11 +232,11 @@ class SegmentLinear(nn.Module):
         if chunked:
             return quantized_output_chunks
         if self.seg_mode == "weight":
-            res = self.splitter.concat_output(quantized_output_chunks)
+            # (segments, ..., segment_size) -> (..., segments, segment_size) -> (..., out)
+            res = quantized_output_chunks.permute(*range(1, x.ndim), 0).reshape(*x.shape[:-2], -1)
         elif self.seg_mode == "input":
-            res = sum(quantized_output_chunks)
-        else:
-            raise ValueError("seg_mode not found")
+            # (segments, ..., out) -> (..., out)
+            res = quantized_output_chunks.sum(dim=0)
         return (res + self.bias_data if self.bias else res)
 
 def create_segment_linear(
