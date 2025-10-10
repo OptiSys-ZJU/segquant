@@ -126,6 +126,8 @@ class SegQuantPatternDetector:
     def _is_transparent(self, node):
         if node.op == "call_method" and node.target == "to":
             return True
+        if node.op == "call_function" and node.target.__name__ == 'getitem':
+            return True
         if node.op == "call_module":
             submod = self.module_map.get(node.target, None)
             if isinstance(submod, torch.nn.Dropout):
@@ -368,6 +370,7 @@ class SegQuantPatternDetector:
 if __name__ == "__main__":
     from typing import Optional
     from backend.torch.layers.activations import GELU
+    from backend.torch.layers.attention_processor import Attention, JointAttnProcessor2_0
 
     class FeedForward(nn.Module):
         def __init__(
@@ -422,9 +425,25 @@ if __name__ == "__main__":
         # "linear_to_chunk",
         "reshape_to_linear",
     ]
+    seq = 3
+    dim = 10
+    attention_head_dim = 5
+    num_attention_heads = 2
     detector = SegQuantPatternDetector(
-        MyModel(),
-        example_inputs=(torch.randn(2, 10),),
+        Attention(
+            query_dim=dim,
+            cross_attention_dim=None,
+            added_kv_proj_dim=dim,
+            dim_head=attention_head_dim,
+            heads=num_attention_heads,
+            out_dim=dim,
+            context_pre_only=False,
+            bias=True,
+            processor=JointAttnProcessor2_0(),
+            qk_norm=None,
+            eps=1e-6,
+        ),
+        example_inputs=(torch.randn(2, seq, dim), torch.randn(2, seq, dim), None,),
         search_patterns_lst=search_patterns,
     )
     results = detector.find_all_patterns()
