@@ -45,6 +45,7 @@ class SegPattern(Enum):
     LINEAR2SPLIT = "linear_to_split"
     CONCAT2LINEAR = "concat_to_linear"
     STACK2LINEAR = "stack_to_linear"
+    RESHAPE2LINEAR = "reshape_to_linear"
     ACTIVATION2LINEAR = "activation_to_linear"
 
     @classmethod
@@ -55,6 +56,7 @@ class SegPattern(Enum):
             SegPattern.LINEAR2SPLIT,
             SegPattern.CONCAT2LINEAR,
             SegPattern.STACK2LINEAR,
+            SegPattern.RESHAPE2LINEAR,
         ]
 
     @classmethod
@@ -65,6 +67,7 @@ class SegPattern(Enum):
             cls.LINEAR2SPLIT,
             cls.CONCAT2LINEAR,
             cls.STACK2LINEAR,
+            cls.RESHAPE2LINEAR,
             cls.ACTIVATION2LINEAR,
         ]
 
