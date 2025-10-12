@@ -144,3 +144,63 @@ __global__ void real_quantize_dual_scaled_kernel(
         }
     }
 }
+
+__device__ __forceinline__ float get_scale_with_axis(int idx, const float* scales, size_t segment_stride, size_t last_features, bool enable_broadcast) {
+    // inputs (segments, ..., last_features)
+    // scales (segments, ..., last_features
+    int seg_id = idx / segment_stride;
+    int token_id = (idx % segment_stride) / last_features;
+    if (enable_broadcast) {
+        return scales[seg_id];
+    }
+    return scales[seg_id * segment_stride + token_id];
+}
+
+template <typename T, typename OutputType, typename StoreType>
+__global__ void real_quantize_scaled_kernel(
+    const T* inputs,
+    const float* scale_x,
+    size_t segment_stride,
+    size_t last_features,
+    size_t n,
+    bool enable_broadcast,
+    StoreType* Xq
+) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int idx = 4 * tid; idx < 4 * (tid + 1) && idx < n; ++idx) {
+        float val = static_cast<float>(inputs[idx]);
+        float scale_val = get_scale_with_axis(idx, scale_x, segment_stride, last_features, enable_broadcast);
+        float scaled = val * scale_val;
+        store_data<OutputType, StoreType>(Xq, idx, scaled);
+    }
+}
+
+template <typename T, typename OutputType, typename StoreType>
+__global__ void real_quantize_dual_scaled_kernel(
+    const T *inputs,
+    const float* pos_scale_x, const float* neg_scale_x,
+    size_t segment_stride,
+    size_t last_features,
+    size_t n,
+    bool enable_broadcast,
+    StoreType* Xp,
+    StoreType* Xn
+) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (int idx = 4 * tid; idx < 4 * (tid + 1) && idx < n; ++idx) {
+        float val = static_cast<float>(inputs[idx]);
+        if (val >= 0) {
+            float pos_scale_val = get_scale_with_axis(idx, pos_scale_x, segment_stride, last_features, enable_broadcast);
+            float scaled = val * pos_scale_val;
+            store_data<OutputType, StoreType>(Xp, idx, scaled);
+            store_data<OutputType, StoreType>(Xn, idx, 0.0f);
+        } else {
+            // val < 0, neg_scale_x > 0 --> scaled < 0
+            float neg_scale_val = get_scale_with_axis(idx, neg_scale_x, segment_stride, last_features, enable_broadcast);
+            float scaled = val * neg_scale_val;
+            store_data<OutputType, StoreType>(Xn, idx, scaled);
+            store_data<OutputType, StoreType>(Xp, idx, 0.0f);
+        }
+    }
+}

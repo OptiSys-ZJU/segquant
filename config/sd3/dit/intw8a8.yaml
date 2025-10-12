@@ -39,7 +39,7 @@ segquant-amax:
       type: "smooth"
       alpha: 0.5
       search_alpha_config:
-        enable: true
+        enable: false
         min: 0.0
         max: 1.0
         step: 0.1
@@ -48,8 +48,10 @@ segquant-amax:
       type: "amax"
     input_quant:
       type: "int8"
+      axis: -1
     weight_quant:
       type: "int8"
+      axis: 1
 
 segquant-gptq:
   default:

@@ -40,33 +40,72 @@ class BaseOptimizer:
 
         self.has_calibrated = False
 
-    def call_func(self, batch_input, batch_weight):
-        if self.real_quant:
-            def tensor_wrapper(x):
-                if isinstance(x, torch.Tensor):
-                    return x.to(dtype=torch.float32).contiguous()
-                else:
-                    return x
+        self.scale_tensor = None
 
-            # if self.dual_scale:
-            #     funcs = [
-            #         partial(
-            #             ext_dict[self.kernel_type][self.func_name],
-            #             pos_scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].pos_scale),
-            #             neg_scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].neg_scale),
-            #             scale_w=tensor_wrapper(self.weight_calibrators[weight_quantized_indices[i]].scale),
-            #         )
-            #         for i in range(self.chunks)
-            #     ]
-            # else:
-            #     funcs = [
-            #         partial(
-            #             ext_dict[self.kernel_type][self.func_name],
-            #             scale_x=tensor_wrapper(self.input_calibrators[input_quantized_indices[i]].scale),
-            #             scale_w=tensor_wrapper(self.weight_calibrators[weight_quantized_indices[i]].scale),
-            #         )
-            #         for i in range(self.chunks)
-            #     ]
+    def make_scale_tensor(self):
+        weight_scales = [
+            (
+                calibrator.scale
+                if isinstance(calibrator.scale, torch.Tensor)
+                else torch.tensor(calibrator.scale, dtype=torch.float32)
+            )
+            for calibrator in self.weight_calibrators
+        ]
+        if self.dual_scale:
+            pos_input_scales = [
+                (
+                    calibrator.pos_scale
+                    if isinstance(calibrator.pos_scale, torch.Tensor)
+                    else torch.tensor(calibrator.pos_scale, dtype=torch.float32)
+                )
+                for calibrator in self.input_calibrators
+            ]
+            neg_input_scales = [
+                (
+                    calibrator.neg_scale
+                    if isinstance(calibrator.neg_scale, torch.Tensor)
+                    else torch.tensor(calibrator.neg_scale, dtype=torch.float32)
+                )
+                for calibrator in self.input_calibrators
+            ]
+
+            self.scale_tensor = (torch.stack(pos_input_scales), torch.stack(neg_input_scales), torch.stack(weight_scales))
+        else:
+            input_scales = [
+                (
+                    calibrator.scale
+                    if isinstance(calibrator.scale, torch.Tensor)
+                    else torch.tensor(calibrator.scale, dtype=torch.float32)
+                )
+                for calibrator in self.input_calibrators
+            ]
+            self.scale_tensor = (torch.stack(input_scales), torch.stack(weight_scales))
+
+    def call_func(self, batch_input: torch.Tensor, batch_weight: torch.Tensor):
+        if self.real_quant:
+            if self.input_calibrators[0].dynamic:
+                # slow path
+                for input_calibrator, input_chunk in zip(self.input_calibrators, batch_input):
+                    input_calibrator.dynamic_calibrate(input_chunk)
+                self.make_scale_tensor()
+
+            if self.dual_scale:
+                pos_scale_x, neg_scale_x, scale_w = self.scale_tensor
+                res = ext_dict[self.kernel_type][self.func_name](
+                    batch_input.contiguous(),
+                    batch_weight.contiguous(),
+                    pos_scale_x.contiguous(),
+                    neg_scale_x.contiguous(),
+                    scale_w.contiguous(),
+                )
+            else:
+                scale_x, scale_w = self.scale_tensor
+                res = ext_dict[self.kernel_type][self.func_name](
+                    batch_input.contiguous(),
+                    batch_weight.contiguous(),
+                    scale_x.contiguous(),
+                    scale_w.contiguous(),
+                )
         else:
             res = segmented_matmul(batch_input, batch_weight)
         return res
@@ -207,6 +246,7 @@ class DefaultOptimizer(BaseOptimizer):
             input_calibrator.finish_calibrate()
             self.input_calibrators[i] = input_calibrator.quantizer
 
+        # todo: maybe not worked for real quant
         weight_view = self.weight_manager.total_view()
         for i, weight_calibrator in enumerate(self.weight_calibrators):
             if self.seg_mode == 'input':
@@ -219,6 +259,7 @@ class DefaultOptimizer(BaseOptimizer):
                 weight_view[i].copy_(calibrated)
             self.weight_calibrators[i] = weight_calibrator.quantizer
         self.has_calibrated = True
+        self.make_scale_tensor()
 
     def forward(self, input_manager: InputSegmentTensorManager):
         # input-seg input chunk (segments, ..., segment_size) input calib = segments
@@ -248,7 +289,6 @@ class SmoothOptimizer(BaseOptimizer):
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
-        device=None,
         alpha=0.5,
         search_alpha_config=None,
         verbose=False,
@@ -438,12 +478,14 @@ class SmoothOptimizer(BaseOptimizer):
         for i, input_calibrator in enumerate(self.input_calibrators):
             input_calibrator.finish_calibrate()
 
+        # todo: maybe not worked for real quant
         weight_view = self.weight_manager.iter_view()
         for i, weight_calibrator in enumerate(self.weight_calibrators):
             calibrated = weight_calibrator.finish_calibrate(weight_view[i])
             weight_view[i].copy_(calibrated)
 
         self.has_calibrated = True
+        self.make_scale_tensor()
 
         if not self.search_alpha:
             self._clean()
@@ -524,7 +566,6 @@ class SVDOptimizer(SmoothOptimizer):
         real_quant=False,
         dual_scale=False,
         kernel_type=None,
-        device=None,
         alpha=0.5,
         low_rank=32,
         search_alpha_config=None,

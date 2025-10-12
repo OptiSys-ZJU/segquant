@@ -16,11 +16,11 @@ void real_quantized_quantize_weights(at::Tensor weights, at::Tensor outputs, flo
 template<typename T>
 void real_quantized_quantize_weights(at::Tensor weights, at::Tensor outputs, at::Tensor scale_w);
 
-template<typename input_type, typename weight_type, typename scale_x_type, typename scale_w_type>
-at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, scale_x_type scale_x, scale_w_type scale_w);
+template<typename input_type, typename weight_type>
+at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, at::Tensor scale_w);
 
-template<typename input_type, typename weight_type, typename scale_x_type, typename scale_w_type>
-at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights, scale_x_type pos_scale_x, scale_x_type neg_scale_x, scale_w_type scale_w);
+template<typename input_type, typename weight_type>
+at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights, at::Tensor pos_scale_x, at::Tensor neg_scale_x, at::Tensor scale_w);
 
 template <typename T>
 struct StoreType;
@@ -83,13 +83,14 @@ template<typename A>
 void register_quantweight_module(pybind11::module_& m) {
     m.def("real_quantized_quantize_weights",
         [](at::Tensor weights, at::Tensor outputs, float scale_w) {
+#ifdef SEGQUANT_DEBUG
             tensor_check(weights);
             tensor_check(outputs, c10::CppTypeToScalarType<typename StoreType<A>::type>::value);
             if constexpr(std::is_same<A, cutlass::int4b_t>::value) {
                 tensor_extra_check_int4(weights, outputs);
             }
-
             cuda_device_check(weights);
+#endif
             real_quantized_quantize_weights<A>(weights, outputs, scale_w);
         },
         "Quantize weights to lowbit format",
@@ -100,14 +101,15 @@ void register_quantweight_module(pybind11::module_& m) {
 
     m.def("real_quantized_quantize_weights",
         [](at::Tensor weights, at::Tensor outputs, at::Tensor scale_w) {
+#ifdef SEGQUANT_DEBUG
             tensor_check(weights);
             tensor_check(outputs, c10::CppTypeToScalarType<typename StoreType<A>::type>::value);
             tensor_check(scale_w, at::kFloat);
             if constexpr(std::is_same<A, cutlass::int4b_t>::value) {
                 tensor_extra_check_int4(weights, outputs);
             }
-
             cuda_device_check(weights);
+#endif
             real_quantized_quantize_weights<A>(weights, outputs, scale_w);
         },
         "Quantize weights to lowbit format with axis",
@@ -120,130 +122,34 @@ void register_quantweight_module(pybind11::module_& m) {
 template<typename A, typename B>
 void register_gemm_module(pybind11::module_& m, const std::string& prefix) {
     m.def((prefix + "_real_quantized_gemm_scaled").c_str(),
-        [](at::Tensor inputs, at::Tensor weights, float scale_x, float scale_w) {
-            tensor_check(inputs);
-            tensor_check(weights, c10::CppTypeToScalarType<typename StoreType<B>::type>::value);
-            
-            cuda_device_check(weights);
-            return real_quantized_gemm_scaled<A, B, float, float>(inputs, weights, scale_x, scale_w);
-        },
-        "Run scaled GEMM",
-        py::arg("inputs"),
-        py::arg("weights"),
-        py::arg("scale_x").noconvert(),
-        py::arg("scale_w").noconvert()
-    );
-
-    m.def((prefix + "_real_quantized_gemm_scaled").c_str(),
-        [](at::Tensor inputs, at::Tensor weights, float scale_x, at::Tensor scale_w) {
-            tensor_check(inputs);
-            tensor_check(weights, c10::CppTypeToScalarType<typename StoreType<B>::type>::value);
-            tensor_check(scale_w, at::kFloat);
-
-            cuda_device_check(weights);
-            return real_quantized_gemm_scaled<A, B, float, at::Tensor>(inputs, weights, scale_x, scale_w);
-        },
-        "Run scaled int8 GEMM",
-        py::arg("inputs"),
-        py::arg("weights"),
-        py::arg("scale_x").noconvert(),
-        py::arg("scale_w")
-    );
-
-    m.def((prefix + "_real_quantized_gemm_scaled").c_str(),
-        [](at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, float scale_w) {
-            tensor_check(inputs);
-            tensor_check(weights, c10::CppTypeToScalarType<typename StoreType<B>::type>::value);
-            tensor_check(scale_x, at::kFloat);
-            
-            cuda_device_check(weights);
-            return real_quantized_gemm_scaled<A, B, at::Tensor, float>(inputs, weights, scale_x, scale_w);
-        },
-        "Run scaled int8 GEMM",
-        py::arg("inputs"),
-        py::arg("weights"),
-        py::arg("scale_x"),
-        py::arg("scale_w").noconvert()
-    );
-
-    m.def((prefix + "_real_quantized_gemm_scaled").c_str(),
         [](at::Tensor inputs, at::Tensor weights, at::Tensor scale_x, at::Tensor scale_w) {
+#ifdef SEGQUANT_DEBUG
             tensor_check(inputs);
             tensor_check(weights, c10::CppTypeToScalarType<typename StoreType<B>::type>::value);
             tensor_check(scale_x, at::kFloat);
             tensor_check(scale_w, at::kFloat);
-
             cuda_device_check(weights);
-            return real_quantized_gemm_scaled<A, B, at::Tensor, at::Tensor>(inputs, weights, scale_x, scale_w);
+#endif
+            return real_quantized_gemm_scaled<A, B>(inputs, weights, scale_x, scale_w);
         },
         "Run scaled int8 GEMM",
         py::arg("inputs"),
         py::arg("weights"),
         py::arg("scale_x"),
         py::arg("scale_w")
-    );
-
-    m.def((prefix + "_real_quantized_gemm_dual_scaled").c_str(),
-        [](at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, float scale_w) {
-            tensor_check(inputs);
-            tensor_check(weights, c10::CppTypeToScalarType<typename StoreType<B>::type>::value);
-            
-            cuda_device_check(weights);
-            return real_quantized_gemm_dual_scaled<A, B, float, float>(inputs, weights, pos_scale_x, neg_scale_x, scale_w);
-        },
-        "Run dual scaled int8 GEMM",
-        py::arg("inputs"),
-        py::arg("weights"),
-        py::arg("pos_scale_x").noconvert(),
-        py::arg("neg_scale_x").noconvert(),
-        py::arg("scale_w").noconvert()
-    );
-
-    m.def((prefix + "_real_quantized_gemm_dual_scaled").c_str(),
-        [](at::Tensor inputs, at::Tensor weights, float pos_scale_x, float neg_scale_x, at::Tensor scale_w) {
-            tensor_check(inputs);
-            tensor_check(weights, c10::CppTypeToScalarType<typename StoreType<B>::type>::value);
-            tensor_check(scale_w, at::kFloat);
-
-            cuda_device_check(weights);
-            return real_quantized_gemm_dual_scaled<A, B, float, at::Tensor>(inputs, weights, pos_scale_x, neg_scale_x, scale_w);
-        },
-        "Run dual scaled int8 GEMM",
-        py::arg("inputs"),
-        py::arg("weights"),
-        py::arg("pos_scale_x").noconvert(),
-        py::arg("neg_scale_x").noconvert(),
-        py::arg("scale_w")
-    );
-
-    m.def((prefix + "_real_quantized_gemm_dual_scaled").c_str(),
-        [](at::Tensor inputs, at::Tensor weights, at::Tensor pos_scale_x, at::Tensor neg_scale_x, float scale_w) {
-            tensor_check(inputs);
-            tensor_check(weights, c10::CppTypeToScalarType<typename StoreType<B>::type>::value);
-            tensor_check(pos_scale_x, at::kFloat);
-            tensor_check(neg_scale_x, at::kFloat);
-
-            cuda_device_check(weights);
-            return real_quantized_gemm_dual_scaled<A, B, at::Tensor, float>(inputs, weights, pos_scale_x, neg_scale_x, scale_w);
-        },
-        "Run dual scaled int8 GEMM",
-        py::arg("inputs"),
-        py::arg("weights"),
-        py::arg("pos_scale_x"),
-        py::arg("neg_scale_x"),
-        py::arg("scale_w").noconvert()
     );
 
     m.def((prefix + "_real_quantized_gemm_dual_scaled").c_str(),
         [](at::Tensor inputs, at::Tensor weights, at::Tensor pos_scale_x, at::Tensor neg_scale_x, at::Tensor scale_w) {
+#ifdef SEGQUANT_DEBUG
             tensor_check(inputs);
             tensor_check(weights, c10::CppTypeToScalarType<typename StoreType<B>::type>::value);
             tensor_check(pos_scale_x, at::kFloat);
             tensor_check(neg_scale_x, at::kFloat);
             tensor_check(scale_w, at::kFloat);
-
             cuda_device_check(weights);
-            return real_quantized_gemm_dual_scaled<A, B, at::Tensor, at::Tensor>(inputs, weights, pos_scale_x, neg_scale_x, scale_w);
+#endif
+            return real_quantized_gemm_dual_scaled<A, B>(inputs, weights, pos_scale_x, neg_scale_x, scale_w);
         },
         "Run dual scaled int8 GEMM",
         py::arg("inputs"),

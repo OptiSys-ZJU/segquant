@@ -54,6 +54,10 @@ class BaseCalibrator:
     def scale(self):
         return self.quantizer.scale
     
+    @property
+    def dynamic(self):
+        return self.quantizer.dynamic
+    
     def to(self, device):
         if hasattr(self.quantizer, 'to'):
             self.quantizer = self.quantizer.to(device)
