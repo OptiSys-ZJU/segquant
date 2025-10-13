@@ -542,16 +542,19 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, at:
         });
     }
     else {
+        auto tmp_options = outputs.options().dtype(torch::kFloat32);
+        auto Yq = at::empty_like(outputs, tmp_options);
+
         if (single_gemm) {
             // for single segment and no '...', we do single gemm
-            AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_gemm_scaled_vector", [&] {
-                launch_gemm_scaled<input_type, weight_type, scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, 1.0f, 0.0f, stream);
+            AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_gemm_scaled_vector", [&] {
+                launch_gemm_scaled<input_type, weight_type, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, 1.0f, 0.0f, stream);
             });
         }
         else {
             // for segments > 1 or input has hidden dim, we do batched gemm
-            AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_batched_gemm_scaled", [&] {
-                launch_batched_gemm_scaled<input_type, weight_type, scalar_t>(Xq, Wq, outputs.data_ptr<scalar_t>(), M, N, K, segments, 1.0f, 0.0f, stream);
+            AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_batched_gemm_scaled", [&] {
+                launch_batched_gemm_scaled<input_type, weight_type, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, segments, 1.0f, 0.0f, stream);
             });
         }
 
@@ -560,7 +563,17 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, at:
         //  handle dequantize
         // scale x: (segments, 1) or (segments, ..., M) for per-token
         // scale w: (segments, 1) or (segments, N) for per-channel
-        
+        size_t output_segment_stride = outputs.numel() / segments;
+        AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_dequantize_scaled_kernel", [&] {
+            real_dequantize_scaled_kernel<scalar_t, input_type, CUDAStoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+                Yq.data_ptr<float>(),
+                outputs.data_ptr<scalar_t>(),
+                scale_x.template data_ptr<float>(), scale_w.template data_ptr<float>(),
+                output_segment_stride, N,
+                (numel_scale_x == segments), (numel_scale_w == segments),
+                outputs.numel()
+            );
+        });
     }
 
     return outputs;
