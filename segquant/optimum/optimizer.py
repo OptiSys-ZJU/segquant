@@ -45,26 +45,26 @@ class BaseOptimizer:
     def make_scale_tensor(self):
         weight_scales = [
             (
-                calibrator.scale
+                calibrator.scale.to(dtype=torch.float32, device=self.weight_manager.device())
                 if isinstance(calibrator.scale, torch.Tensor)
-                else torch.tensor(calibrator.scale, dtype=torch.float32)
+                else torch.tensor(calibrator.scale, dtype=torch.float32, device=self.weight_manager.device())
             )
             for calibrator in self.weight_calibrators
         ]
         if self.dual_scale:
             pos_input_scales = [
                 (
-                    calibrator.pos_scale
+                    calibrator.pos_scale.to(dtype=torch.float32, device=self.weight_manager.device())
                     if isinstance(calibrator.pos_scale, torch.Tensor)
-                    else torch.tensor(calibrator.pos_scale, dtype=torch.float32)
+                    else torch.tensor(calibrator.pos_scale, dtype=torch.float32, device=self.weight_manager.device())
                 )
                 for calibrator in self.input_calibrators
             ]
             neg_input_scales = [
                 (
-                    calibrator.neg_scale
+                    calibrator.neg_scale.to(dtype=torch.float32, device=self.weight_manager.device())
                     if isinstance(calibrator.neg_scale, torch.Tensor)
-                    else torch.tensor(calibrator.neg_scale, dtype=torch.float32)
+                    else torch.tensor(calibrator.neg_scale, dtype=torch.float32, device=self.weight_manager.device())
                 )
                 for calibrator in self.input_calibrators
             ]
@@ -73,9 +73,9 @@ class BaseOptimizer:
         else:
             input_scales = [
                 (
-                    calibrator.scale
+                    calibrator.scale.to(dtype=torch.float32, device=self.weight_manager.device())
                     if isinstance(calibrator.scale, torch.Tensor)
-                    else torch.tensor(calibrator.scale, dtype=torch.float32)
+                    else torch.tensor(calibrator.scale, dtype=torch.float32, device=self.weight_manager.device())
                 )
                 for calibrator in self.input_calibrators
             ]
@@ -107,6 +107,8 @@ class BaseOptimizer:
                     scale_w.contiguous(),
                 )
         else:
+            for i, c in enumerate(self.input_calibrators):
+                batch_input[i].copy_(c.quantize(batch_input[i]))
             res = segmented_matmul(batch_input, batch_weight)
         return res
 
@@ -478,11 +480,16 @@ class SmoothOptimizer(BaseOptimizer):
         for i, input_calibrator in enumerate(self.input_calibrators):
             input_calibrator.finish_calibrate()
 
-        # todo: maybe not worked for real quant
+        calibrated_segments = []
         weight_view = self.weight_manager.iter_view()
         for i, weight_calibrator in enumerate(self.weight_calibrators):
             calibrated = weight_calibrator.finish_calibrate(weight_view[i])
-            weight_view[i].copy_(calibrated)
+            calibrated_segments.append(calibrated)
+        
+        # (segments, out, segment_size) or (segments, segment_size, in)
+        new_quantized_weight_tensor = torch.stack(calibrated_segments, dim=0)
+        # update weight
+        self.weight_manager.replace_with_segments_layout(new_quantized_weight_tensor)
 
         self.has_calibrated = True
         self.make_scale_tensor()
@@ -493,9 +500,7 @@ class SmoothOptimizer(BaseOptimizer):
     def forward(self, input_manager: InputSegmentTensorManager):
         # input-seg input chunk (segments, ..., segment_size)
         # weight-seg input chunk (segments, ..., in)
-        input_chunks = self._smooth_x(input_manager.iter_view().clone())
-        for i, c in enumerate(self.input_calibrators):
-            input_chunks[i].copy_(c.quantize(input_chunks[i]))
+        input_chunks = self._smooth_x(input_manager.iter_view().clone())        
 
         # input-seg weight chunk (segments, out, segment_size) --> (segments, ..., out)
         # weight-seg weight chunk (segments, segment_size, in) --> (segments, ..., segment_size)

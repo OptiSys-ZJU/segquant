@@ -2,7 +2,7 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 import copy
-import modelopt.torch.quantization as mtq
+# import modelopt.torch.quantization as mtq
 from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
@@ -20,8 +20,8 @@ class RandomTensorDataset:
         generator.manual_seed(self.seed)
         self.batches = [
             (
-                torch.rand(2, embedding_dim, generator=generator),
-                torch.rand(2, embedding_dim, generator=generator),
+                torch.rand(3, embedding_dim, generator=generator),
+                torch.rand(3, embedding_dim, generator=generator),
             )
             for _ in range(self.num_batches)
         ]
@@ -90,6 +90,21 @@ class TestModel(nn.Module):
         x = self.norm(x) * (1 + scale_msa[:, None]) + shift_msa[:, None]
         return x, gate_msa, shift_mlp, scale_mlp, gate_mlp
 
+class TestInputModel(nn.Module):
+    def __init__(self, embedding_dim: int = 16, bias=True):
+        super().__init__()
+        self.linear_1 = nn.Linear(embedding_dim, embedding_dim, bias=bias)
+        self.linear_2 = nn.Linear(embedding_dim, embedding_dim, bias=bias)
+        self.linear = nn.Linear(2 * embedding_dim, 3 * embedding_dim, bias=bias)
+
+    def forward(
+        self, x: torch.Tensor, emb: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        x = self.linear_1(x)
+        emb = self.linear_2(emb)
+        linear_input = torch.cat([x, emb], dim=1)
+        linear_out = self.linear(linear_input)
+        return linear_out
 
 def test_default_fp8():
     test_model = TestModel(embedding_dim)
@@ -369,14 +384,13 @@ def test_smooth_int8():
     print('origin-segquant', torch.norm(a - c).item())
 
 def test_smooth_int8_real():
-    test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
+    test_model = TestInputModel(embedding_dim).to(torch.device("cuda:0"))
     ######################################
     config = {
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [SegPattern.ACTIVATION2LINEAR],
-            # "search_patterns": SegPattern.all(),
+            "search_patterns": [SegPattern.CONCAT2LINEAR],
             "real_quant": False,
             "opt": {
                 "type": Optimum.SMOOTH,
@@ -387,11 +401,13 @@ def test_smooth_int8_real():
             },
             "input_quant": {
                 "type": DType.INT8,
-                "axis": -1,
+                # "axis": -1,
+                "axis": None,
             },
             "weight_quant": {
                 "type": DType.INT8,
-                "axis": 1,
+                # "axis": 1,
+                "axis": None,
             },
         },
     }
@@ -407,8 +423,7 @@ def test_smooth_int8_real():
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [SegPattern.ACTIVATION2LINEAR],
-            # "search_patterns": SegPattern.all(),
+            "search_patterns": [SegPattern.CONCAT2LINEAR],
             "real_quant": True,
             "opt": {
                 "type": Optimum.SMOOTH,
@@ -419,11 +434,13 @@ def test_smooth_int8_real():
             },
             "input_quant": {
                 "type": DType.INT8,
-                "axis": -1,
+                # "axis": -1,
+                "axis": None,
             },
             "weight_quant": {
                 "type": DType.INT8,
-                "axis": 1,
+                # "axis": 1,
+                "axis": None,
             },
         },
     }
@@ -432,13 +449,13 @@ def test_smooth_int8_real():
         seg_data_loader,
         config_real,
         verbose=True,
-        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+        example=(torch.rand(3, embedding_dim), torch.rand(3, embedding_dim)),
     )
     ######################################
     x_generator = torch.Generator()
     x_generator.manual_seed(1234)
-    x = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
-    emb = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    x = torch.rand(3, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    emb = torch.rand(3, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
     res = test_model.forward(x, emb)
     print("origin:", res)
     a = res[0]
@@ -840,4 +857,4 @@ def test_mix_real():
 
 
 if __name__ == "__main__":
-    test_mix_real()
+    test_smooth_int8_real()

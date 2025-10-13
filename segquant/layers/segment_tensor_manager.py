@@ -33,6 +33,9 @@ class WeightSegmentTensorManager(SegmentTensorManager):
         self.out_features, self.in_features = weight_tensor.shape
         self.weight_tensor = weight_tensor # (out, in)
 
+    def device(self):
+        return self.weight_tensor.device
+
     def to(self, device):
         self.weight_tensor = self.weight_tensor.to(device)
         return self
@@ -45,6 +48,21 @@ class WeightSegmentTensorManager(SegmentTensorManager):
 
     def total_view(self):
         return self.weight_tensor.unsqueeze(0) # (1, out, in)
+    
+    def replace_with_segments_layout(self, segmented_weights):
+        if self.seg_mode == 'input':
+            # (segments, out, segment_size)
+            segmented_weights = segmented_weights.permute(1, 0, 2).contiguous()
+            self.weight_tensor = segmented_weights.view(
+                self.out_features, 
+                self.in_features
+            )
+        elif self.seg_mode == 'weight':
+            # (segments, segment_size, in)
+            self.weight_tensor = segmented_weights.view(
+                self.out_features,
+                self.in_features
+            )
 
 
 def segmented_matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:

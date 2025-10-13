@@ -146,14 +146,14 @@ __global__ void real_quantize_dual_scaled_kernel(
 }
 
 __device__ __forceinline__ float get_scale_with_axis(int idx, const float* scales, size_t segment_stride, size_t last_features, bool enable_broadcast) {
-    // inputs (segments, ..., last_features)
-    // scales (segments, ..., last_features
+    // inputs (segments, ..., M, last_features)
+    // scales (segments, ..., M)
     int seg_id = idx / segment_stride;
     int token_id = (idx % segment_stride) / last_features;
     if (enable_broadcast) {
         return scales[seg_id];
     }
-    return scales[seg_id * segment_stride + token_id];
+    return scales[seg_id * segment_stride / last_features + token_id];
 }
 
 template <typename T, typename OutputType, typename StoreType>

@@ -170,7 +170,9 @@ class SegQuantPatternDetector:
 
     @staticmethod
     def _is_concat(node):
-        if node.op == "call_function" and node.target is torch.cat:
+        if (node.op == "call_method" and node.target == "cat") or (
+            node.op == "call_function" and node.target is torch.cat
+        ):
             tensor_list = node.args[0]
             dim = node.kwargs.get("dim", 0)
             if dim == 1:
@@ -372,6 +374,22 @@ if __name__ == "__main__":
     from backend.torch.layers.activations import GELU
     from backend.torch.layers.attention_processor import Attention, JointAttnProcessor2_0
 
+    class TestInputModel(nn.Module):
+        def __init__(self, embedding_dim: int = 16, bias=True):
+            super().__init__()
+            self.linear_1 = nn.Linear(embedding_dim, embedding_dim, bias=bias)
+            self.linear_2 = nn.Linear(embedding_dim, embedding_dim, bias=bias)
+            self.linear = nn.Linear(2 * embedding_dim, 2 * embedding_dim, bias=bias)
+
+        def forward(
+            self, x: torch.Tensor, emb: torch.Tensor,
+        ):
+            x = self.linear_1(x)
+            emb = self.linear_2(emb)
+            linear_input = torch.cat([x, emb], dim=1)
+            linear_out = self.linear(linear_input)
+            return linear_out
+
     class FeedForward(nn.Module):
         def __init__(
             self,
@@ -423,27 +441,15 @@ if __name__ == "__main__":
 
     search_patterns = [
         # "linear_to_chunk",
-        "reshape_to_linear",
+        "concat_to_linear",
     ]
     seq = 3
     dim = 10
     attention_head_dim = 5
     num_attention_heads = 2
     detector = SegQuantPatternDetector(
-        Attention(
-            query_dim=dim,
-            cross_attention_dim=None,
-            added_kv_proj_dim=dim,
-            dim_head=attention_head_dim,
-            heads=num_attention_heads,
-            out_dim=dim,
-            context_pre_only=False,
-            bias=True,
-            processor=JointAttnProcessor2_0(),
-            qk_norm=None,
-            eps=1e-6,
-        ),
-        example_inputs=(torch.randn(2, seq, dim), torch.randn(2, seq, dim), None,),
+        TestInputModel(embedding_dim=dim),
+        example_inputs=(torch.randn(2, dim), torch.randn(2, dim),),
         search_patterns_lst=search_patterns,
     )
     results = detector.find_all_patterns()

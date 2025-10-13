@@ -480,35 +480,24 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, at:
     int64_t N;
     int64_t K;
 
-    if (!single_gemm) {
-        // batch gemm
-        auto input_rank = inputs_sizes.size();
-        int64_t batch_count = 1;
-        for (int64_t i = 1; i < input_rank - 1; ++i) {
-            batch_count *= inputs.size(i);
-        }
-
-        M = batch_count;
-        K = inputs_sizes[input_rank - 1];
-        N = std::is_same<weight_type, cutlass::int4b_t>::value ? weights_sizes[1] * 2 / K : weights_sizes[1]; // (N, K)
-
-        if constexpr (!std::is_same<weight_type, cutlass::int4b_t>::value) {
-#ifdef SEGQUANT_DEBUG
-            if (weights_sizes[2] != K) {
-                std::ostringstream oss;
-                oss << "int4_real_quantized_gemm_scaled: weights tensor must have shape [N, K], but got weights shape ["
-                    << weights_sizes[0] << ", " << weights_sizes[1] << "] and inputs shape [..., "
-                    << inputs_sizes[input_rank - 2] << ", " << inputs_sizes[input_rank - 1] << "]";
-                throw std::runtime_error(oss.str());
-            }
-#endif
-        }
+    auto input_rank = inputs_sizes.size();
+    int64_t batch_count = 1;
+    for (int64_t i = 1; i < input_rank - 1; ++i) {
+        batch_count *= inputs.size(i);
     }
-    else {
-        // single gemm
-        M = inputs_sizes[1];
-        K = inputs_sizes[2];
-        N = std::is_same<weight_type, cutlass::int4b_t>::value ? weights_sizes[1] * 2 / K : weights_sizes[1]; // (N, K)
+    M = batch_count;
+    K = inputs_sizes[input_rank - 1];
+    N = std::is_same<weight_type, cutlass::int4b_t>::value ? weights_sizes[1] * 2 / K : weights_sizes[1]; // (N, K)
+    if constexpr (!std::is_same<weight_type, cutlass::int4b_t>::value) {
+#ifdef SEGQUANT_DEBUG
+        if (weights_sizes[2] != K) {
+            std::ostringstream oss;
+            oss << "int4_real_quantized_gemm_scaled: weights tensor must have shape [N, K], but got weights shape ["
+                << weights_sizes[0] << ", " << weights_sizes[1] << "] and inputs shape [..., "
+                << inputs_sizes[input_rank - 2] << ", " << inputs_sizes[input_rank - 1] << "]";
+            throw std::runtime_error(oss.str());
+        }
+#endif
     }
 
     // create output tensor (segments, ..., M, N)
@@ -544,17 +533,18 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, at:
     else {
         auto tmp_options = outputs.options().dtype(torch::kFloat32);
         auto Yq = at::empty_like(outputs, tmp_options);
+        auto numel_y = outputs.numel();
 
         if (single_gemm) {
             // for single segment and no '...', we do single gemm
             AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_gemm_scaled_vector", [&] {
-                launch_gemm_scaled<input_type, weight_type, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, 1.0f, 0.0f, stream);
+                launch_gemm_scaled<input_type, weight_type, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, 1.0f, 1.0f, 0.0f, stream);
             });
         }
         else {
             // for segments > 1 or input has hidden dim, we do batched gemm
             AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_batched_gemm_scaled", [&] {
-                launch_batched_gemm_scaled<input_type, weight_type, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, segments, 1.0f, 0.0f, stream);
+                launch_batched_gemm_scaled<input_type, weight_type, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, segments, 1.0f, 1.0f, 0.0f, stream);
             });
         }
 
@@ -564,14 +554,14 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, at:
         // scale x: (segments, 1) or (segments, ..., M) for per-token
         // scale w: (segments, 1) or (segments, N) for per-channel
         size_t output_segment_stride = outputs.numel() / segments;
-        AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_dequantize_scaled_kernel", [&] {
-            real_dequantize_scaled_kernel<scalar_t, input_type, CUDAStoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+        AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "real_dequantize_scaled_kernel", [&] {
+            real_dequantize_scaled_kernel<scalar_t><<<numel_y / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
                 Yq.data_ptr<float>(),
                 outputs.data_ptr<scalar_t>(),
                 scale_x.template data_ptr<float>(), scale_w.template data_ptr<float>(),
                 output_segment_stride, N,
                 (numel_scale_x == segments), (numel_scale_w == segments),
-                outputs.numel()
+                numel_y
             );
         });
     }
@@ -587,74 +577,77 @@ at::Tensor real_quantized_gemm_dual_scaled(at::Tensor inputs, at::Tensor weights
     // weights: (segments, N, K) or (segments, bytes) for INT4
     // pos/neg scale x: (segments, 1) or (segments, ..., M) for per-token
     // scale w: (segments, 1) or (segments, N) for per-channel
-    /*
-    auto inputs_sizes = inputs.sizes();
-    auto weights_sizes = weights.sizes();
-    auto segments = inputs_sizes[0];
-    bool single_gemm = (segments == 1);
-    int64_t batch_count = 1;                              
-
-    if (!single_gemm) {
-        // batch gemm
-        auto input_rank = inputs_sizes.size();
-        for (int64_t i = 0; i < input_rank - 2; ++i) {
-            batch_count *= inputs.size(i);
-        }
-
-        int64_t M = inputs_sizes[input_rank - 2];
-        int64_t K = inputs_sizes[input_rank - 1];
-        int64_t N = std::is_same<weight_type, cutlass::int4b_t>::value ? weights_sizes[1] * 2 / K : weights_sizes[1]; // (N, K)
-
-        if constexpr (!std::is_same<weight_type, cutlass::int4b_t>::value) {
-#ifdef SEGQUANT_DEBUG
-            if (weights_sizes[2] != K) {
-                std::ostringstream oss;
-                oss << "int4_real_quantized_gemm_scaled: weights tensor must have shape [N, K], but got weights shape ["
-                    << weights_sizes[0] << ", " << weights_sizes[1] << "] and inputs shape [..., "
-                    << inputs_sizes[input_rank - 2] << ", " << inputs_sizes[input_rank - 1] << "]";
-                throw std::runtime_error(oss.str());
-            }
-#endif
-        }
-
-    }
-
-    // create output tensor
-    auto options = inputs.options();
-    std::vector<int64_t> output_sizes(inputs_sizes.begin(), inputs_sizes.end() - 1);
-    output_sizes.push_back(N);
-    auto outputs = at::empty(output_sizes, options);
-    using StoreInputType = typename StoreType<input_type>::type;
-    using StoreWeightType = typename StoreType<weight_type>::type;
-    using CUDAStoreInputType = typename CUDAStoreType<input_type>::type;
-
-    auto Xp_tensor = std::is_same<input_type, cutlass::int4b_t>::value
-        ? at::empty({(inputs.numel() + 1) / 2}, options.dtype(c10::CppTypeToScalarType<StoreInputType>::value))
-        : at::empty_like(inputs, options.dtype(c10::CppTypeToScalarType<StoreInputType>::value));
     
-    auto Xn_tensor = std::is_same<input_type, cutlass::int4b_t>::value
-        ? at::empty({(inputs.numel() + 1) / 2}, options.dtype(c10::CppTypeToScalarType<StoreInputType>::value))
-        : at::empty_like(inputs, options.dtype(c10::CppTypeToScalarType<StoreInputType>::value));
+//     auto inputs_sizes = inputs.sizes();
+//     auto weights_sizes = weights.sizes();
+//     auto segments = inputs_sizes[0];
+//     bool single_gemm = (segments == 1);
+//     int64_t batch_count = 1;                              
 
-    input_type* Xp = reinterpret_cast<input_type*>(Xp_tensor.template data_ptr<StoreInputType>());
-    input_type* Xn = reinterpret_cast<input_type*>(Xn_tensor.template data_ptr<StoreInputType>());
-    weight_type* Wq = reinterpret_cast<weight_type*>(weights.template data_ptr<StoreWeightType>());
+//     if (!single_gemm) {
+//         // batch gemm
+//         auto input_rank = inputs_sizes.size();
+//         for (int64_t i = 0; i < input_rank - 2; ++i) {
+//             batch_count *= inputs.size(i);
+//         }
 
-    auto stream = c10::cuda::getCurrentCUDAStream();
-    size_t numel_x = inputs.numel();
-    bool enable_broadcast = (pos_scale_x.numel() == segments);
-    size_t segment_stride = numel_x / segments;
+//         int64_t M = inputs_sizes[input_rank - 2];
+//         int64_t K = inputs_sizes[input_rank - 1];
+//         int64_t N = std::is_same<weight_type, cutlass::int4b_t>::value ? weights_sizes[1] * 2 / K : weights_sizes[1]; // (N, K)
+
+//         if constexpr (!std::is_same<weight_type, cutlass::int4b_t>::value) {
+// #ifdef SEGQUANT_DEBUG
+//             if (weights_sizes[2] != K) {
+//                 std::ostringstream oss;
+//                 oss << "int4_real_quantized_gemm_scaled: weights tensor must have shape [N, K], but got weights shape ["
+//                     << weights_sizes[0] << ", " << weights_sizes[1] << "] and inputs shape [..., "
+//                     << inputs_sizes[input_rank - 2] << ", " << inputs_sizes[input_rank - 1] << "]";
+//                 throw std::runtime_error(oss.str());
+//             }
+// #endif
+//         }
+
+//     }
+
+//     // create output tensor
+//     auto options = inputs.options();
+//     std::vector<int64_t> output_sizes(inputs_sizes.begin(), inputs_sizes.end() - 1);
+//     output_sizes.push_back(N);
+//     auto outputs = at::empty(output_sizes, options);
+//     using StoreInputType = typename StoreType<input_type>::type;
+//     using StoreWeightType = typename StoreType<weight_type>::type;
+//     using CUDAStoreInputType = typename CUDAStoreType<input_type>::type;
+
+//     auto Xp_tensor = std::is_same<input_type, cutlass::int4b_t>::value
+//         ? at::empty({(inputs.numel() + 1) / 2}, options.dtype(c10::CppTypeToScalarType<StoreInputType>::value))
+//         : at::empty_like(inputs, options.dtype(c10::CppTypeToScalarType<StoreInputType>::value));
+    
+//     auto Xn_tensor = std::is_same<input_type, cutlass::int4b_t>::value
+//         ? at::empty({(inputs.numel() + 1) / 2}, options.dtype(c10::CppTypeToScalarType<StoreInputType>::value))
+//         : at::empty_like(inputs, options.dtype(c10::CppTypeToScalarType<StoreInputType>::value));
+
+//     input_type* Xp = reinterpret_cast<input_type*>(Xp_tensor.template data_ptr<StoreInputType>());
+//     input_type* Xn = reinterpret_cast<input_type*>(Xn_tensor.template data_ptr<StoreInputType>());
+//     weight_type* Wq = reinterpret_cast<weight_type*>(weights.template data_ptr<StoreWeightType>());
+
+//     auto stream = c10::cuda::getCurrentCUDAStream();
+//     size_t numel_x = inputs.numel();
+//     bool enable_broadcast = (pos_scale_x.numel() == segments);
+//     size_t segment_stride = numel_x / segments;
     // X = Xp + Xn
-    AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_dual_scaled_kernel", [&] {
-        real_quantize_dual_scaled_kernel<scalar_t, input_type, CUDAStoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
-            inputs.data_ptr<scalar_t>(), pos_scale_x.template data_ptr<float>(), neg_scale_x.template data_ptr<float>(), 
-            segment_stride, K,
-            numel_x, enable_broadcast,
-            reinterpret_cast<CUDAStoreInputType*>(Xp_tensor.template data_ptr<StoreInputType>()),
-            reinterpret_cast<CUDAStoreInputType*>(Xn_tensor.template data_ptr<StoreInputType>())
-        );
-    });
+    // AT_DISPATCH_FLOATING_TYPES(inputs.scalar_type(), "real_quantize_dual_scaled_kernel", [&] {
+    //     real_quantize_dual_scaled_kernel<scalar_t, input_type, CUDAStoreInputType><<<numel_x / (BLOCK_SIZE * 4) + 1, BLOCK_SIZE, 0, stream>>>(
+    //         inputs.data_ptr<scalar_t>(), pos_scale_x.template data_ptr<float>(), neg_scale_x.template data_ptr<float>(), 
+    //         segment_stride, K,
+    //         numel_x, enable_broadcast,
+    //         reinterpret_cast<CUDAStoreInputType*>(Xp_tensor.template data_ptr<StoreInputType>()),
+    //         reinterpret_cast<CUDAStoreInputType*>(Xn_tensor.template data_ptr<StoreInputType>())
+    //     );
+    // });
 
+    return inputs;
+
+    /*
     //////////// todo
 
     auto tmp_options = outputs.options().dtype(torch::kFloat32);

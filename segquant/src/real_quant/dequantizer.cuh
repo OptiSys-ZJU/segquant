@@ -20,7 +20,7 @@ __device__ __forceinline__ float get_scale_with_axis_n_segment(int idx, const fl
         scale_x_val = scale_x[seg_id];
     }
     else {
-        scale_x_val = scale_x[seg_id * segment_stride + token_id];
+        scale_x_val = scale_x[seg_id * segment_stride / last_features + token_id];
     }
 
     if (enable_scale_w_broadcast) {
@@ -65,8 +65,8 @@ __global__ void real_dequantize_dual_scaled_kernel(
         float pos_scale = get_scale_with_axis_n_segment(idx, pos_scale_x, scale_w, segment_stride, last_features, enable_scale_x_broadcast, enable_scale_w_broadcast);
         float neg_scale = get_scale_with_axis_n_segment(idx, neg_scale_x, scale_w, segment_stride, last_features, enable_scale_x_broadcast, enable_scale_w_broadcast);
 
-        float val_pq = Yp[idx] / denom_pq;
-        float val_nq = Yn[idx] / denom_nq;
+        float val_pq = Yp[idx] / pos_scale;
+        float val_nq = Yn[idx] / neg_scale;
 
         float sum = val_pq + val_nq;
         Y[idx] = static_cast<T>(sum);

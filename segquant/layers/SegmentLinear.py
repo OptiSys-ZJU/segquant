@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from segquant.calibrator.calibrator import CalibratorRegistry
 from segquant.config import Calibrate, DType, Optimum
-from segquant.layers.splitter import BaseSplitter
 from segquant.optimum.optimizer import OptimizerRegistry
 from segquant.layers import ext_dict
 
