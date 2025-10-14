@@ -53,7 +53,7 @@ wo-svd-seg:
     search_patterns: []
   dummy_linear:
     enable: true
-    real_quant: true
+    real_quant: false
     opt:
       type: "svd"
       alpha: 0.5

@@ -48,8 +48,16 @@ class WeightSegmentTensorManager(SegmentTensorManager):
 
     def total_view(self):
         return self.weight_tensor.unsqueeze(0) # (1, out, in)
-    
-    def replace_with_segments_layout(self, segmented_weights):
+
+    def replace_with_segments_layout(self, segmented_weights, packed=False):
+        if packed:
+            # for int4
+            # normal shape input-seg: (segments, out, segment_size)
+            # normal shape weight-seg: (segments, segment_size, in)
+            # packed shape input-seg: (segments, out * segment_size // 2) dtype=uint8
+            # packed shape weight-seg: (segments, segment_size * in // 2) dtype=uint8
+            raise NotImplementedError("INT4 packed weights are not supported yet.")
+
         if self.seg_mode == 'input':
             # (segments, out, segment_size)
             segmented_weights = segmented_weights.permute(1, 0, 2).contiguous()

@@ -248,18 +248,25 @@ class DefaultOptimizer(BaseOptimizer):
             input_calibrator.finish_calibrate()
             self.input_calibrators[i] = input_calibrator.quantizer
 
-        # todo: maybe not worked for real quant
-        weight_view = self.weight_manager.total_view()
-        for i, weight_calibrator in enumerate(self.weight_calibrators):
-            if self.seg_mode == 'input':
-                # input-seg, weight calib = 1, view # (1, out, in)
-                calibrated = weight_calibrator.finish_calibrate(weight_view[i])
-                weight_view[i].copy_(calibrated)
-            elif self.seg_mode == 'weight':
+        if self.seg_mode == 'input':
+            # input-seg, weight calib = 1, view # (1, out, in)
+            assert len(self.weight_calibrators) == 1, "weight_calibrators length must be 1"
+            self.weight_manager.weight_tensor = self.weight_calibrators[0].finish_calibrate(self.weight_manager.total_view()[0])
+            self.weight_calibrators[0] = self.weight_calibrators[0].quantizer
+        elif self.seg_mode == 'weight':
+            calibrated_segments = []
+            weight_view = self.weight_manager.iter_view() # (segments, segment_size, in)
+            for i, weight_calibrator in enumerate(self.weight_calibrators):
                 # weight-seg, weight calib = segments
                 calibrated = weight_calibrator.finish_calibrate(weight_view[i])
-                weight_view[i].copy_(calibrated)
-            self.weight_calibrators[i] = weight_calibrator.quantizer
+                calibrated_segments.append(calibrated)
+                self.weight_calibrators[i] = weight_calibrator.quantizer
+
+            # (segments, segment_size, in)
+            new_quantized_weight_tensor = torch.stack(calibrated_segments, dim=0)
+            # update weight
+            self.weight_manager.replace_with_segments_layout(new_quantized_weight_tensor)
+
         self.has_calibrated = True
         self.make_scale_tensor()
 
@@ -267,9 +274,6 @@ class DefaultOptimizer(BaseOptimizer):
         # input-seg input chunk (segments, ..., segment_size) input calib = segments
         # weight-seg input chunk (segments (repeated), ..., in) input calib = 1
         input_chunks = input_manager.iter_view()
-        for idx, calibrator in enumerate(self.input_calibrators):
-            quantized = calibrator.quantize(input_chunks[idx])
-            input_chunks[idx].copy_(quantized)
 
         # input-seg weight chunk (segments, out, segment_size) --> (segments, ..., out)
         # weight-seg weight chunk (segments, segment_size, in) --> (segments, ..., segment_size)
@@ -682,33 +686,39 @@ class SVDOptimizer(SmoothOptimizer):
         assert self.has_svd, 'SVDOptimizer: linear is not svd'
         super().calibrate(input_manager)
 
+    def finish_calibrate(self):
+        for i, input_calibrator in enumerate(self.input_calibrators):
+            input_calibrator.finish_calibrate()
+
+        calibrated_segments = []
+        weight_view = self.weight_manager.iter_view()
+        for i, weight_calibrator in enumerate(self.weight_calibrators):
+            calibrated = weight_calibrator.finish_calibrate(weight_view[i])
+            calibrated_segments.append(calibrated)
+
+        # (segments, out, segment_size) or (segments, segment_size, in)
+        new_quantized_weight_tensor = torch.stack(calibrated_segments, dim=0)
+        # update weight
+        self.weight_manager.replace_with_segments_layout(new_quantized_weight_tensor, packed=self.real_quant)
+
+        self.has_calibrated = True
+        self.make_scale_tensor()
+
+        if not self.search_alpha:
+            self._clean()
+
+    def _low_rank_mul(self, x, l1s, l2s):
+        if x.dim() == 2:
+            x = x.unsqueeze(1)  # (segments, 1, M)
+        hidden = torch.bmm(x, l1s)
+        out = torch.bmm(hidden, l2s)
+        return out
+
     def forward(self, input_manager: InputSegmentTensorManager):
         # input-seg input chunk (segments, ..., segment_size)
         # weight-seg input chunk (segments, ..., in)
         input_chunks = self._smooth_x(input_manager.iter_view().clone())
-        for i, c in enumerate(self.input_calibrators):
-            input_chunks[i].copy_(c.quantize(input_chunks[i]))
 
-        def low_rank_mul(input_chunks, l1s, l2s):
-            """
-            input_chunks: (segments, ..., M)
-            l1s: (segments, M, low_rank)
-            l2s: (segments, low_rank, out)
-            Returns: (segments, ..., out)
-            """
-            x = input_chunks
-            if x.dim() == 2:
-                x = x.unsqueeze(1)  # (segments, 1, M)
-
-            # (segments, ..., M) @ (segments, M, low_rank)
-            hidden = torch.matmul(x, l1s.unsqueeze(1) if x.dim() > 3 else l1s)
-
-            # (segments, ..., low_rank) @ (segments, low_rank, out)
-            out = torch.matmul(hidden, l2s.unsqueeze(1) if hidden.dim() > 3 else l2s)
-
-            return out
-
-        return (
-            self.call_func(input_chunks, self.weight_manager.iter_view())
-            + low_rank_mul(input_chunks, self.l1s, self.l2s)
-        )
+        return self.call_func(
+            input_chunks, self.weight_manager.iter_view()
+        ) + self._low_rank_mul(input_chunks, self.l1s, self.l2s)
