@@ -32,6 +32,11 @@ class BaseOptimizer:
         self.real_quant = real_quant
         self.kernel_type = kernel_type
 
+        if self.real_quant and 'Wint4' in self.kernel_type:
+            self.packed = True
+        else:
+            self.packed = False
+
         self.dual_scale = dual_scale
         if self.real_quant and dual_scale:
             self.func_name = 'gemm_dual_scaled_fn'
@@ -265,7 +270,7 @@ class DefaultOptimizer(BaseOptimizer):
             # (segments, segment_size, in)
             new_quantized_weight_tensor = torch.stack(calibrated_segments, dim=0)
             # update weight
-            self.weight_manager.replace_with_segments_layout(new_quantized_weight_tensor)
+            self.weight_manager.replace_with_segments_layout(new_quantized_weight_tensor, packed=self.packed)
 
         self.has_calibrated = True
         self.make_scale_tensor()
@@ -493,7 +498,7 @@ class SmoothOptimizer(BaseOptimizer):
         # (segments, out, segment_size) or (segments, segment_size, in)
         new_quantized_weight_tensor = torch.stack(calibrated_segments, dim=0)
         # update weight
-        self.weight_manager.replace_with_segments_layout(new_quantized_weight_tensor)
+        self.weight_manager.replace_with_segments_layout(new_quantized_weight_tensor, packed=self.packed)
 
         self.has_calibrated = True
         self.make_scale_tensor()
@@ -685,27 +690,6 @@ class SVDOptimizer(SmoothOptimizer):
     def calibrate(self, input_manager: InputSegmentTensorManager):
         assert self.has_svd, 'SVDOptimizer: linear is not svd'
         super().calibrate(input_manager)
-
-    def finish_calibrate(self):
-        for i, input_calibrator in enumerate(self.input_calibrators):
-            input_calibrator.finish_calibrate()
-
-        calibrated_segments = []
-        weight_view = self.weight_manager.iter_view()
-        for i, weight_calibrator in enumerate(self.weight_calibrators):
-            calibrated = weight_calibrator.finish_calibrate(weight_view[i])
-            calibrated_segments.append(calibrated)
-
-        # (segments, out, segment_size) or (segments, segment_size, in)
-        new_quantized_weight_tensor = torch.stack(calibrated_segments, dim=0)
-        # update weight
-        self.weight_manager.replace_with_segments_layout(new_quantized_weight_tensor, packed=self.real_quant)
-
-        self.has_calibrated = True
-        self.make_scale_tensor()
-
-        if not self.search_alpha:
-            self._clean()
 
     def _low_rank_mul(self, x, l1s, l2s):
         if x.dim() == 2:
