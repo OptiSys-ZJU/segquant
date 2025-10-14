@@ -292,7 +292,7 @@ def quantize(
     if all(not final_config[k]["enable"] for k in final_config):
         return model
 
-    linears = _get_all_linears(model, final_config["default"]['enable'], config)
+    linears = _get_all_linears(model, final_config["default"]["enable"], final_config)
     to_calib_linears = {}
     if verbose:
         print(f"get valid linear num [{len(linears)}]")

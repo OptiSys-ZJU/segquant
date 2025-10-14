@@ -626,13 +626,21 @@ class SVDOptimizer(SmoothOptimizer):
 
     def to_cpu(self):
         super().to_cpu()
-        self.l1s = [l1.to('cpu') for l1 in self.l1s]
-        self.l2s = [l2.to('cpu') for l2 in self.l2s]
+        if isinstance(self.l1s, list):
+            self.l1s = [l1.to('cpu') for l1 in self.l1s]
+            self.l2s = [l2.to('cpu') for l2 in self.l2s]
+        elif isinstance(self.l1s, torch.Tensor):
+            self.l1s = self.l1s.to('cpu')
+            self.l2s = self.l2s.to('cpu')
 
     def to_cuda(self, device):
         super().to_cuda(device)
-        self.l1s = [l1.to(device) for l1 in self.l1s]
-        self.l2s = [l2.to(device) for l2 in self.l2s]
+        if isinstance(self.l1s, list):
+            self.l1s = [l1.to(device) for l1 in self.l1s]
+            self.l2s = [l2.to(device) for l2 in self.l2s]
+        elif isinstance(self.l1s, torch.Tensor):
+            self.l1s = self.l1s.to(device)
+            self.l2s = self.l2s.to(device)
 
     def _svd_w(self, smooth_weight_chunks: torch.Tensor):
         assert self.has_smoothed, 'SVDOptimizer: linear is not smoothed'
@@ -658,10 +666,11 @@ class SVDOptimizer(SmoothOptimizer):
             self.l2s[idx] = vt.to(device=device, dtype=dtype)
             residual_t = (chunk_t_f.to(torch.float64) - us @ vt).to(dtype=dtype, device=device)
             smooth_weight_chunk.copy_(residual_t.t())
-            del u, s, vt, us, vt, chunk_t, chunk_t_f, residual_t
+            del u, s, vt, us, chunk_t, chunk_t_f, residual_t
 
-        self.l1s = torch.stack(self.l1s) # (segments, in, low_rank)
-        self.l2s = torch.stack(self.l2s)  # (segments, low_rank, out)
+        if isinstance(self.l1s, list):
+            self.l1s = torch.stack(self.l1s) # (segments, in, low_rank)
+            self.l2s = torch.stack(self.l2s)  # (segments, low_rank, out)
         return smooth_weight_chunks
 
     def smooth(self):
@@ -680,4 +689,26 @@ class SVDOptimizer(SmoothOptimizer):
         for i, c in enumerate(self.input_calibrators):
             input_chunks[i].copy_(c.quantize(input_chunks[i]))
 
-        return self.call_func(input_chunks, self.weight_manager.iter_view()) + input_chunks @ self.l1s @ self.l2s
+        def low_rank_mul(input_chunks, l1s, l2s):
+            """
+            input_chunks: (segments, ..., M)
+            l1s: (segments, M, low_rank)
+            l2s: (segments, low_rank, out)
+            Returns: (segments, ..., out)
+            """
+            x = input_chunks
+            if x.dim() == 2:
+                x = x.unsqueeze(1)  # (segments, 1, M)
+
+            # (segments, ..., M) @ (segments, M, low_rank)
+            hidden = torch.matmul(x, l1s.unsqueeze(1) if x.dim() > 3 else l1s)
+
+            # (segments, ..., low_rank) @ (segments, low_rank, out)
+            out = torch.matmul(hidden, l2s.unsqueeze(1) if hidden.dim() > 3 else l2s)
+
+            return out
+
+        return (
+            self.call_func(input_chunks, self.weight_manager.iter_view())
+            + low_rank_mul(input_chunks, self.l1s, self.l2s)
+        )
