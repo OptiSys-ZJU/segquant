@@ -102,6 +102,7 @@ class BaseOptimizer:
                 )
             else:
                 scale_x, scale_w = self.scale_tensor
+                print('real wq', batch_weight)
                 res = ext_dict[self.kernel_type][self.func_name](
                     batch_input.contiguous(),
                     batch_weight.contiguous(),
@@ -111,6 +112,10 @@ class BaseOptimizer:
         else:
             for i, c in enumerate(self.input_calibrators):
                 batch_input[i].copy_(c.quantize(batch_input[i]))
+            
+            fwq = batch_weight * self.weight_calibrators[0].scale
+            # print('fake xq uint8', pack_int4_to_uint8(batch_input * self.input_calibrators[0].scale))
+            print('fake wq uint8', pack_int4_to_uint8(fwq))
             res = segmented_matmul(batch_input, batch_weight)
         return res
 
@@ -132,6 +137,25 @@ class BaseOptimizer:
         self.weight_manager = self.weight_manager.to(device)
         self.input_calibrators = [calibrator.to(device) for calibrator in self.input_calibrators]
         self.weight_calibrators = [calibrator.to(device) for calibrator in self.weight_calibrators]
+
+
+def pack_int4_to_uint8(x: torch.Tensor) -> torch.Tensor:
+    """
+    将 int4 tensor (-8~7) 展平并打包成 uint8。
+    偶数索引作为低4位，奇数索引作为高4位。
+    """
+    x = x.flatten()
+
+    x = x.to(torch.int8)
+    x = x.view(torch.uint8)
+
+    # 偶数索引 = 低4位；奇数索引 = 高4位
+    low = x[0::2] & 0x0F
+    high = x[1::2] & 0x0F
+
+    packed = (high << 4) | low
+    return packed
+
 
 class OptimizerRegistry:
     _registry = {}

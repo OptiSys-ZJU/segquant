@@ -524,6 +524,8 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, at:
         );
     });
 
+    // std::cout << Xq_tensor << std::endl;
+
     if (numel_scale_x == 1 && numel_scale_w == 1 && segments == 1) {
         // simple gemm with scalar scale_x and scale_w
         AT_DISPATCH_FLOATING_TYPES(outputs.scalar_type(), "launch_gemm_scaled", [&] {
@@ -549,6 +551,7 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, at:
         }
 
         // outputs: (segments, ..., M, N)
+        // std::cout << Yq << std::endl;
 
         //  handle dequantize
         // scale x: (segments, 1) or (segments, ..., M) for per-token

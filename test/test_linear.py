@@ -7,7 +7,7 @@ from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 
-embedding_dim = 1536
+embedding_dim = 32
 
 class RandomTensorDataset:
     def __init__(self, num_batches=6, seed=42):
@@ -384,13 +384,14 @@ def test_smooth_int8():
     print('origin-segquant', torch.norm(a - c).item())
 
 def test_smooth_int8_real():
-    test_model = TestInputModel(embedding_dim).to(torch.device("cuda:0"))
+    test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
+    axis = True
     ######################################
     config = {
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [SegPattern.CONCAT2LINEAR],
+            "search_patterns": [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK],
             "real_quant": False,
             "opt": {
                 "type": Optimum.SMOOTH,
@@ -401,13 +402,11 @@ def test_smooth_int8_real():
             },
             "input_quant": {
                 "type": DType.INT8,
-                # "axis": -1,
-                "axis": None,
+                "axis": -1 if axis else None,
             },
             "weight_quant": {
                 "type": DType.INT8,
-                # "axis": 1,
-                "axis": None,
+                "axis": 1 if axis else None,
             },
         },
     }
@@ -416,14 +415,14 @@ def test_smooth_int8_real():
         seg_data_loader,
         config,
         verbose=True,
-        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+        example=(torch.rand(3, embedding_dim), torch.rand(3, embedding_dim)),
     )
     ######################################
     config_real = {
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [SegPattern.CONCAT2LINEAR],
+            "search_patterns": [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK],
             "real_quant": True,
             "opt": {
                 "type": Optimum.SMOOTH,
@@ -434,13 +433,11 @@ def test_smooth_int8_real():
             },
             "input_quant": {
                 "type": DType.INT8,
-                # "axis": -1,
-                "axis": None,
+                "axis": -1 if axis else None,
             },
             "weight_quant": {
                 "type": DType.INT8,
-                # "axis": 1,
-                "axis": None,
+                "axis": 1 if axis else None,
             },
         },
     }
@@ -595,19 +592,19 @@ def test_svd_int4():
     print('origin-modelopt-smooth', torch.norm(a - d).item())
     print('origin-segquant-smooth', torch.norm(a - e).item())
 
-
 def test_svd_int4_real():
     test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
+    axis = False
     ######################################
     config = {
         "default": {
             "enable": True,
             "seglinear": True,
-            # "search_patterns": [],
-            "search_patterns": SegPattern.all(),
+            # "search_patterns": [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK],
+            "search_patterns": [],
             "real_quant": False,
             "opt": {
-                "type": Optimum.SVD,
+                "type": Optimum.SMOOTH,
                 "alpha": 0.5,
                 "low_rank": 32,
             },
@@ -616,11 +613,11 @@ def test_svd_int4_real():
             },
             "input_quant": {
                 "type": DType.INT4,
-                "axis": None,
+                "axis": -1 if axis else None,
             },
             "weight_quant": {
                 "type": DType.INT4,
-                "axis": None,
+                "axis": 1 if axis else None,
             },
         },
     }
@@ -628,19 +625,19 @@ def test_svd_int4_real():
         copy.deepcopy(test_model),
         seg_data_loader,
         config,
-        True,
-        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+        verbose=True,
+        example=(torch.rand(3, embedding_dim), torch.rand(3, embedding_dim)),
     )
     ######################################
     config_real = {
         "default": {
             "enable": True,
             "seglinear": True,
+            "search_patterns": [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK],
             # "search_patterns": [],
-            "search_patterns": SegPattern.all(),
             "real_quant": True,
             "opt": {
-                "type": Optimum.SVD,
+                "type": Optimum.SMOOTH,
                 "alpha": 0.5,
                 "low_rank": 32,
             },
@@ -649,11 +646,11 @@ def test_svd_int4_real():
             },
             "input_quant": {
                 "type": DType.INT4,
-                "axis": None,
+                "axis": -1 if axis else None,
             },
             "weight_quant": {
                 "type": DType.INT4,
-                "axis": None,
+                "axis": 1 if axis else None,
             },
         },
     }
@@ -661,22 +658,22 @@ def test_svd_int4_real():
         copy.deepcopy(test_model),
         seg_data_loader,
         config_real,
-        True,
-        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+        verbose=True,
+        example=(torch.rand(3, embedding_dim), torch.rand(3, embedding_dim)),
     )
     ######################################
     x_generator = torch.Generator()
     x_generator.manual_seed(1234)
-    x = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
-    emb = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    x = torch.rand(3, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    emb = torch.rand(3, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
     res = test_model.forward(x, emb)
-    print("origin:", res)
+    # print("origin:", res)
     a = res[0]
     res = segquant_model.forward(x, emb)
-    print("fake:", res)
+    # print("fake:", res)
     b = res[0]
     res = segquant_model_real.forward(x, emb)
-    print("real:", res)
+    # print("real:", res)
     c = res[0]
 
     print('diff1', torch.norm(a - b).item())
@@ -857,4 +854,4 @@ def test_mix_real():
 
 
 if __name__ == "__main__":
-    test_smooth_int8_real()
+    test_svd_int4_real()
