@@ -63,6 +63,7 @@ class WeightSegmentTensorManager(SegmentTensorManager):
             # packed shape weight-seg: (segments, segment_size * in // 2) dtype=uint8
             self.weight_tensor = segmented_weights
             self.packed = packed
+            return
 
         if self.seg_mode == 'input':
             # (segments, out, segment_size)
