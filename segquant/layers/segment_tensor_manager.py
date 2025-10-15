@@ -33,6 +33,8 @@ class WeightSegmentTensorManager(SegmentTensorManager):
         self.out_features, self.in_features = weight_tensor.shape
         self.weight_tensor = weight_tensor # (out, in)
 
+        self.packed = False
+
     def device(self):
         return self.weight_tensor.device
 
@@ -41,6 +43,8 @@ class WeightSegmentTensorManager(SegmentTensorManager):
         return self
 
     def iter_view(self):
+        if self.packed:
+            return self.weight_tensor
         if self.seg_mode == 'input':
             return self.weight_tensor.view(self.out_features, self.segments, self.segment_size).permute(1, 0, 2) # (segments, out, segment_size)
         elif self.seg_mode == 'weight':
@@ -51,12 +55,14 @@ class WeightSegmentTensorManager(SegmentTensorManager):
 
     def replace_with_segments_layout(self, segmented_weights, packed=False):
         if packed:
-            # for int4
+            # for int4, only store as iter-view
+            # because we only need to forward when inferring
             # normal shape input-seg: (segments, out, segment_size)
             # normal shape weight-seg: (segments, segment_size, in)
             # packed shape input-seg: (segments, out * segment_size // 2) dtype=uint8
             # packed shape weight-seg: (segments, segment_size * in // 2) dtype=uint8
-            raise NotImplementedError("INT4 packed weights are not supported yet.")
+            self.weight_tensor = segmented_weights
+            self.packed = packed
 
         if self.seg_mode == 'input':
             # (segments, out, segment_size)

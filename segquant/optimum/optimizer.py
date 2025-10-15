@@ -1,11 +1,8 @@
-from functools import partial
-from typing import List
 from collections import deque
 
 import numpy as np
 from segquant.layers.segment_tensor_manager import InputSegmentTensorManager, WeightSegmentTensorManager, segmented_matmul
 import torch
-import torch.nn.functional as F
 from segquant.layers import ext_dict
 
 
