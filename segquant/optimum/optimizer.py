@@ -53,6 +53,8 @@ class BaseOptimizer:
             )
             for calibrator in self.weight_calibrators
         ]
+        if len(weight_scales) == 1:
+            weight_scales = weight_scales * self.chunks
         if self.dual_scale:
             pos_input_scales = [
                 (
@@ -62,6 +64,8 @@ class BaseOptimizer:
                 )
                 for calibrator in self.input_calibrators
             ]
+            if len(pos_input_scales) == 1:
+                pos_input_scales = pos_input_scales * self.chunks
             neg_input_scales = [
                 (
                     calibrator.neg_scale.to(dtype=torch.float32, device=self.weight_manager.device())
@@ -70,6 +74,8 @@ class BaseOptimizer:
                 )
                 for calibrator in self.input_calibrators
             ]
+            if len(neg_input_scales) == 1:
+                neg_input_scales = neg_input_scales * self.chunks
 
             self.scale_tensor = (torch.stack(pos_input_scales), torch.stack(neg_input_scales), torch.stack(weight_scales))
         else:
@@ -81,6 +87,8 @@ class BaseOptimizer:
                 )
                 for calibrator in self.input_calibrators
             ]
+            if len(input_scales) == 1:
+                input_scales = input_scales * self.chunks
             self.scale_tensor = (torch.stack(input_scales), torch.stack(weight_scales))
 
     def call_func(self, batch_input: torch.Tensor, batch_weight: torch.Tensor):
@@ -132,25 +140,6 @@ class BaseOptimizer:
         self.weight_manager = self.weight_manager.to(device)
         self.input_calibrators = [calibrator.to(device) for calibrator in self.input_calibrators]
         self.weight_calibrators = [calibrator.to(device) for calibrator in self.weight_calibrators]
-
-
-def pack_int4_to_uint8(x: torch.Tensor) -> torch.Tensor:
-    """
-    将 int4 tensor (-8~7) 展平并打包成 uint8。
-    偶数索引作为低4位，奇数索引作为高4位。
-    """
-    x = x.flatten()
-
-    x = x.to(torch.int8)
-    x = x.view(torch.uint8)
-
-    # 偶数索引 = 低4位；奇数索引 = 高4位
-    low = x[0::2] & 0x0F
-    high = x[1::2] & 0x0F
-
-    packed = (high << 4) | low
-    return packed
-
 
 class OptimizerRegistry:
     _registry = {}

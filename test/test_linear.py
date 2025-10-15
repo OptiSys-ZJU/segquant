@@ -7,7 +7,7 @@ from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 
-embedding_dim = 64
+embedding_dim = 1536
 
 class RandomTensorDataset:
     def __init__(self, num_batches=6, seed=42):
@@ -170,14 +170,17 @@ def test_default_fp8():
     print('diff3', torch.norm(b - c).item())
 
 def test_default_fp8_real():
-    test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
+    test_model = TestInputModel(embedding_dim).to(torch.device("cuda:0"))
+    axis = False
+    seg = True
     ######################################
     config = {
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [],
-            # "search_patterns": SegPattern.all(),
+            "search_patterns": (
+                [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK] if seg else []
+            ),
             "real_quant": False,
             "opt": {
                 "type": Optimum.DEFAULT,
@@ -188,11 +191,11 @@ def test_default_fp8_real():
             },
             "input_quant": {
                 "type": DType.FP8E4M3,
-                "axis": None,
+                "axis": -1 if axis else None,
             },
             "weight_quant": {
                 "type": DType.FP8E4M3,
-                "axis": None,
+                "axis": 1 if axis else None,
             },
         },
     }
@@ -200,8 +203,8 @@ def test_default_fp8_real():
         copy.deepcopy(test_model),
         seg_data_loader,
         config,
-        True,
-        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+        verbose=True,
+        example=(torch.rand(3, embedding_dim), torch.rand(3, embedding_dim)),
     )
 
     ######################################
@@ -209,8 +212,9 @@ def test_default_fp8_real():
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [],
-            # "search_patterns": SegPattern.all(),
+            "search_patterns": (
+                [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK] if seg else []
+            ),
             "real_quant": True,
             "opt": {
                 "type": Optimum.DEFAULT,
@@ -221,11 +225,11 @@ def test_default_fp8_real():
             },
             "input_quant": {
                 "type": DType.FP8E4M3,
-                "axis": None,
+                "axis": -1 if axis else None,
             },
             "weight_quant": {
                 "type": DType.FP8E4M3,
-                "axis": None,
+                "axis": 1 if axis else None,
             },
         },
     }
@@ -233,14 +237,14 @@ def test_default_fp8_real():
         copy.deepcopy(test_model),
         seg_data_loader,
         config_real,
-        True,
-        example=(torch.rand(2, embedding_dim), torch.rand(2, embedding_dim)),
+        verbose=True,
+        example=(torch.rand(3, embedding_dim), torch.rand(3, embedding_dim)),
     )
     ######################################
     x_generator = torch.Generator()
     x_generator.manual_seed(1234)
-    x = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
-    emb = torch.rand(2, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    x = torch.rand(3, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    emb = torch.rand(3, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
     res = test_model.forward(x, emb)
     print("origin:", res)
     a = res[0]
@@ -855,4 +859,4 @@ def test_mix_real():
 
 
 if __name__ == "__main__":
-    test_svd_int4_real()
+    test_default_fp8_real()
