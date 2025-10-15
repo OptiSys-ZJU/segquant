@@ -7,7 +7,7 @@ from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 
-embedding_dim = 32
+embedding_dim = 64
 
 class RandomTensorDataset:
     def __init__(self, num_batches=6, seed=42):
@@ -594,17 +594,17 @@ def test_svd_int4():
 
 def test_svd_int4_real():
     test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
-    axis = False
+    axis = True
+    seg = False
     ######################################
     config = {
         "default": {
             "enable": True,
             "seglinear": True,
-            # "search_patterns": [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK],
-            "search_patterns": [],
+            "search_patterns": [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK] if seg else [],
             "real_quant": False,
             "opt": {
-                "type": Optimum.SMOOTH,
+                "type": Optimum.SVD,
                 "alpha": 0.5,
                 "low_rank": 32,
             },
@@ -633,11 +633,12 @@ def test_svd_int4_real():
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK],
-            # "search_patterns": [],
+            "search_patterns": (
+                [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK] if seg else []
+            ),
             "real_quant": True,
             "opt": {
-                "type": Optimum.SMOOTH,
+                "type": Optimum.SVD,
                 "alpha": 0.5,
                 "low_rank": 32,
             },

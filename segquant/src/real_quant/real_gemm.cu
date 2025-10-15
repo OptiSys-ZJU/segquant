@@ -213,7 +213,11 @@ void launch_universal_gemm_scaled(
     int64_t batch_stride_A=0,
     int64_t batch_stride_B=0,
     int64_t batch_stride_C=0,
-    int64_t batch_stride_D=0) {
+    int64_t batch_stride_D=0,
+    int64_t lda=0,
+    int64_t ldb=0,
+    int64_t ldc=0,
+    int64_t ldd=0) {
 
     using ElementInputA = typename CutlassElementOutputType<AType>::type;
     using ElementInputB = typename CutlassElementOutputType<BType>::type;
@@ -265,6 +269,11 @@ void launch_universal_gemm_scaled(
         typename AddType<AType, BType>::type
     >;
 
+    lda = (lda == 0) ? K : lda;
+    ldb = (ldb == 0) ? K : ldb;
+    ldc = (ldc == 0) ? N : ldc;
+    ldd = (ldd == 0) ? N : ldd;
+
     typename GemmUniversal::Arguments args{
         mode,
         {M, N, K},
@@ -278,10 +287,10 @@ void launch_universal_gemm_scaled(
         batch_stride_B,
         batch_stride_C,
         batch_stride_D,
-        K,
-        K,
-        N,
-        N
+        lda,
+        ldb,
+        ldc,
+        ldd
     };
 
     GemmUniversal gemm;
@@ -315,6 +324,8 @@ void launch_batched_gemm_scaled(
     const AType *A, const BType *B, CType *C,
     int M, int N, int K,
     int batch_count,
+    int64_t batch_stride_A,
+    int64_t batch_stride_B,
     float scale_x, float scale_w,
     float beta,
     cudaStream_t stream) {
@@ -327,10 +338,14 @@ void launch_batched_gemm_scaled(
         cutlass::gemm::GemmUniversalMode::kBatched,
         scale, beta,
         batch_count,
-        M * K,
-        K * N,
+        batch_stride_A,
+        batch_stride_B,
         M * N,
-        M * N
+        M * N,
+        K,
+        K,
+        N,
+        N
     );
 }
 
@@ -546,12 +561,11 @@ at::Tensor real_quantized_gemm_scaled(at::Tensor inputs, at::Tensor weights, at:
         else {
             // for segments > 1 or input has hidden dim, we do batched gemm
             AT_DISPATCH_FLOATING_TYPES(Yq.scalar_type(), "launch_batched_gemm_scaled", [&] {
-                launch_batched_gemm_scaled<input_type, weight_type, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, segments, 1.0f, 1.0f, 0.0f, stream);
+                launch_batched_gemm_scaled<input_type, weight_type, scalar_t>(Xq, Wq, Yq.data_ptr<scalar_t>(), M, N, K, segments, std::is_same<input_type, cutlass::int4b_t>::value? (M * K / 2): (M * K), std::is_same<weight_type, cutlass::int4b_t>::value? (N * K / 2): (N * K), 1.0f, 1.0f, 0.0f, stream);
             });
         }
 
         // outputs: (segments, ..., M, N)
-        // std::cout << Yq << std::endl;
 
         //  handle dequantize
         // scale x: (segments, 1) or (segments, ..., M) for per-token

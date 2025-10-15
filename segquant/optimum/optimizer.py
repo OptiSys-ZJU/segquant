@@ -102,7 +102,6 @@ class BaseOptimizer:
                 )
             else:
                 scale_x, scale_w = self.scale_tensor
-                print('real wq', batch_weight)
                 res = ext_dict[self.kernel_type][self.func_name](
                     batch_input.contiguous(),
                     batch_weight.contiguous(),
@@ -111,11 +110,7 @@ class BaseOptimizer:
                 )
         else:
             for i, c in enumerate(self.input_calibrators):
-                batch_input[i].copy_(c.quantize(batch_input[i]))
-            
-            fwq = batch_weight * self.weight_calibrators[0].scale
-            # print('fake xq uint8', pack_int4_to_uint8(batch_input * self.input_calibrators[0].scale))
-            print('fake wq uint8', pack_int4_to_uint8(fwq))
+                batch_input[i].copy_(c.quantize(batch_input[i]))        
             res = segmented_matmul(batch_input, batch_weight)
         return res
 
@@ -515,7 +510,7 @@ class SmoothOptimizer(BaseOptimizer):
         for i, weight_calibrator in enumerate(self.weight_calibrators):
             calibrated = weight_calibrator.finish_calibrate(weight_view[i])
             calibrated_segments.append(calibrated)
-        
+
         # (segments, out, segment_size) or (segments, segment_size, in)
         new_quantized_weight_tensor = torch.stack(calibrated_segments, dim=0)
         # update weight
@@ -700,12 +695,11 @@ class SVDOptimizer(SmoothOptimizer):
 
         if isinstance(self.l1s, list):
             self.l1s = torch.stack(self.l1s) # (segments, in, low_rank)
-            self.l2s = torch.stack(self.l2s)  # (segments, low_rank, out)
-        return smooth_weight_chunks
+            self.l2s = torch.stack(self.l2s)  # (segments, low_rank, out)        
 
     def smooth(self):
         super().smooth()
-        self.weight_chunks = self._svd_w(self.weight_manager.iter_view())
+        self._svd_w(self.weight_manager.iter_view())
         self.has_svd = True
 
     def calibrate(self, input_manager: InputSegmentTensorManager):
