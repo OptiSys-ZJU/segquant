@@ -130,8 +130,8 @@ def load_real_quant_int8_ext(verbose=False, required=False):
         include_dirs=[f"{cutlass_path}/include"],
         verbose=verbose,
         required=required,
-        extra_cflags=["-DSEGQUANT_INT8", "-DSEGQUANT_DEBUG"],
-        extra_cuda_cflags=["-DSEGQUANT_INT8", "-DSEGQUANT_DEBUG"],
+        extra_cflags=["-DSEGQUANT_INT8"],
+        extra_cuda_cflags=["-DSEGQUANT_INT8"],
     )
 
     def create_quantized_weights(self, x):

@@ -696,10 +696,29 @@ class SVDOptimizer(SmoothOptimizer):
         super().calibrate(input_manager)
 
     def _low_rank_mul(self, x, l1s, l2s):
-        if x.dim() == 2:
-            x = x.unsqueeze(1)  # (segments, 1, M)
-        hidden = torch.bmm(x, l1s)
-        out = torch.bmm(hidden, l2s)
+        if x.dim() < 2:
+            raise ValueError(f"x must have at least 2 dims (segments and M), got {x.shape}")
+
+        segments = x.shape[0]
+        M = x.shape[-1]
+        middle_shape = x.shape[1:-1]
+        if len(middle_shape) == 0:
+            K = 1
+            x3 = x.unsqueeze(1)  # (segments, 1, M)
+        else:
+            K = 1
+            for s in middle_shape:
+                K *= s
+            x3 = x.reshape(segments, K, M)  # (segments, K, M)
+
+        hidden = torch.bmm(x3, l1s)
+        out3 = torch.bmm(hidden, l2s)
+
+        if len(middle_shape) == 0:
+            out = out3.squeeze(1)  # (segments, N_out)
+        else:
+            out = out3.reshape((segments, *middle_shape, out3.shape[-1]))  # (segments, ..., N_out)
+
         return out
 
     def forward(self, input_manager: InputSegmentTensorManager):
