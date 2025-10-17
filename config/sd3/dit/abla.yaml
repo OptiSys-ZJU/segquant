@@ -18,7 +18,7 @@ seglinear:
   default:
     enable: true
     seglinear: true
-    search_patterns: ["linear_to_chunk", "linear_to_split", "concat_to_linear", "stack_to_linear"]
+    search_patterns: ["linear_to_chunk", "linear_to_split", "concat_to_linear", "stack_to_linear", "reshape_to_linear"]
     real_quant: true
     opt:
       type: "smooth"
@@ -60,7 +60,7 @@ segquant:
   default:
     enable: true
     seglinear: true
-    search_patterns: ["linear_to_chunk", "linear_to_split", "concat_to_linear", "stack_to_linear", "activation_to_linear"]
+    search_patterns: ["linear_to_chunk", "linear_to_split", "concat_to_linear", "stack_to_linear", "activation_to_linear", "reshape_to_linear"]
     real_quant: true
     opt:
       type: "smooth"
