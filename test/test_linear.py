@@ -389,13 +389,22 @@ def test_smooth_int8():
 
 def test_smooth_int8_real():
     test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
-    axis = True
+    axis = False
+    seg = False
     ######################################
     config = {
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK],
+            "search_patterns": (
+                [
+                    SegPattern.CONCAT2LINEAR,
+                    SegPattern.LINEAR2CHUNK,
+                    SegPattern.ACTIVATION2LINEAR,
+                ]
+                if seg
+                else [SegPattern.ACTIVATION2LINEAR]
+            ),
             "real_quant": False,
             "opt": {
                 "type": Optimum.SMOOTH,
@@ -426,7 +435,15 @@ def test_smooth_int8_real():
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK],
+            "search_patterns": (
+                [
+                    SegPattern.CONCAT2LINEAR,
+                    SegPattern.LINEAR2CHUNK,
+                    SegPattern.ACTIVATION2LINEAR,
+                ]
+                if seg
+                else [SegPattern.ACTIVATION2LINEAR]
+            ),
             "real_quant": True,
             "opt": {
                 "type": Optimum.SMOOTH,
@@ -598,17 +615,25 @@ def test_svd_int4():
 
 def test_svd_int4_real():
     test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
-    axis = True
+    axis = False
     seg = True
     ######################################
     config = {
         "default": {
             "enable": True,
             "seglinear": True,
-            "search_patterns": [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK] if seg else [],
+            "search_patterns": (
+                [
+                    SegPattern.CONCAT2LINEAR,
+                    SegPattern.LINEAR2CHUNK,
+                    SegPattern.ACTIVATION2LINEAR,
+                ]
+                if seg
+                else [SegPattern.ACTIVATION2LINEAR]
+            ),
             "real_quant": False,
             "opt": {
-                "type": Optimum.SVD,
+                "type": Optimum.SMOOTH,
                 "alpha": 0.5,
                 "low_rank": 32,
             },
@@ -638,11 +663,17 @@ def test_svd_int4_real():
             "enable": True,
             "seglinear": True,
             "search_patterns": (
-                [SegPattern.CONCAT2LINEAR, SegPattern.LINEAR2CHUNK] if seg else []
+                [
+                    SegPattern.CONCAT2LINEAR,
+                    SegPattern.LINEAR2CHUNK,
+                    SegPattern.ACTIVATION2LINEAR,
+                ]
+                if seg
+                else [SegPattern.ACTIVATION2LINEAR]
             ),
             "real_quant": True,
             "opt": {
-                "type": Optimum.SVD,
+                "type": Optimum.SMOOTH,
                 "alpha": 0.5,
                 "low_rank": 32,
             },
@@ -860,7 +891,7 @@ def test_mix_real():
     for atype, wtype in configs:
         for axis in [False, True]:
             for seg in [False, True]:
-                for dual in [False]:
+                for dual in [False, True]:
                     step_mix(atype, wtype, axis, seg, dual)
 
 

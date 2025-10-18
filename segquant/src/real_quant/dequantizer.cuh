@@ -72,26 +72,3 @@ __global__ void real_dequantize_dual_scaled_kernel(
         Y[idx] = static_cast<T>(sum);
     }
 }
-
-template <typename T>
-__global__ void real_dequantize_dual_scaled_kernel(
-    const float* Yp, const float* Yn,
-    T* Y,
-    float s_pq, float s_nq,
-    float s_w,
-    size_t n
-) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    constexpr float epsilon = 1e-8f;
-    float denom_pq = fmaxf(s_pq * s_w, epsilon);
-    float denom_nq = fmaxf(s_nq * s_w, epsilon);
-
-    for (int idx = 4 * tid; idx < 4 * (tid + 1) && idx < n; ++idx) {
-        float val_pq = Yp[idx] / denom_pq;
-        float val_nq = Yn[idx] / denom_nq;
-
-        float sum = val_pq + val_nq;
-        Y[idx] = static_cast<T>(sum);
-    }
-}
