@@ -69,11 +69,10 @@ segquant-gptq:
       verbose: true
     calib:
       type: "gptq"
-      cpu_storage: true
+      cpu_storage: false
     input_quant:
       type: "int4"
       axis: -1
-      dynamic: true
     weight_quant:
       type: "int4"
       axis: 1

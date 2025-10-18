@@ -283,7 +283,7 @@ def quantize(
     if tmp_device is not None:
         target_model_device = tmp_device
         print(f"[INFO] Quantizing model Process will be in Target[{target_model_device}], Origin(Final)[{origin_model_device}]")
-    
+
     final_config = config or default_quantize_config
     final_config["default"] = final_config.get(
         "default", default_quantize_config["default"]
@@ -340,7 +340,9 @@ def quantize(
                         dual_scale=(name in dual_scale_linears),
                         device=target_model_device,
                     )
-                    print(f"[INFO] Detected [{name}]")
+                    print(
+                        f"[INFO] Detected [{name}], SegMode [{seg_linear_config['seg_mode']}]"
+                    )
                     del linears[name]
 
     for name, linear in linears.items():
