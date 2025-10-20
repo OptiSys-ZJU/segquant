@@ -1,3 +1,4 @@
+import time
 from typing import Tuple
 import torch
 import torch.nn as nn
@@ -7,7 +8,7 @@ from segquant.config import Calibrate, DType, Optimum, SegPattern
 from segquant.torch.quantization import quantize
 
 
-embedding_dim = 1536
+embedding_dim = 3072
 
 class RandomTensorDataset:
     def __init__(self, num_batches=6, seed=42):
@@ -391,6 +392,7 @@ def test_smooth_int8_real():
     test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
     axis = False
     seg = False
+    measure_time = True
     ######################################
     config = {
         "default": {
@@ -474,14 +476,31 @@ def test_smooth_int8_real():
     x_generator.manual_seed(1234)
     x = torch.rand(3, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
     emb = torch.rand(3, embedding_dim, generator=x_generator).to(torch.device("cuda:0"))
+    if measure_time:
+        torch.cuda.synchronize()
+        start = time.perf_counter()
     res = test_model.forward(x, emb)
-    print("origin:", res)
+    if measure_time:
+        torch.cuda.synchronize()
+        end = time.perf_counter()
+        elapsed = end - start
+        print(f"[TIME] Inference {elapsed * 1000 * 1000} us")
+    # print("origin:", res)
     a = res[0]
     res = segquant_model.forward(x, emb)
-    print("fake:", res)
+    # print("fake:", res)
     b = res[0]
+
+    if measure_time:
+        torch.cuda.synchronize()
+        start = time.perf_counter()
     res = segquant_model_real.forward(x, emb)
-    print("real:", res)
+    if measure_time:
+        torch.cuda.synchronize()
+        end = time.perf_counter()
+        elapsed = end - start
+        print(f"[TIME] Inference {elapsed * 1000 * 1000} us for embedding_dim={embedding_dim}")
+    # print("real:", res)
     c = res[0]
 
     print('diff1', torch.norm(a - b).item())
@@ -799,7 +818,6 @@ def test_gptq():
     print('diff2', torch.norm(a - c).item())
     print('diff3', torch.norm(b - c).item())
 
-
 def test_mix_real():
     def step_mix(atype, wtype, axis=False, seg=False, dual=False):
         test_model = TestModel(embedding_dim).to(torch.device("cuda:0"))
@@ -896,4 +914,4 @@ def test_mix_real():
 
 
 if __name__ == "__main__":
-    test_mix_real()
+    test_smooth_int8_real()

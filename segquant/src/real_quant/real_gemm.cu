@@ -3,13 +3,16 @@
 #include <cutlass/gemm/device/gemm_batched.h>
 #include <cutlass/gemm/device/gemm_universal.h>
 #include <cutlass/gemm/device/gemm_universal_with_broadcast.h>
-#include <cutlass/epilogue/thread/linear_combination_with_elementwise.h>
+#include <cutlass/gemm/device/gemm_universal_adapter.h>
+#include <cutlass/epilogue/threadblock/fusion/visitors.hpp>
+#include <cutlass/gemm/kernel/default_gemm_universal_with_visitor.h>
 #include <cutlass/util/device_memory.h>
 #include <cutlass/arch/mma_sm80.h>
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <string>
 
+#include "cutlass/epilogue/scaled_mm_epilogues.hpp"
 #include "quantizer.cuh"
 #include "dequantizer.cuh"
 #include "seg_utils.h"
@@ -301,6 +304,122 @@ void launch_universal_gemm_scaled(
     }
 }
 
+template <typename AType, typename BType, typename CType>
+void launch_universal_gemm_scaled_epilogue(
+    cudaStream_t stream,
+    void const* A, void const* B, void* C,
+    int M, int N, int K,
+    cutlass::gemm::GemmUniversalMode mode,
+    at::Tensor const& a_scales, at::Tensor const& b_scales,
+    int batch_count=1,
+    int64_t batch_stride_A=0,
+    int64_t batch_stride_B=0,
+    int64_t batch_stride_C=0,
+    int64_t batch_stride_D=0,
+    int64_t lda=0,
+    int64_t ldb=0,
+    int64_t ldc=0,
+    int64_t ldd=0) {
+    
+    // todo: this function hasn't been passed in tests
+
+    using ElementInputA = typename CutlassElementOutputType<AType>::type;
+    using ElementInputB = typename CutlassElementOutputType<BType>::type;
+    using ElementOutput = typename CutlassElementOutputType<CType>::type;
+    using ElementAccumulator = typename CutlassElementAccumulatorType<AType, BType>::type;
+    using ElementCompute = float;
+    using CutlassOp = typename OpType<AType, BType>::type;
+    using LayoutInputA = cutlass::layout::RowMajor;
+    using LayoutInputB = cutlass::layout::ColumnMajor;
+    using LayoutOutput = cutlass::layout::RowMajor;
+    using CutlassArch = typename CutlassArchType<AType, BType>::arch;
+    constexpr int NumPerThread = 128 / cutlass::sizeof_bits<ElementOutput>::value;
+
+    if (K % AlignNums<AType, BType>::kAlignmentA != 0) {
+        throw std::runtime_error(
+            "K (" + std::to_string(K) + ") must be divisible by alignmentA (" +
+            std::to_string(AlignNums<AType, BType>::kAlignmentA) + ") for AType");
+    }
+    
+    if (K % AlignNums<AType, BType>::kAlignmentB != 0) {
+        throw std::runtime_error(
+            "K (" + std::to_string(K) + ") must be divisible by alignmentB (" +
+            std::to_string(AlignNums<AType, BType>::kAlignmentB) + ") for BType");
+    }
+
+    using OutputTileThreadMap =
+        cutlass::epilogue::threadblock::OutputTileThreadLayout<
+            typename ShapeType<AType, BType>::ThreadblockShape, 
+            typename ShapeType<AType, BType>::WarpShape, 
+            ElementOutput, 
+            NumPerThread, 
+            1 /* epilogue stages */
+        >;
+    using Epilogue = ScaledEpilogue<ElementOutput, OutputTileThreadMap>;
+    using EVTCompute = typename Epilogue::EVTCompute;
+    using D = cutlass::epilogue::threadblock::VisitorAuxStore<
+        OutputTileThreadMap, ElementOutput, cutlass::FloatRoundStyle::round_to_nearest,
+        Stride<int64_t, _1, int64_t>
+    >;
+
+    using EVTD = cutlass::epilogue::threadblock::Sm80EVT<D, EVTCompute>;
+    using KernelType = typename cutlass::gemm::kernel::DefaultGemmWithVisitor<
+        ElementInputA, LayoutInputA, cutlass::ComplexTransform::kNone, AlignNums<AType, BType>::kAlignmentA,
+        ElementInputB, LayoutInputB, cutlass::ComplexTransform::kNone, AlignNums<AType, BType>::kAlignmentB,
+        ElementOutput, LayoutOutput, NumPerThread,
+        ElementAccumulator,
+        ElementCompute,
+        CutlassOp,
+        CutlassArch,
+        typename ShapeType<AType, BType>::ThreadblockShape,
+        typename ShapeType<AType, BType>::WarpShape,
+        typename ShapeType<AType, BType>::InstructionShape,
+        EVTD,
+        cutlass::gemm::threadblock::ThreadblockSwizzleStreamK,
+        4, // Stages
+        cutlass::arch::OpMultiplyAdd,
+        1 /* epilogue stages */
+    >;
+
+    using GemmUniversal = cutlass::gemm::device::GemmUniversalAdapter<KernelType>;
+
+    lda = (lda == 0) ? K : lda;
+    ldb = (ldb == 0) ? K : ldb;
+    ldc = (ldc == 0) ? N : ldc;
+    ldd = (ldd == 0) ? N : ldd;
+
+    auto evt_args = Epilogue::prepare_args(a_scales, b_scales);
+    typename EVTD::Arguments epilogue_args{
+        evt_args,
+        {reinterpret_cast<ElementOutput *>(C), {ldd, _1{}, batch_stride_D}}
+    };
+
+    typename GemmUniversal::Arguments args{
+        mode,
+        {M, N, K},
+        batch_count,
+        epilogue_args,
+        reinterpret_cast<void const *>(A),
+        reinterpret_cast<void const *>(B),
+        nullptr,
+        nullptr,
+        batch_stride_A,
+        batch_stride_B,
+        0,
+        0,
+        lda,
+        ldb,
+        0,
+        0
+    };
+
+    GemmUniversal gemm;
+    cutlass::Status status = gemm(args, nullptr, stream);
+    cudaError_t err = cudaGetLastError();
+    if (status != cutlass::Status::kSuccess) {
+        throw std::runtime_error(std::string("GEMM launch failed, cutlass status: ") + cutlass::cutlassGetStatusString(status) + ", cuda error: " + cudaGetErrorString(err));
+    }
+}
 
 template <typename AType, typename BType, typename CType>
 void launch_gemm_scaled(
@@ -317,6 +436,21 @@ void launch_gemm_scaled(
         M, N, K,
         cutlass::gemm::GemmUniversalMode::kGemm,
         scale, beta);
+}
+
+template <typename AType, typename BType, typename CType>
+void launch_gemm_scaled_epilogue(
+    const AType *A, const BType *B, CType *C,
+    int M, int N, int K,
+    at::Tensor const& a_scales, at::Tensor const& b_scales,
+    cudaStream_t stream) {
+
+    launch_universal_gemm_scaled_epilogue<AType, BType, CType>(
+        stream,
+        A, B, C,
+        M, N, K,
+        cutlass::gemm::GemmUniversalMode::kGemm,
+        a_scales, b_scales);
 }
 
 template <typename AType, typename BType, typename CType>
@@ -337,6 +471,34 @@ void launch_batched_gemm_scaled(
         M, N, K,
         cutlass::gemm::GemmUniversalMode::kBatched,
         scale, beta,
+        batch_count,
+        batch_stride_A,
+        batch_stride_B,
+        M * N,
+        M * N,
+        K,
+        K,
+        N,
+        N
+    );
+}
+
+template <typename AType, typename BType, typename CType>
+void launch_batched_gemm_scaled_epilogue(
+    const AType *A, const BType *B, CType *C,
+    int M, int N, int K,
+    int batch_count,
+    int64_t batch_stride_A,
+    int64_t batch_stride_B,
+    at::Tensor const& a_scales, at::Tensor const& b_scales,
+    cudaStream_t stream) {
+
+    launch_universal_gemm_scaled_epilogue<AType, BType, CType>(
+        stream,
+        A, B, C,
+        M, N, K,
+        cutlass::gemm::GemmUniversalMode::kBatched,
+        a_scales, b_scales,
         batch_count,
         batch_stride_A,
         batch_stride_B,

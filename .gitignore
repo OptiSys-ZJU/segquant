@@ -13,6 +13,3 @@ calibset_record/
 a.txt
 *.pyc
 metadata.json
-layer_expr.py
-fnorm.py
-layer_name.md

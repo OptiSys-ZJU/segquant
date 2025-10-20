@@ -98,7 +98,8 @@ def load_real_quant_fp8_ext(verbose=False, required=False):
             "segquant/src/real_quant/real_gemm.cu",
         ],
         include_dirs=[
-            f'{cutlass_path}/include'
+            f'{cutlass_path}/include',
+            "segquant/src/real_quant/include"
         ],
         verbose=verbose,
         required=required,
@@ -127,7 +128,7 @@ def load_real_quant_int8_ext(verbose=False, required=False):
             "segquant/src/real_quant/quantized_int8.cpp",
             "segquant/src/real_quant/real_gemm.cu",
         ],
-        include_dirs=[f"{cutlass_path}/include"],
+        include_dirs=[f"{cutlass_path}/include", "segquant/src/real_quant/include"],
         verbose=verbose,
         required=required,
         extra_cflags=["-DSEGQUANT_INT8"],
@@ -155,13 +156,11 @@ def load_real_quant_int4_ext(verbose=False, required=False):
             "segquant/src/real_quant/quantized_int4.cpp",
             "segquant/src/real_quant/real_gemm.cu",
         ],
-        include_dirs=[
-            f'{cutlass_path}/include'
-        ],
+        include_dirs=[f"{cutlass_path}/include", "segquant/src/real_quant/include"],
         verbose=verbose,
         required=required,
-        extra_cflags=['-DSEGQUANT_INT4'],
-        extra_cuda_cflags=['-DSEGQUANT_INT4'],
+        extra_cflags=["-DSEGQUANT_INT4"],
+        extra_cuda_cflags=["-DSEGQUANT_INT4"],
     )
 
     def create_quantized_weights(self, x):
