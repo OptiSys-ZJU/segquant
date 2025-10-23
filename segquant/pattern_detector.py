@@ -151,7 +151,8 @@ class SegQuantPatternDetector:
         ):
             chunks = node.args[1] if len(node.args) > 1 else node.kwargs.get("chunks")
             dim = node.kwargs.get("dim", 0)
-            if dim == 1 or dim == -1:
+            shape = getattr(node.args[0].meta.get("tensor_meta", None), "shape", None)
+            if (shape is not None and len(shape) == dim + 1) or dim == -1:
                 return ChunkInfo(True, chunks)
         return ChunkInfo(False, None)
 
@@ -164,7 +165,8 @@ class SegQuantPatternDetector:
                 node.args[1] if len(node.args) > 1 else node.kwargs.get("split_size")
             )
             dim = node.kwargs.get("dim", 0)
-            if dim == 1:
+            shape = getattr(node.args[0].meta.get("tensor_meta", None), "shape", None)
+            if (shape is not None and len(shape) == dim + 1) or dim == -1:
                 return SplitInfo(True, split_size_or_sections)
         return SplitInfo(False, None)
 
@@ -175,13 +177,17 @@ class SegQuantPatternDetector:
         ):
             tensor_list = node.args[0]
             dim = node.kwargs.get("dim", 0)
-            if dim == 1:
+            concat_shape = getattr(node.meta.get("tensor_meta", None), "shape", None)
+            if (concat_shape is not None and len(concat_shape) == dim + 1) or dim == -1:
                 if isinstance(tensor_list, (list, tuple)):
                     chunksizes = []
                     for tensor in tensor_list:
                         shape = tensor.meta["tensor_meta"].shape
-                        chunksizes.append(shape[1])
-                    return ConcatInfo(True, chunksizes)
+                        chunksizes.append(shape[-1])
+                    if len(set(chunksizes)) == 1:
+                        return ConcatInfo(True, chunksizes)
+                    else:
+                        print(f"[Warning] Detected concat with multiple chunksizes: {chunksizes}, will be implemented.")
         return ConcatInfo(False, None)
 
     @staticmethod
@@ -373,6 +379,7 @@ if __name__ == "__main__":
     from typing import Optional
     from backend.torch.layers.activations import GELU
     from backend.torch.layers.attention_processor import Attention, JointAttnProcessor2_0
+    from backend.torch.modules.transformer_flux import FluxSingleTransformerBlock
 
     class TestInputModel(nn.Module):
         def __init__(self, embedding_dim: int = 16, bias=True):
@@ -448,8 +455,17 @@ if __name__ == "__main__":
     attention_head_dim = 5
     num_attention_heads = 2
     detector = SegQuantPatternDetector(
-        TestInputModel(embedding_dim=dim),
-        example_inputs=(torch.randn(2, dim), torch.randn(2, dim),),
+        FluxSingleTransformerBlock(
+            dim=dim,
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+        ),
+        example_inputs=(
+            torch.randn(2, seq, dim),
+            torch.randn(2, dim),
+            None,
+            None,
+        ),
         search_patterns_lst=search_patterns,
     )
     results = detector.find_all_patterns()

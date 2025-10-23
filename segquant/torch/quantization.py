@@ -314,6 +314,7 @@ def quantize(
 
         if "activation_to_linear" in seg_result:
             dual_scale_linears = set(seg_result["activation_to_linear"])
+            print(f"[INFO] Detected [{len(dual_scale_linears)}] dual scale linears: \n{'\n'.join(dual_scale_linears)}")
             del seg_result["activation_to_linear"]
 
         for l in seg_result.values():

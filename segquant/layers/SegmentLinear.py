@@ -78,7 +78,7 @@ class SegmentLinear(nn.Module):
             self.chunksizes = chunksizes
 
         if len(set(self.chunksizes)) != 1:
-            # todo
+            # todo: support multiple chunksizes for vectorized calculation or list-based calculation
             raise NotImplementedError("Only support equal chunksizes.")
 
         real_quant = False
