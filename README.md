@@ -3,6 +3,7 @@
 [![Venue](https://img.shields.io/badge/CVPR-2026-blue.svg)](https://cvpr.thecvf.com/)
 [![Paper](https://img.shields.io/badge/arXiv-2507.14811-1.svg)](http://arxiv.org/abs/2507.14811)
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-black)](https://github.com/OptiSys-ZJU/segquant)
+[![Hugging Face Datasets](https://img.shields.io/badge/HuggingFace-SegQuant%20Dataset-yellow.svg)](https://huggingface.co/datasets/CSunRay/SegQuant-Dataset)
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-green.svg"></a>
 
 **A Semantics-Aware and Generalizable Quantization Framework for Diffusion Models**
@@ -107,6 +108,8 @@ In the `backend` directory, we use three popular text-to-image diffusion models 
 In the `dataset` directory, we provide several commonly used detection datasets, including MS-COCO<sup>[4]</sup>, Densely Captioned Images<sup>[5]</sup> and MJHQ-30K<sup>[6]</sup> in the diffusion model domain. To support quantization testing with ControlNet<sup>[7]</sup>, we have created preprocessing scripts that generate ControlNet (Canny<sup>[8]</sup>) input images based on these open-source datasets. These tools make it easy to convert and adapt datasets for various experimental needs.
 
 For detailed instructions on dataset usage, please refer to [this](dataset/README.md).
+
+Note: The pre-processed datasets used in our paper experiments are now publicly available on Hugging Face. You can access the ready-to-use versions at [CSunRay/SegQuant-Dataset](https://huggingface.co/datasets/CSunRay/SegQuant-Dataset).
 
 ### Quantization Implement and CUDA Kernel
 To align with mainstream quantization frameworks such as [ModelOPT](https://github.com/NVIDIA/TensorRT-Model-Optimizer), we reference parts of their quantization implementation—particularly components related to FP8 quantization.
