@@ -1,0 +1,15 @@
+__pycache__/
+.vscode/
+dist/
+affine_pics/
+calibset_record/
+*.egg-info/
+*.jpg
+*.svg
+*.pdf
+*.png
+*.log
+.pylintrc
+a.txt
+*.pyc
+metadata.json

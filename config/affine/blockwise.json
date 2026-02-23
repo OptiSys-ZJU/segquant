@@ -1,0 +1,28 @@
+{
+    "type": "blockwise",
+    "config": {
+        "max_timestep": 50,
+        "sample_size": 256,
+        "enable_timesteps": null,
+        "recurrent": true,
+        "noise_target": "uncond",
+        "enable_latent_affine": false,
+        "solver_type": "mserel",
+        "solver_config": {
+            "type": "mserel",
+            "blocksize": 8,
+            "alpha": 0.5,
+            "lambda1": 0.1,
+            "lambda2": 0.1,
+            "sample_mode": "interpolate",
+            "percentile": 100,
+            "greater": true,
+            "scale": 1,
+            "verbose": true
+        }
+    },
+    "extra_args": {
+        "controlnet_conditioning_scale": 0,
+        "guidance_scale": 7
+    }
+}

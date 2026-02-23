@@ -1,0 +1,23 @@
+{
+    "type": "tac",
+    "config": {
+        "max_timestep": 50,
+        "sample_size": 32,
+        "enable_timesteps": null,
+        "recurrent": true,
+        "noise_target": "uncond",
+        "enable_latent_affine": false,
+        "solver_type": "tac",
+        "solver_config": {
+            "type": "tac",
+            "lambda1": 0.8,
+            "lambda2": 0.1,
+            "threshold": 4,
+            "verbose": true
+        }
+    },
+    "extra_args": {
+        "controlnet_conditioning_scale": 0,
+        "guidance_scale": 7
+    }
+}

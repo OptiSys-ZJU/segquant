@@ -1,0 +1,8 @@
+{
+    "max_timestep": 50,
+    "sample_size": 1,
+    "timestep_per_sample": 50,
+    "controlnet_conditioning_scale": 0,
+    "guidance_scale": 7,
+    "shuffle": false
+}
