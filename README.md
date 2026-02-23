@@ -1,7 +1,9 @@
 # SegQuant
-    
+
+[![Venue](https://img.shields.io/badge/CVPR-2026-blue.svg)](https://cvpr.thecvf.com/)
 [![Paper](https://img.shields.io/badge/arXiv-2507.14811-1.svg)](http://arxiv.org/abs/2507.14811)
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-black)](https://github.com/OptiSys-ZJU/segquant)
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-green.svg"></a>
 
 **A Semantics-Aware and Generalizable Quantization Framework for Diffusion Models**
 
