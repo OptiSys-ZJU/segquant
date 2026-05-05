@@ -1,6 +1,6 @@
 # SegQuant
 
-[![Venue](https://img.shields.io/badge/CVPR-2026-blue.svg)](https://cvpr.thecvf.com/)
+[![Venue](https://img.shields.io/badge/CVPR-2026-blue.svg)](https://cvpr.thecvf.com/virtual/2026/poster/37801)
 [![Paper](https://img.shields.io/badge/arXiv-2507.14811-1.svg)](http://arxiv.org/abs/2507.14811)
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-black)](https://github.com/OptiSys-ZJU/segquant)
 [![Hugging Face Datasets](https://img.shields.io/badge/HuggingFace-SegQuant%20Dataset-yellow.svg)](https://huggingface.co/datasets/CSunRay/SegQuant-Dataset)
