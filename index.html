@@ -264,19 +264,19 @@
             graph compilers, creating a gap that hinders automated, large-scale deployment.
           </p>
           <p>
-            We present <span class="dnerf">SegQuant</span>, a deployment-aware PTQ framework that 
+            We present <strong>SegQuant</strong>, a deployment-aware PTQ framework that 
             derives its quantization strategy entirely from the model's static computation graph, 
             requiring no hand-crafted rules or dynamic profiling. At its core, 
-            <span class="dnerf">SegLinear</span> automatically identifies semantically distinct 
+            <strong>SegLinear</strong> automatically identifies semantically distinct 
             segments within weight matrices and quantizes them independently, capturing structural 
             heterogeneity that uniform quantization overlooks. Complementing this, 
-            <span style="font-variant: small-caps;">DualScale</span> preserves the narrow yet semantically critical 
+            <strong>DualScale</strong> preserves the narrow yet semantically critical 
             negative activations introduced by functions such as SiLU and GELU, through a 
             hardware-native dual-path computation that fully leverages standard Tensor Core operations 
             without any custom kernel overhead.
           </p>
           <p>
-            Together, these components enable <span class="dnerf">SegQuant</span> to achieve 
+            Together, these components enable <strong>SegQuant</strong> to achieve 
             strong image quality under aggressive quantization settings, generalize seamlessly across 
             both DiT-based and UNet-based architectures, and integrate naturally with mainstream 
             deployment toolchains.
