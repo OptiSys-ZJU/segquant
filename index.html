@@ -253,31 +253,33 @@
         <h2 class="title is-3">Abstract</h2>
         <div class="content has-text-justified">
           <p>
-            We present the first method capable of photorealistically reconstructing a non-rigidly
-            deforming scene using photos/videos captured casually from mobile phones.
+            Diffusion models have demonstrated remarkable generative capabilities, yet deploying them 
+            efficiently remains a significant challenge in latency-sensitive environments where both 
+            speed and output quality must be carefully balanced.
           </p>
           <p>
-            Our approach augments neural radiance fields
-            (NeRF) by optimizing an
-            additional continuous volumetric deformation field that warps each observed point into a
-            canonical 5D NeRF.
-            We observe that these NeRF-like deformation fields are prone to local minima, and
-            propose a coarse-to-fine optimization method for coordinate-based models that allows for
-            more robust optimization.
-            By adapting principles from geometry processing and physical simulation to NeRF-like
-            models, we propose an elastic regularization of the deformation field that further
-            improves robustness.
+            Quantization offers a practical path to reducing computational cost, but existing 
+            post-training quantization (PTQ) methods typically rely on manual, architecture-specific 
+            rules or runtime-dynamic heuristics that are fundamentally incompatible with modern static 
+            graph compilers, creating a gap that hinders automated, large-scale deployment.
           </p>
           <p>
-            We show that <span class="dnerf">Nerfies</span> can turn casually captured selfie
-            photos/videos into deformable NeRF
-            models that allow for photorealistic renderings of the subject from arbitrary
-            viewpoints, which we dub <i>"nerfies"</i>. We evaluate our method by collecting data
-            using a
-            rig with two mobile phones that take time-synchronized photos, yielding train/validation
-            images of the same pose at different viewpoints. We show that our method faithfully
-            reconstructs non-rigidly deforming scenes and reproduces unseen views with high
-            fidelity.
+            We present <span class="dnerf">SegQuant</span>, a deployment-aware PTQ framework that 
+            derives its quantization strategy entirely from the model's static computation graph, 
+            requiring no hand-crafted rules or dynamic profiling. At its core, 
+            <span class="dnerf">SegLinear</span> automatically identifies semantically distinct 
+            segments within weight matrices and quantizes them independently, capturing structural 
+            heterogeneity that uniform quantization overlooks. Complementing this, 
+            <span class="dnerf">DualScale</span> preserves the narrow yet semantically critical 
+            negative activations introduced by functions such as SiLU and GELU, through a 
+            hardware-native dual-path computation that fully leverages standard Tensor Core operations 
+            without any custom kernel overhead.
+          </p>
+          <p>
+            Together, these components enable <span class="dnerf">SegQuant</span> to achieve 
+            strong image quality under aggressive quantization settings, generalize seamlessly across 
+            both DiT-based and UNet-based architectures, and integrate naturally with mainstream 
+            deployment toolchains.
           </p>
         </div>
       </div>
