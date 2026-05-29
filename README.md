@@ -124,14 +124,13 @@ For experimental purposes, we have also implemented several related optimization
 ## Citation
 
 ```bibtex
-@misc{zhang2025segquantsemanticsawaregeneralizablequantization,
-      title={SegQuant: A Semantics-Aware and Generalizable Quantization Framework for Diffusion Models}, 
-      author={Jiaji Zhang and Ruichao Sun and Hailiang Zhao and Jiaju Wu and Peng Chen and Hao Li and Yuying Liu and Kingsum Chow and Gang Xiong and Shuiguang Deng},
-      year={2025},
-      eprint={2507.14811},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2507.14811}, 
+@InProceedings{segquant,
+    author    = {Zhang, Jiaji and Sun, Ruichao and Zhao, Hailiang and Wu, Jiaju and Chen, Peng and Li, Hao and Liu, Yuying and Chow, Kingsum and Xiong, Gang and Deng, Shuiguang},
+    title     = {SegQuant: A Semantics-Aware and Generalizable Quantization Framework for Diffusion Models},
+    booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+    month     = {June},
+    year      = {2026},
+    pages     = {43717-43726}
 }
 ```
 
